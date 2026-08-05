@@ -87,10 +87,12 @@ The format uses a consistent subset of KDL:
   }
   ```
 
-- **`/-` comments out a whole node or property.**
+- **`/-` comments out the next node, or the next property.**
+  Both are KDL v2; a v1 parser will not honour it on a property.
 
   ```kdl
-  /-rectangle width=0 { box y=2 }
+  /-rectangle width=0 { box y=2 }          // the whole node
+  field expr="amount" /-format="%.2f"      // just the property
   ```
 
 ### Parser requirements
@@ -176,8 +178,8 @@ All are given portrait (width × height); `landscape=#true` swaps them.
 ## Geometry
 
 Every body element, every section, and every `xref` occupies a box
-positioned within its container. The container is the section for a bod
-y element, the frame for a section, and the `xref` for elements inside one.
+positioned within its container. The container is the section for a body
+element, the frame for a section, and the `xref` for elements inside one.
 
 ### Position and size: any two of three
 
@@ -789,9 +791,23 @@ Plus geometry, alignment, `printwhen`, and `style*`.
 
 Exactly one of `file` or `data`, or a `content` child.
 
-`scale`: `cut` crops to the box, `fill` scales to the box, `grow` grows the box to
-the image. `proportional` preserves aspect ratio when scaling. `embed=#false`
-records a file reference in the printout instead of the bytes.
+`scale` decides how the image meets the box:
+
+| `scale` | Effect |
+|---|---|
+| `cut` | Drawn at natural size and clipped to the box. |
+| `fill` | Scaled to the box. |
+| `grow` | The box expands wherever the image exceeds it; the image is drawn at natural size. |
+
+`proportional` preserves the aspect ratio, and so applies **only to `fill`** —
+`cut` and `grow` do not scale. Under `fill` with `proportional=#true` the image
+is scaled to fit within the box and then positioned by `halign` / `valign`;
+with `#false` it is stretched to the box exactly.
+
+Only `cut` clips, and the clipped region is what the printout records
+as [`crop`](printout.md#image).
+
+`embed=#false` records a file reference in the printout instead of the bytes.
 
 `type` is optional and sniffed from the content; give it to override.
 
@@ -933,11 +949,20 @@ A subreport layout defined inline, referenced by `subreport embedded=`.
 |---|---|---|
 | *(arg 1)* | string, the name | required |
 
-Children: `parameter*`, `variable*`, `style*`, `title?`, `summary?`, `header?`,
-`footer?`, `columns?`, exactly one of `group?` / `detail?`, and nested `embedded*`.
+Children: `parameter*`, `records?`, `variable*`, `style*`, `title?`, `summary?`,
+`header?`, `footer?`, `columns?`, exactly one of `group?` / `detail?`,
+and nested `embedded*`.
 
 An `embedded` layout is its own namespace for parameter, variable, and group
 names, but shares the enclosing report's `font` and `data` definitions.
+
+Its `records` declares the fields of the sequence the subreport runs over, which
+is a different shape from the parent's records — an invoice report's records are
+invoices, its subreport's are line items. Without the declaration the subreport's
+expressions have no names to compile against, exactly as at report level.
+
+A subreport given by `template=` is an ordinary `report` document and carries
+its own `records`.
 
 ## Font resolution
 

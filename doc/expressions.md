@@ -22,13 +22,17 @@ Starlark is Python-like, not Python. What matters for templates:
 
 - **No `**` operator.** Use `math.pow(x, y)`.
 - **No statements.** An expression is a single expression.
+- **No recursion and no global reassignment.** Both are dialect options
+  and both are left off.
 - **No classes, no exceptions.** `fail(msg)` aborts with a message.
 - **Integers are arbitrary precision.** `123456789012345678901234567890 + 1` is
   exact.
 - **`/` is float division**, `//` is floor division. `1/3` is a float.
 - **Strings are immutable** and indexable by byte; `.elems()` and `.codepoints()`
   iterate.
-- **`set` is available**, which `calc="set"` uses.
+- **`set` is available**, which `calc="set"` uses. Sets are a dialect option
+  in Starlark rather than part of the core language; the engine enables them
+  explicitly and does not rely on the host default.
 - **`%` interpolation has no flags, width, or precision.** See
   [Formatting](#formatting).
 

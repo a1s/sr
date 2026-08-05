@@ -239,11 +239,15 @@ is untouched. The template's `opaque=#false` resolves to an absent `fill`.
 | `type` | `png` `jpeg` `gif`. Always present. |
 | `data` | Name of a header `data` entry. |
 | `file` | Path, when the template set `embed=#false`. Mutually exclusive with `data`. |
-| `crop` | Optional source-pixel rectangle, present when `scale="cut"` clipped the image. |
+| `crop` | Optional source-pixel rectangle. Present only when the image was clipped, which only `scale="cut"` does. |
 
-`box` is the final drawn rectangle and `crop` says which source pixels fill it;
-scaling is whatever maps one onto the other. The template's `scale` and
-`proportional` do not appear.
+`box` is the final drawn rectangle. `crop` names the source pixels that fill it;
+when `crop` is absent the whole image does. Scaling is whatever maps the one onto
+the other, so a renderer needs no notion of fitting: `cut` arrives as a `crop` at
+scale 1, `fill` as a box the image is stretched into, and `grow` as a box already
+the image's natural size.
+
+The template's `scale` and `proportional` do not appear — both are resolved away.
 
 ### `barcode`
 

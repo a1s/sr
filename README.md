@@ -22,6 +22,8 @@ one static binary.
 | [doc/printout.md](doc/printout.md) | The intermediate document a renderer consumes |
 | [doc/decisions.md](doc/decisions.md) | Why the design is what it is, and what it replaces |
 | [example/sakila/](example/sakila/) | Reference template and dataset |
+| [example/invoices/](example/invoices/) | Second example: subreports, region grouping, the remaining variable modes |
+| [example/fonts/](example/fonts/) | Fonts committed so examples resolve identically everywhere |
 
 ## How it works
 
@@ -117,7 +119,7 @@ func main() {
 Records may be `map[string]any` or structs; struct fields map to declared columns
 by name, or by an `sr:"..."` tag. The CLI is a thin shell over this API.
 
-## Running the example
+## Running the examples
 
 ```bash
 sr build -t example/sakila/sakila.kdl -d example/sakila/payments.jsonl -o sakila.pdf
@@ -129,11 +131,28 @@ Narrowed to one month, using the template's `date` parameters:
 sr build -t example/sakila/sakila.kdl -d example/sakila/payments.jsonl -o june.pdf --param period_start=2005-06-01 --param period_end=2005-07-01
 ```
 
-[example/sakila/sakila.kdl](example/sakila/sakila.kdl) exercises every band type,
-a group with its own title and summary, two-column layout with column header and
-footer, stretch fields, a floating element, six barcode types, an embedded image
-and a referenced one, both kinds of cross-reference, conditional outline entries,
-deferred page counts, justified text, parameters, and every variable scope.
+```bash
+sr build -t example/invoices/invoices.kdl -d example/invoices/invoices.jsonl -o invoices.pdf
+```
+
+Between them the two templates use every node and property in the format.
+
+[sakila.kdl](example/sakila/sakila.kdl) — a payment list grouped by customer
+in two columns: every band type, a group with its own title and summary, column
+header and footer, stretch fields, a floating element, six barcode types, an
+embedded image and a referenced one, both kinds of cross-reference, conditional
+outline entries, deferred page counts, justified text, and typed parameters.
+
+[invoices.kdl](example/invoices/invoices.kdl) — invoices by region with line
+items: an inline subreport with an `arg` and its own `records`, a group using
+`keeptogether` with `minrows` and `mintailrows`, a `summary` with `swapfooter`,
+an image with `embed=#false`, `iter="item"` against `iter="detail"`, and the `calc`
+modes sakila leaves out. All twelve `calc` modes and every `iter` / `reset` scope
+appear across the pair.
+
+Both reference the [committed fonts](example/fonts/) by path, so they build
+identically on any machine and work under `--strict-fonts`. Swap `file=` for
+`typeface=` to use whatever the machine has instead.
 
 ## Reproducible output
 

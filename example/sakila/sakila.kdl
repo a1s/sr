@@ -36,10 +36,14 @@ report name="DVD rental payments" \
   variable "total_amount"    expr="amount" calc="sum"
   variable "customers_count" expr="1" init="0" calc="sum" iter="group" itergrp="customer"
 
-  font "title"     typeface="DejaVu Serif" size=14 bold=#true
-  font "pagetitle" typeface="DejaVu Sans" size=12
-  font "body"      typeface="DejaVu Sans" size=8
-  font "bold"      typeface="DejaVu Sans" size=8 bold=#true
+  // Committed fonts, so the example builds identically everywhere and works
+  // under --strict-fonts. `bold` is not set alongside `file` -- a bold face is
+  // its own file. To use whatever the machine has instead, replace `file` with
+  // e.g. typeface="Arial" and add bold=#true.
+  font "title"     file="../fonts/Go-Bold.ttf"    size=14
+  font "pagetitle" file="../fonts/Go-Regular.ttf" size=12
+  font "body"      file="../fonts/Go-Regular.ttf" size=8
+  font "bold"      file="../fonts/Go-Bold.ttf"    size=8
 
   // A 16x16 checker, embedded. The larger image is referenced as a file
   // instead -- see the summary band -- so both paths are covered.
@@ -209,7 +213,7 @@ report name="DVD rental payments" \
       }
 
       detail height=12 \
-             printwhen="period_start.unix <= rental_date.unix and rental_date.unix < period_end.unix"
+             printwhen="period_start.unix <= rental_date.unix and rental_date.unix < period_end.unix" \
       {
 
         style when="PAGE_COUNT % 2" bgcolor="#F3EDE7"

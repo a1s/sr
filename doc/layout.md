@@ -116,32 +116,46 @@ content; see [deferred evaluation](#deferred-evaluation).
 
 Given a band template and a context, measurement proceeds:
 
-1. **Resolve the style.** Walk `style` nodes in document order, innermost scope
-   first: the band's own, then its `columns`, then each enclosing `group`, then
-   `layout`. The first whose `when` is true supplies `font`, `color`, and
+1. **Test the band's `printwhen`.** If false the band is dropped — no marks,
+   no height — and none of the steps below run.
+2. **Resolve the band's style.** Walk `style` nodes in document order, innermost
+   scope first: the band's own, then its `columns`, then each enclosing `group`,
+   then `layout`. The first whose `when` is true supplies `font`, `color`, and
    `bgcolor`. Unset properties fall through to the next match in the same walk.
-2. **Test `printwhen`.** A false `printwhen` drops the band or element entirely —
-   no marks, no height. It is a property of the band or element, so it is
-   evaluated independently of step 1.
-3. **Resolve geometry.** For the band, then for each element, resolve
-   `left`/`right`/`width` and `top`/`bottom`/`height` per
-   [the two-of-three rule](template.md#position-and-size-any-two-of-three)
-   against the container, and apply `maxwidth` / `maxheight` clamps.
-4. **Resolve content.**
-   - `field`: evaluate `expr` (or take `text` / `data`), apply `format`, wrap
-     to the box width. With `stretch`, the box height grows to the wrapped text;
-     without it, lines beyond the box are dropped at a line boundary.
-   - `image`: decode, sniff the type, compute the drawn rectangle and crop from
-     `scale` and `proportional`. `scale="grow"` grows the box.
-   - `barcode`: encode, obtaining stripe widths and a minimum symbol size; the box
-     grows along the coding direction to at least that minimum.
-   - `xref`: recurse — an xref is a container of elements and is measured as one.
-   - A field or barcode with `evaltime` is measured from its placeholder content
-     and [registered](#deferred-evaluation).
+3. **Resolve the band's geometry** against the frame, per
+   [the two-of-three rule](template.md#position-and-size-any-two-of-three).
+   An explicit `height` is known here; `height="auto"` is settled at step 6.
+4. **For each element, in document order:**
+   1. **Test its `printwhen`.** If false the element is dropped and the
+      remaining sub-steps are skipped. It contributes no marks and no height,
+      so a suppressed element neither shows nor pushes its followers down.
+   2. **Resolve its style**, by the same outward walk as step 2 but starting
+      at the element's own `style` children.
+   3. **Resolve its geometry** within the band, applying `maxwidth` / `maxheight`
+      clamps. In a band whose height is still unsettled, an extent that depends on
+      the band's bottom edge is left for step 6.
+   4. **Resolve its content:**
+      - `field`: evaluate `expr` (or take `text` / `data`), apply `format`, wrap
+        to the box width. With `stretch`, the box height grows to the wrapped text;
+        without it, lines beyond the box are dropped at a line boundary.
+      - `image`: decode and sniff the type, then apply `scale`. `cut` draws the
+        image at natural size clipped to the box, and the retained region becomes
+        the mark's `crop`. `fill` scales the image to the box: with `proportional=#true`
+        the aspect ratio is preserved, so it is scaled to fit within the box
+        and positioned by `halign` / `valign`, and with `#false` it is stretched
+        to the box exactly. `grow` expands the box wherever the image exceeds it,
+        so the image is drawn at natural size, neither scaled nor clipped.
+        Only `fill` scales, so `proportional` is consulted only for `fill`;
+        only `cut` produces a `crop`.
+      - `barcode`: encode, obtaining stripe widths and a minimum symbol size;
+        the box grows along the coding direction to at least that minimum.
+      - `xref`: recurse — an xref is a container of elements and is measured as one.
+      - A field or barcode with `evaltime` is measured from its placeholder content
+        and [registered](#deferred-evaluation).
 5. **Resolve floating elements.** See [below](#floating-elements).
-6. **Determine band height.** With an explicit `height`, that value. With
-   `height="auto"`, the maximum bottom edge over all elements that produced marks —
-   zero if none did.
+6. **Determine band height.** With an explicit `height`, that value.
+   With `height="auto"`, the maximum bottom edge over all elements
+   that produced marks — zero if none did.
 
    An element whose vertical extent is **container-dependent** — its `bottom` was
    derived rather than its `height` given, so it stretches to the band's bottom

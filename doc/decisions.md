@@ -368,6 +368,12 @@ adding a style alternative could silently change what was visible. This surfaced
 while translating the reference template, where a `rectangle` carried a `style`
 whose only job was to hold a `printwhen`.
 
+Moving it also fixed the order of work when a band is measured. With `printwhen`
+on `style`, the style walk had to run first to discover which `printwhen` applied,
+so a suppressed element paid for a resolution that was then thrown away. As an
+independent property it is tested first, and everything else — style, geometry,
+content — is skipped for anything invisible.
+
 **`eject when` and `require` are a conjunction, and selection is by `when` alone.**
 This is the predecessor's actual behaviour, which its documentation described only
 as "the first match will stop the search" — leaving open what happens when a node
@@ -391,6 +397,16 @@ part of the eject rules, so the narrower choice loses nothing. Only an explicit
 width or a dash style, depending on whether the value parsed as a dimension, is a
 type pun. `line width` still shadows the geometry vocabulary; that is accepted
 because "pen width" and "line width" are the same phrase in every drawing tool.
+
+**Example fonts are committed and referenced by path.** The examples originally
+named typefaces — `"Arial"`, `"Times New Roman"` — which reads well but cannot be
+snapshot-tested: under `--strict-fonts`, which is how tests run, resolution stops
+at explicitly named files and a typeface-only font fails. An acceptance example that
+cannot run under the test configuration is not an acceptance example. The Go fonts
+are BSD-3-Clause and redistributable, so Regular and Bold are committed under
+`example/fonts` with their licence, and both templates reference them by path.
+The typeface path is still reachable — swapping `file=` for `typeface=` is a one-line
+change, noted in the template.
 
 **Font guessing kept, with an opt-out.** A template naming `"Helvetica"` should
 work on a machine that has something close, without the author enumerating paths.
@@ -470,7 +486,12 @@ Other confirmed behaviour:
 - Integers are arbitrary precision: `123456789012345678901234567890 + 1` is exact.
 - No `**` operator; `2 * 10 ** 3` is a syntax error.
 - No `round` builtin; `math.round` exists.
-- `set` is available without a feature flag, which `calc="set"` needs.
+- `set` is a **dialect option**, `resolve.AllowSet`. It defaults to `true`
+  in the pinned version, but with it false `set([1,2])` fails with "this Starlark
+  dialect does not support sets". `calc="set"` depends on it, so the engine sets it
+  explicitly rather than inheriting a default that a host or a version bump could
+  change. `resolve.AllowRecursion` and `resolve.AllowGlobalReassign` both default
+  to false and are left there.
 - `time.now` exists and had to be removed from the environment.
 - `time.format` takes Go reference-time layouts:
   `time.time(year=2005, month=5, day=24).format("02.01.2006")` → `"24.05.2005"`.
@@ -511,7 +532,15 @@ without error and yields nonsense.
 **`github.com/calico32/kdl-go` v0.15.0 — works.** Documents support for KDL 1.0.0
 and 2.0.0 and passing the upstream test suite for each. Verified: raw strings in
 both argument and property position, triple-quoted multi-line strings with
-dedenting, bare `#true`, `/-` slashdash, `#null`, and `\` line continuation.
+dedenting, bare `#true`, `/-` slashdash on both a node and a single property,
+`#null`, and `\` line continuation.
+
+**Parse with the version pinned.** Its default is `VersionAuto`, and auto-detection
+misreports: given a genuine v2 syntax error late in a document, it concluded the
+document was v1 and reported a bogus error on the first `#true`, 190 lines earlier.
+With `WithVersion(Version2)` the real error was named correctly. Since the format
+*is* v2, there is nothing to detect — pinning it costs an option and removes
+a class of misleading diagnostic.
 
 It parses the reference template: 91 nodes, `report` carrying 4 properties and 14
 children. Semantic checks — the embedded base64 block round-trips to a valid PNG,
