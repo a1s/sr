@@ -1,0 +1,238 @@
+// sakila.kdl -- the reference example template.
+//
+// A payment list grouped by customer, laid out in two columns. It is written for
+// coverage: every band type, a group with its own title and summary, columns
+// with their own header and footer, stretch fields, a floating element, six
+// barcode types, an embedded image and a referenced one, both kinds of xref,
+// conditional outline entries, deferred page counts, justified text,
+// parameters, and every variable scope.
+//
+// Build it with:
+//   sr build -t sakila.kdl -d payments.jsonl -o sakila.pdf
+
+report name="DVD rental payments" \
+       description="Payments by customer, from the Sakila sample database" \
+       version="2" author="als" \
+{
+
+  // The reporting period. Payments outside it are suppressed by the detail
+  // band's printwhen. The defaults cover the whole dataset; override either with
+  //   sr build ... --param period_start=2005-06-01
+  parameter "period_start" type="date" default="2005-01-01"
+  parameter "period_end"   type="date" default="2006-01-01"
+
+  records {
+    column "customer_id" type="int"
+    column "amount"      type="decimal"
+    column "rental_date" type="datetime"
+    column "return_date" type="datetime" nullable=#true
+    column "customer"    type="object"
+    column "film"        type="object"
+  }
+
+  variable "customer_amount" expr="amount" calc="sum" reset="group" resetgrp="customer"
+  variable "column_amount"   expr="amount" calc="sum" reset="column"
+  variable "page_amount"     expr="amount" calc="sum" reset="page"
+  variable "total_amount"    expr="amount" calc="sum"
+  variable "customers_count" expr="1" init="0" calc="sum" iter="group" itergrp="customer"
+
+  font "title"     typeface="DejaVu Serif" size=14 bold=#true
+  font "pagetitle" typeface="DejaVu Sans" size=12
+  font "body"      typeface="DejaVu Sans" size=8
+  font "bold"      typeface="DejaVu Sans" size=8 bold=#true
+
+  // A 16x16 checker, embedded. The larger image is referenced as a file
+  // instead -- see the summary band -- so both paths are covered.
+  data "swatch" encoding="base64" {
+    content """
+      iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAI0lEQVR42mNgiGSAo89v
+      n8MRTvFBqIEoRUjig1HDaDwMCg0ArOyQEA2r1rMAAAAASUVORK5CYII=
+      """
+  }
+
+  layout pagesize="A4" leftmargin="2.5cm" rightmargin="1.5cm" \
+         topmargin="1.5cm" bottommargin="1.5cm" {
+
+    style font="body" color="black" bgcolor="white"
+
+    // ---------------------------------------------------------------- title
+
+    title swapheader=#true {
+      outline title="'DVD rental payments'" name="'top'" closed=#true
+
+      barcode type="Code128" text="Code 128" valign="top"
+      barcode type="Code39"  text="CODE 39" top=".4in" valign="top"
+
+      // Deferred, and its size depends on its content, so it needs a
+      // placeholder to reserve space with.
+      barcode type="2of5i" module="7.5mil" vertical=#true \
+              expr="PAGE_COUNT" evaltime="page" text="90" left="1.9in"
+
+      barcode type="Aztec" text="Aztec Code 2D :)" grow=#true \
+              left="2.3in" width=".3in" halign="center" valign="top"
+      barcode type="QR-L" text="Ver1" \
+              left="2.3in" top=".4in" width=".3in" halign="center"
+      barcode type="QR-Q" text="Version 2 (25x25)" grow=#true \
+              left="2.6in" width=".9in" halign="center" valign="center"
+
+      xref type="url" target="'https://dev.mysql.com/doc/sakila/en/'" \
+           caption="'Sakila sample database documentation'" \
+           left="4.5in" height="1cm" halign="right" valign="top" \
+      {
+        field align="right" text="DVD rental payments" {
+          style font="title"
+        }
+      }
+
+      field align="justified" stretch=#true \
+            evaltime="report" expr="(DATA_COUNT, total_amount)" \
+            format="There are %d payments on this report with total amount of %.2f" \
+            text="There are 999 payments on this report with total amount of 99999.99" \
+            left="3.5in" width="1in"
+
+      // Floats below whatever the barcodes above turned out to be. The
+      // declared `top` supplies the gap to the nearest element above, not an
+      // absolute position.
+      field float=#true left=0 top="1.1in" width="3.4in" \
+            expr="format('Period: %s to %s', strftime(period_start, '%d.%m.%Y'), strftime(period_end, '%d.%m.%Y'))"
+    }
+
+    // -------------------------------------------------------------- summary
+
+    summary height="4.5cm" {
+      style bgcolor="#F3EDE7"
+      rectangle width=1
+
+      xref type="outline" target="'top'" {
+        image file="thelarch.jpg" scale="fill" width="5cm" height="4.265cm"
+        image data="swatch" scale="fill" left="5.2cm" width="0.6cm" height="0.6cm"
+
+        field align="center" left="6cm" width="11cm" height="1cm" \
+              text="And now for something completely different..." \
+	{
+          style font="title"
+        }
+        field stretch=#true left="6cm" top="2cm" width="11cm" height="2cm" \
+              valign="center" \
+              text="Are there any other trees that any of you think you could recognize from quite a long way away?"
+      }
+    }
+
+    // ------------------------------------------------- page header / footer
+
+    header height="2cm" {
+      rectangle width=1 radius="5mm" left="1mm" bottom="1mm"
+      field halign="center" valign="center" text="Sakila payment list" {
+        style font="pagetitle"
+      }
+    }
+
+    footer height="1cm" {
+      style font="pagetitle"
+      rectangle width=1 left="1mm" bottom="1mm"
+
+      field expr="PAGE_COUNT" align="left" format="Count: %i" \
+            left="3mm" width="3cm" bottom="3mm"
+      field expr="PAGE_NUMBER" align="right" format="%i /" \
+            left="5.5cm" width="3cm" bottom="3mm"
+
+      // Deferred to report scope, so this prints the final page count. Its box
+      // is fully determined, so no placeholder is needed.
+      field expr="PAGE_NUMBER" evaltime="report" align="left" \
+            left="8.6cm" width="3cm" bottom="3mm"
+
+      field expr="page_amount" align="right" format="Total: %.2f " \
+            left="12cm" width="5cm" bottom="3mm"
+
+      field expr="strftime(BUILD_TIME, '%Y-%m-%d %H:%M')" align="right" \
+            left="12cm" width="5cm" bottom="0.5mm" {
+        style font="body"
+      }
+    }
+
+    // -------------------------------------------------------------- columns
+
+    columns count=2 gap="1cm" {
+      header height=20 {
+        style font="bold" color="#F3EDE7" bgcolor="#000900"
+        rectangle width=0 top=2 bottom=2
+
+        field top=4 bottom=4 width="35mm" valign="center" text=" Film title"
+        field top=4 bottom=4 left="35mm" width="15mm" valign="center" \
+              align="center" text="Rental"
+        field top=4 bottom=4 left="50mm" width="15mm" valign="center" \
+              align="center" text="Return"
+        field top=4 bottom=4 left="65mm" width="15mm" valign="center" \
+              align="center" text="Payment"
+      }
+
+      footer height=20 {
+        style font="bold" color="#F3EDE7" bgcolor="#000900"
+        rectangle width=0 top=2 bottom=2
+
+        field expr="COLUMN_COUNT" format=" Count: %i" \
+              top=4 bottom=4 width="35mm" valign="center"
+        field expr="column_amount" format="Total: %.2f" align="right" \
+              top=4 bottom=4 left="45mm" width="35mm" valign="center"
+      }
+    }
+
+    // ---------------------------------------------------------------- group
+
+    group "customer" expr="customer_id" keeptogether=#false minrows=2 {
+
+      title height=14 {
+        style font="bold" color="#000900"
+
+        // Alternating prefix, to exercise first-match `when` on outlines.
+        outline level=2 when="customers_count % 2" \
+                title=#"format('\\ %s, %s', customer.last_name, customer.first_name)"#
+        outline level=2 when="not (customers_count % 2)" \
+                title=#"format('/ %s, %s', customer.last_name, customer.first_name)"#
+
+        field expr="(customer.last_name, customer.first_name)" format="%s, %s" \
+              stretch=#true left="5mm" width="55mm"
+
+        // Deferred to the group, and stretchable, so it carries a placeholder.
+        field expr="customer_COUNT" format="Count: %i " align="right" \
+              evaltime="customer" stretch=#true text="Count: 999 " \
+              left="60mm" width="20mm"
+
+        line width=2 bottom=2 height=0
+      }
+
+      summary height=16 {
+        style font="bold" color="#000900"
+        line width=2 height=0
+        field expr="(customer.last_name, customer.first_name, customer_amount)" \
+              format="Total for %s, %s: %.2f" align="right" stretch=#true top=4
+      }
+
+      detail height=12 \
+             printwhen="period_start.unix <= rental_date.unix and rental_date.unix < period_end.unix"
+      {
+
+        style when="PAGE_COUNT % 2" bgcolor="#F3EDE7"
+
+        // Alternating row shading: the style supplies the colour,
+        // the rectangle's own printwhen decides whether it is drawn.
+        rectangle width=0 printwhen="PAGE_COUNT % 2"
+
+        field expr="film.title" stretch=#true height=10 width="35mm"
+
+        field expr="strftime(rental_date, '%d.%m.%Y')" align="center" \
+              left="35mm" height=10 width="15mm"
+
+        // `return_date` is nullable; a null suppresses the field.
+        field expr="strftime(return_date, '%d.%m.%Y')" align="center" \
+              printwhen="return_date" \
+              left="50mm" height=10 width="15mm"
+
+        field expr="amount" format="%.2f" align="right" \
+              left="65mm" height=10 width="15mm"
+
+        line width=0 dash="dot" bottom=1 height=0
+      }
+    }
+  }
+}
