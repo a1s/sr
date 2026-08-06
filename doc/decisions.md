@@ -12,11 +12,13 @@ can state what is true without also arguing for it.
 - [Specification before code](#specification-before-code)
 - [Template syntax: KDL over TOML](#template-syntax-kdl-over-toml)
 - [Data: JSON with declared types](#data-json-with-declared-types)
-- [Parameters are typed, and `default` is text](#parameters-are-typed-and-default-is-text)
 - [Printout: a separate format](#printout-a-separate-format)
 - [Expressions: Starlark](#expressions-starlark)
 - [Layout: measure before commit](#layout-measure-before-commit)
 - [Geometry: two of three edges](#geometry-two-of-three-edges)
+- [Parameters are typed, and `default` is text](#parameters-are-typed-and-default-is-text)
+- [A band height is a minimum](#a-band-height-is-a-minimum)
+- [Deferral is per name, not per element](#deferral-is-per-name-not-per-element)
 - [Smaller decisions](#smaller-decisions)
 - [Spike results](#spike-results)
 - [Inherited defects, and what replaced them](#inherited-defects-and-what-replaced-them)
@@ -257,6 +259,14 @@ printout header, because a single oversized record should not necessarily fail a
 nightly batch — but the default is to fail, because a silently broken report is
 worse than a missing one.
 
+A mark that lands outside the page's printable area is the same kind of failure
+and gets the same treatment. That case reaches the printout's invariant 7, which
+requires every mark inside the margins — and a negative `right` or `bottom`,
+which the template format allows, can produce one. The two rules only agree if the
+resulting mark is an overflow, so it is. Judging it on the final page coordinates
+rather than on the declaration keeps the ordinary use legal: a box reaching past
+a container in the middle of the page crosses no margin.
+
 ### Frames are a tree
 
 The predecessor used a chain in which each frame had at most one child, and had
@@ -359,6 +369,92 @@ against a placeholder date.
 never text, so there is nothing to parse. Its result is type-checked against the
 declaration like a `defaultexpr` result.
 
+## A band height is a minimum
+
+`height=12` on a detail band and `stretch=#true` on a field inside it are both
+ordinary things to write, and together they over-constrain: the field's wrapped
+text may need 24 points in a band declared 12. Three answers were available.
+
+**Clip.** The band stays 12 and the extra lines are dropped. But `stretch` exists
+precisely to say "do not drop lines", so this makes the two properties cancel
+each other, and which one wins depends on where the author looks.
+
+**Error.** Honest, and unusable: the first customer name in the data that wraps
+to two lines takes the report down. A layout constraint that fails on ordinary
+data is not a constraint, it is a bug waiting for a specific record.
+
+**Grow**, which is what `sr` does. A declared `height` is a floor. The band is
+as tall as the greater of the declared value and its content, so `height=12` reads
+as "12 points unless something needs more", which is what the author almost always
+means. `height="auto"` stops being a special case and becomes a floor of zero —
+one rule instead of two.
+
+The ability to say "exactly this tall" is not lost. A `field` without `stretch`
+already truncates at a line boundary, so a fixed-size band is a band of
+non-stretching fields. Nothing has to grow that the author did not ask to grow.
+
+The cost is that a fixed-pitch layout — a pre-printed form, a sheet of labels —
+depends on the author leaving `stretch` off rather than on the band height
+enforcing it. That is the right place for the decision, since only the author
+knows whether an over-long value should spill or be cut.
+
+## Deferral is per name, not per element
+
+`evaltime` exists because some values are not final when the band that shows them
+is built: the page count, a group's total. The obvious implementation is to hold
+the whole expression until the scope ends and evaluate it there.
+
+That is what the predecessor did, and it breaks the most common use of the feature.
+Written whole, `'Page %d of %d'` needs the page number *here* and the page count
+*at the end*. Deferred whole, both come from the end, so every page reports the last
+page's number. The idiom that does work — an immediate `PAGE_NUMBER` field beside
+a deferred one — is two fields, cannot be centred as one string, and has to be
+discovered rather than read.
+
+Two ways out were tried, and the first was wrong.
+
+**Rejected: the engine decides.** A deferred expression is evaluated against
+a snapshot of where the element sits, and the engine substitutes the names
+*the scope makes final* — `PAGE_COUNT` for a page, a group's `_COUNT` for a group,
+variables by their `reset`. This works, and it needs a new predefined name for the
+page total, since no existing counter means "pages". Calling it `TOTAL_PAGES` exposed
+what was wrong with the whole approach: it is an exception, it invites a `TOTAL_` twin
+for every future quantity, and it sits badly beside `DATA_COUNT`, which is also a total
+and is not named that way. Behind the name was a worse problem — a per-scope table of
+which quantities each scope resolves. That table is a list the engine has to keep and
+the author has to consult, and it grows with every counter added.
+
+**Adopted: the author decides.** A name reads its value where the element sits;
+`FINAL.`*name* reads the value it reaches when the `evaltime` scope ends.
+So the expression says which half of itself is deferred:
+
+```
+'Page %d of %d' % (PAGE_NUMBER, FINAL.PAGE_NUMBER)
+```
+
+There is no name for the page total, because it is not a new quantity — it is
+`PAGE_NUMBER` at the end of the report, which is what the user's original instinct
+said and what this spells. `FINAL.customer_COUNT`, `FINAL.total_amount`, and
+`FINAL.THIS.region` follow from the same form with nothing added, and the per-scope
+table is gone: the engine no longer knows what a page total is.
+
+`FINAL` is a namespace rather than a function because a Starlark function's argument
+is evaluated before the call, so `final(PAGE_NUMBER)` would receive the value it was
+meant to defer. Reading it as an attribute needs no special form in the compiler: the
+expression's free names are collected as usual, and `FINAL` is simply the one that is
+bound late.
+
+That late binding is nearly free because of [compile-once](#compile-once): each
+expression is already a function of exactly the names it references, so the engine
+snapshots those and binds `FINAL` at substitution, with no analysis at run time.
+The mechanism that made evaluation fast is what makes this affordable.
+
+Requiring the two together — `FINAL` only under an `evaltime`, `evaltime` only with
+a `FINAL` — is what makes the feature hard to get wrong. Each alone is a mistake
+rather than a harmless no-op, and both are caught at load. Under the rejected design
+the original defect, `evaltime="report"` on an expression with no end-of-scope name
+in it, was silently a no-op.
+
 ## Smaller decisions
 
 **`printwhen` moved from `style` to the element.** In the predecessor it was a
@@ -385,6 +481,17 @@ treating them as independent triggers, or continuing the search past a selected 
 that declined to eject. Both would break `when` + `require` on one node, which is
 the combination that expresses "start a new page for this group if there is not
 enough room left".
+
+**Eject-after-placement applies to a report's `title` only, not to a group's.**
+The predecessor's rule was "for `title`, at the end of the section", which reads
+as though it covers every band named `title`. For the report title it is right:
+an `eject` there means "give the title a page of its own", so it has to fire after
+the band is placed. For a group title the same rule makes an `eject` useless — the
+title lands at the bottom of the outgoing column and the group's rows start in the
+next one, which is the opposite of every reason to write it. The exception is
+therefore scoped to the band directly under `layout` or `embedded`. This surfaced
+while adding an `eject` to the reference template, which under the wider reading
+would have done the reverse of what its comment claimed.
 
 **A band that does not fit ejects a column, not a page.** Also the predecessor's
 behaviour. In a single-column frame the two are identical; in a multi-column one,
@@ -433,10 +540,128 @@ it inconsistent with every `_COUNT` beside it and meant templates wrote
 `ITEM_NUMBER + 1`.
 
 **Auto-height circularity resolved explicitly.** An element sized by `bottom`
-stretches to the band's bottom edge, so in an auto-height band it cannot
-contribute to the height it is measured against. Such elements are excluded from
-the maximum and resolved afterwards. The predecessor handled this with several
+stretches to the band's bottom edge, so in a band with no declared height
+it cannot contribute to the height it is measured against. Such elements are excluded
+from the maximum and resolved afterwards. The predecessor handled this with several
 special-case branches in its resizeable check.
+
+The exclusion had to be narrowed once the reference template was checked against it.
+Read literally, "its `bottom` was derived" catches a stretch field and abarcode too,
+since neither declares a height — which collapsed the whole titleband of `sakila.kdl`
+to the one element that did. The distinction that matters is not where the bottom edge
+came from but whether the element has a height of its own: a stretch field has its
+wrapped text, a barcode its symbol, a `grow` image its bitmap. Those three participate;
+everything with a derived bottom and no intrinsic height does not.
+
+**`stroke=#false` on a rectangle, rather than `color="none"`.** A background block
+wants a fill and no outline. Documenting that as "give the style no `color`" does
+not work, because unset style properties fall through outward, so a `color` set
+at `layout` level still reaches the rectangle and draws a hairline round it — which
+the reference template walked into. A sentinel colour value would put "absent" into
+a type whose every other value is a colour. A boolean beside the existing `opaque`
+switches the two halves of the drawing independently, and maps directly onto the
+printout's already-optional `stroke` and `fill`.
+
+**An inline subreport has no `header` or `footer`.** It shares the parent's pages,
+whose header and footer are already reserved, so there is no frame of its own
+to attach them to. The tempting alternative is to redefine `header` under `inline`
+as "print once at the start", which is what a line-item table wants — but that
+makes one node name mean per-page in one context and once-per-invocation in another,
+and `title` and `summary` already mean once. So the bands stay per-page, `inline`
+rejects them at validation, and the examples use `title`.
+
+**`embed=#false` records a path relative to the printout.** The case for an absolute
+path is that a relative one needs a base, and the printout would have to carry one —
+a `basedir` field in the header, duplicating the template's. But the printout does
+not need to carry it: the printout is a file, and a file has a location. Resolving
+against the directory it was read from needs no header field, and cannot drift out
+of step with the document the way a stored path could.
+
+It is also what keeps the artifact movable, which is the whole reason the printout
+exists as a separate document. An absolute path ties it to the machine that built
+it, so archiving one is archiving something that may not render later. Relative
+paths let a printout and its images be copied, checked in, or shipped as one tree.
+
+The price is that the recorded path depends on where the printout is written,
+so one printout serialized to two directories carries two different values.
+Both are correct, which is why the rewrite happens at serialization rather than
+at build time — at build time the destination is not known, and may not exist.
+Where there is no destination directory, a pipe or an in-memory hand-off,
+the working directory stands in.
+
+**Font paths follow the same rule, split by provenance.** A first pass relativized
+image paths and left `fonts.resolvedFile` absolute, on the grounds that a font is
+a system resource. That is true of a font the engine *found*, and false of one the
+template *named*: `font file="../fonts/Go-Bold.ttf"` is a project asset in exactly
+the way `image file="logo.png"` is, and the reason to make one travel with the
+printout is the reason to make the other.
+
+So the rule is drawn on where the path came from, not on which field holds it.
+A template-named path — `image file=` under `embed=#false`, or `font file=` — is
+written relative to the printout. A path the engine discovered on the host is written
+as it was opened, because a relative path to `C:/Windows/Fonts` would be both
+grotesque and machine-specific anyway, and `resolvedFile` doubles as the record
+of what was measured, where a diagnostic should say literally what it opened.
+
+A renderer does not have to know any of that. It resolves a relative path against the
+printout's directory and uses an absolute one as it stands, and the two cases fall out
+without consulting `resolvedBy`. Provenance decides what the *writer* emits;
+the *reader* only has to look at the path.
+
+**Writing a printout has no filesystem side effects.** Making paths relative invites
+the reading that the engine gathers what they point at — copies the font and the logo
+next to the printout so the directory stands alone. It does not. Writing a printout
+creates one file. A relative path reaching up out of that directory is the ordinary
+case, and the tree the paths span is normally the project rather than the output
+directory.
+
+The alternative was considered and rejected for two reasons. A build step that writes
+files nobody named is a surprise, and one that writes them next to a document it is
+also writing has to decide what to do when a file of that name is already there —
+overwrite, skip, or fail, none of them obviously right. And it would be redundant work
+in the common case: the font is already reachable, which is exactly why a relative path
+to it can be written at all. An asset the printout can already open is referenced,
+not duplicated.
+
+That leaves self-containment to the mechanisms that already provide it and make it
+explicit: `embed=#true` for an image, a `data` node for a font. Both put bytes *into*
+the document, which is a different operation from putting files beside it, and both
+already deduplicate — two images from one source share one `data` entry.
+
+The payoff is a property worth having: `--strict-fonts` stops resolution at step 1,
+so every font in a strict printout is `explicit`, so every path in it is relative. A
+strict build with `--build-time` fixed is byte-identical **across machines**, not just
+across runs on one — which is what made the reproducibility claim worth making in the
+first place.
+
+**A character the resolved font lacks is a warning, not an error.** The `.notdef`
+glyph is itself visible failure — an empty box on the page — and metrics are
+unaffected, so nothing silently shifts. Erroring would make a report fail on a
+single unusual character in one record, which is the same objection that made
+[band overflow](#a-band-height-is-a-minimum) a growth rule rather than an error.
+The warning is recorded in the printout header, so it is diagnosable from the
+artifact.
+
+**A name that collides with a predefined one is rejected.** Resolution puts
+predefined names, modules, and builtins first, so a variable called `PAGE_NUMBER`
+would simply be unreachable — a template that looks like it works and does not.
+Group names are checked against their derived names too: a group called `PAGE`
+would produce a `PAGE_COUNT` that already exists.
+
+**`format` means two different things, and keeps one name.** On a `parameter`
+or a `column` it is a date parsing layout; on a `field` or a `barcode` it is a `%`
+format specification. They never appear on the same node and each reads naturally
+in place, so renaming one to `parse` was judged more confusing than the overload —
+but validation has to scope its rules to the node type, and an early draft of the
+validation list did not, forbidding `format` on precisely the nodes that use it
+most.
+
+**The zero time is false.** Starlark's time value is falsy when it is Go's zero
+time, which the engine inherits rather than overriding: it makes
+`printwhen="return_date"` mean "there is a return date", the test templates
+actually want to write. A stored timestamp that genuinely is 0001-01-01 is
+indistinguishable from absent, so `printwhen="return_date != None"` is documented
+for the case where that matters.
 
 **`mil` added to the dimension units.** Barcode module widths are conventionally
 quoted in mils, and the predecessor carried them as a bare number on a separate
@@ -471,15 +696,35 @@ String interpolation has no width or precision — the assumption that failed:
 ```
 "%.2f" % 3.14159         → error: unknown conversion %.
 "%5.1f" % 3.14159        → error: unknown conversion %5
+"%05d" % 42              → error: unknown conversion %0
+"%-5d" % 42              → error: unknown conversion %-
+"%+d" % 42               → error: unknown conversion %+
 "{:.2f}".format(3.14159) → error: format spec features not supported
                              in replacement fields: .2f
 "%s, %s" % ("a", "b")    → "a, b"
+"%d of %d" % (3, 7)      → "3 of 7"
 "%d" % 42                → "42"
 "%i" % 42                → "42"
 "%x" % 255               → "ff"
 "%c" % 65                → "A"
 "%s" % ("a", "b")        → error: too many arguments for format string
 ```
+
+Every flag form fails, not only precision. Plain conversions with
+several arguments work, which is why `'Page %d of %d' % (…)` is fine
+and `'#%05d' % n` is not — a distinction the reference template got wrong
+before this was checked.
+
+`#` begins a comment, so `printwhen="#false"` is an **empty expression**, not a
+boolean:
+
+```
+#false → error: got end of file, want primary expression
+False  → False
+```
+
+That is a KDL-to-Starlark trap worth naming: `#false` is how KDL spells false, and
+it is invalid in every property whose value is an expression. Both examples had one.
 
 Other confirmed behaviour:
 
@@ -495,8 +740,21 @@ Other confirmed behaviour:
 - `time.now` exists and had to be removed from the environment.
 - `time.format` takes Go reference-time layouts:
   `time.time(year=2005, month=5, day=24).format("02.01.2006")` → `"24.05.2005"`.
-- `starlarkstruct` gives attribute access, so `customer.last_name` works.
+- `starlarkstruct` gives attribute access, so `customer.last_name` works. An empty
+  struct is truthy, so record truth had to be defined as "not `None`".
 - Floats stringify at full precision: `"%s" % (1.0/3)` → `"0.3333333333333333"`.
+- **A zero time is falsy.** `bool(time.time(year=1, month=1, day=1))` → `False`,
+  while `bool(time.from_timestamp(0))` — the Unix epoch — is `True`. Only Go's
+  zero time is false. See [the note above](#smaller-decisions).
+- Subtracting two times yields a duration, with `.hours` and the rest; the module
+  supplies `time.hour` and friends as duration constants.
+- Method sets, enumerated with `dir()` rather than assumed. `set` has **no**
+  `update`, though it does support `|` `&` `-`. Freezing a value makes its mutating
+  methods fail — `xs.append(2)` on a frozen list errors, `xs.index(1)` does not —
+  which is how records and accumulators are protected from an expression that
+  writes to them.
+- Comprehensions, conditional expressions, and slicing all work, so the reference
+  template's `', '.join([format('#%05d', n) for n in invoice_nos])` is valid.
 
 Compile-once mechanism, validated: parse the expression, collect referenced
 identifiers from the syntax tree excluding the attribute part of `x.y`, subtract

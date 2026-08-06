@@ -8,9 +8,9 @@ page count.
 A Go library with a CLI over it. Template plus JSON in, PDF out,
 one static binary.
 
-> **Status:** the specification and reference example are complete;
-> the engine is not yet implemented. The documents below describe
-> the system as specified.
+> **Status:** the specification and the two reference examples are complete; the
+> engine is not yet implemented. The documents below describe the system as
+> specified.
 
 ## Documentation
 
@@ -135,20 +135,30 @@ sr build -t example/sakila/sakila.kdl -d example/sakila/payments.jsonl -o june.p
 sr build -t example/invoices/invoices.kdl -d example/invoices/invoices.jsonl -o invoices.pdf
 ```
 
-Between them the two templates use every node and property in the format.
-
 [sakila.kdl](example/sakila/sakila.kdl) — a payment list grouped by customer
 in two columns: every band type, a group with its own title and summary, column
 header and footer, stretch fields, a floating element, six barcode types, an
 embedded image and a referenced one, both kinds of cross-reference, conditional
-outline entries, deferred page counts, justified text, and typed parameters.
+outline entries, a deferred page count, justified text, and typed parameters.
 
 [invoices.kdl](example/invoices/invoices.kdl) — invoices by region with line
 items: an inline subreport with an `arg` and its own `records`, a group using
 `keeptogether` with `minrows` and `mintailrows`, a `summary` with `swapfooter`,
-an image with `embed=#false`, `iter="item"` against `iter="detail"`, and the `calc`
-modes sakila leaves out. All twelve `calc` modes and every `iter` / `reset` scope
-appear across the pair.
+an image with `embed=#false`, a compressed `data` blob, `iter="item"` against
+`iter="detail"`, and the `calc` modes sakila leaves out.
+
+Between them the two templates use every node in the format and all twelve `calc`
+modes. They do not exhaust every property. What they leave out, so that reading
+them as a reference does not mislead:
+
+| | |
+|---|---|
+| Properties | `layout width` / `height` / `landscape`, `font typeface` / `data` / `bold` / `italic`, `line backslant`, `rectangle opaque`, `image type`, `barcode data`, `data expr`, `maxheight`, `column format`, `subreport template` / `ownpageno` |
+| Enumerations | barcode types `Code93`, `DataMatrix`, `QR-M`, `QR-H`; `image scale="cut"` and `"grow"`; `dash="dash"` |
+| Scopes | `iter="report"` / `"page"` / `"column"`; `reset="detail"` / `"item"` |
+
+A subreport in its own file — `subreport template=` with `ownpageno` — needs
+a third template, which neither of these is.
 
 Both reference the [committed fonts](example/fonts/) by path, so they build
 identically on any machine and work under `--strict-fonts`. Swap `file=` for
@@ -156,11 +166,17 @@ identically on any machine and work under `--strict-fonts`. Swap `file=` for
 
 ## Reproducible output
 
-Two runs of the same template over the same data produce byte-identical printouts
-when `--build-time` is fixed and `--strict-fonts` is set. Without the first, the
-run timestamp differs; without the second, output depends on which fonts are
-installed. The printout header always records which font file each typeface
-resolved to, so a difference is diagnosable from the artifact.
+The same template over the same data produces byte-identical printouts when
+`--build-time` is fixed and `--strict-fonts` is set — **on any machine**, not just
+across runs on one. Without the first, the run timestamp differs; without the second,
+output depends on which fonts are installed.
+
+Nothing machine-specific survives in a strict printout. Strict mode admits only fonts
+the template named by path, and every path the template named — fonts and
+`embed=#false` images alike — is written relative to the printout rather than
+absolute. So a printout and the files it points at move as one tree. The header
+records which font file each typeface resolved to and by which step, so a difference
+is diagnosable from the artifact.
 
 ## License
 

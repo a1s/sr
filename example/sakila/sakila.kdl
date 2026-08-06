@@ -4,8 +4,8 @@
 // coverage: every band type, a group with its own title and summary, columns
 // with their own header and footer, stretch fields, a floating element, six
 // barcode types, an embedded image and a referenced one, both kinds of xref,
-// conditional outline entries, deferred page counts, justified text,
-// parameters, and every variable scope.
+// conditional outline entries, a conditional column eject, a deferred page
+// count, justified text, and typed parameters.
 //
 // Build it with:
 //   sr build -t sakila.kdl -d payments.jsonl -o sakila.pdf
@@ -18,8 +18,12 @@ report name="DVD rental payments" \
   // The reporting period. Payments outside it are suppressed by the detail
   // band's printwhen. The defaults cover the whole dataset; override either with
   //   sr build ... --param period_start=2005-06-01
-  parameter "period_start" type="date" default="2005-01-01"
-  parameter "period_end"   type="date" default="2006-01-01"
+  parameter "period_start" type="date" default="2005-01-01" prompt=#true
+  parameter "period_end"   type="date" default="2006-01-01" prompt=#true
+
+  // A computed default rather than a literal one.
+  // BUILD_TIME is fixed for the run, so the report stays reproducible.
+  parameter "as_of" type="datetime" defaultexpr="BUILD_TIME"
 
   records {
     column "customer_id" type="int"
@@ -67,10 +71,13 @@ report name="DVD rental payments" \
       barcode type="Code128" text="Code 128" valign="top"
       barcode type="Code39"  text="CODE 39" top=".4in" valign="top"
 
-      // Deferred, and its size depends on its content, so it needs a
-      // placeholder to reserve space with.
-      barcode type="2of5i" module="7.5mil" vertical=#true \
-              expr="PAGE_COUNT" evaltime="page" text="90" left="1.9in"
+      // FINAL.PAGE_COUNT is the row count this page ends with,
+      // so the barcode is deferred to page scope. Its size depends on its content,
+      // so it needs a placeholder to reserve space with. Interleaved 2 of 5
+      // encodes digit pairs, so the value is padded to an even width and the
+      // placeholder is the same width.
+      barcode expr="FINAL.PAGE_COUNT" evaltime="page" format="%04d" text="9999" \
+              type="2of5i" module="7.5mil" vertical=#true  left="1.9in"
 
       barcode type="Aztec" text="Aztec Code 2D :)" grow=#true \
               left="2.3in" width=".3in" halign="center" valign="top"
@@ -88,16 +95,20 @@ report name="DVD rental payments" \
         }
       }
 
+      // DATA_COUNT is a total already -- the dataset is buffered before
+      // layout starts. total_amount is not, so it is read through FINAL.
       field align="justified" stretch=#true \
-            evaltime="report" expr="(DATA_COUNT, total_amount)" \
+            evaltime="report" expr="(DATA_COUNT, FINAL.total_amount)" \
             format="There are %d payments on this report with total amount of %.2f" \
             text="There are 999 payments on this report with total amount of 99999.99" \
             left="3.5in" width="1in"
 
       // Floats below whatever the barcodes above turned out to be. The
       // declared `top` supplies the gap to the nearest element above, not an
-      // absolute position.
-      field float=#true left=0 top="1.1in" width="3.4in" \
+      // absolute position. The height has to come from the field itself --
+      // either declared, as here, or from `stretch` -- and not from the band's
+      // bottom edge, which is not settled until after the floats are placed.
+      field float=#true left=0 top="1.1in" height=12 width="3.4in" \
             expr="format('Period: %s to %s', strftime(period_start, '%d.%m.%Y'), strftime(period_end, '%d.%m.%Y'))"
     }
 
@@ -105,15 +116,19 @@ report name="DVD rental payments" \
 
     summary height="4.5cm" {
       style bgcolor="#F3EDE7"
-      rectangle width=1
+      rectangle width=1 dash="dashdot"
 
       xref type="outline" target="'top'" {
+        // 211x180 into 5cm x 4.265cm, the same aspect ratio, so proportional
+        // scaling leaves no letterboxing. The swatch is square either way,
+        // so proportional=#false costs it nothing.
         image file="thelarch.jpg" scale="fill" width="5cm" height="4.265cm"
-        image data="swatch" scale="fill" left="5.2cm" width="0.6cm" height="0.6cm"
+        image data="swatch" scale="fill" proportional=#false \
+              left="5.2cm" width="0.6cm" height="0.6cm"
 
         field align="center" left="6cm" width="11cm" height="1cm" \
               text="And now for something completely different..." \
-	{
+        {
           style font="title"
         }
         field stretch=#true left="6cm" top="2cm" width="11cm" height="2cm" \
@@ -137,18 +152,19 @@ report name="DVD rental payments" \
 
       field expr="PAGE_COUNT" align="left" format="Count: %i" \
             left="3mm" width="3cm" bottom="3mm"
-      field expr="PAGE_NUMBER" align="right" format="%i /" \
-            left="5.5cm" width="3cm" bottom="3mm"
 
-      // Deferred to report scope, so this prints the final page count. Its box
-      // is fully determined, so no placeholder is needed.
-      field expr="PAGE_NUMBER" evaltime="report" align="left" \
-            left="8.6cm" width="3cm" bottom="3mm"
+      // Total number of pages is PAGE_NUMBER at the end of the report,
+      // which is what FINAL says. The bare PAGE_NUMBER beside it still
+      // reads where the field sits, so one expression gives both.
+      // The box is fully determined, so no placeholder is needed.
+      field expr="'Page %d of %d' % (PAGE_NUMBER, FINAL.PAGE_NUMBER)" \
+            evaltime="report" align="center" \
+            left="5.5cm" width="6cm" bottom="3mm"
 
       field expr="page_amount" align="right" format="Total: %.2f " \
             left="12cm" width="5cm" bottom="3mm"
 
-      field expr="strftime(BUILD_TIME, '%Y-%m-%d %H:%M')" align="right" \
+      field expr="strftime(as_of, '%Y-%m-%d %H:%M')" align="right" \
             left="12cm" width="5cm" bottom="0.5mm" {
         style font="body"
       }
@@ -188,17 +204,26 @@ report name="DVD rental payments" \
       title height=14 {
         style font="bold" color="#000900"
 
+        // Don't open a customer in the last centimetre of a column.
+        // `when` selects the node and `require` then decides whether it ejects,
+        // so this skips the first customer, which already starts a column.
+        // `customers_count` iterates at the group break, before the title.
+        eject type="column" when="customers_count > 1" require="1cm"
+
         // Alternating prefix, to exercise first-match `when` on outlines.
         outline level=2 when="customers_count % 2" \
                 title=#"format('\\ %s, %s', customer.last_name, customer.first_name)"#
         outline level=2 when="not (customers_count % 2)" \
                 title=#"format('/ %s, %s', customer.last_name, customer.first_name)"#
 
+        // maxwidth clamps the resolved extent without counting towards the
+        // two-of-three, so left and width still both apply.
         field expr="(customer.last_name, customer.first_name)" format="%s, %s" \
-              stretch=#true left="5mm" width="55mm"
+              stretch=#true left="5mm" width="55mm" maxwidth="50mm"
 
-        // Deferred to the group, and stretchable, so it carries a placeholder.
-        field expr="customer_COUNT" format="Count: %i " align="right" \
+        // The group's own row count, which the title cannot know yet: deferred
+        // to the group scope, and stretchable, so it carries a placeholder.
+        field expr="FINAL.customer_COUNT" format="Count: %i " align="right" \
               evaltime="customer" stretch=#true text="Count: 999 " \
               left="60mm" width="20mm"
 
@@ -218,9 +243,11 @@ report name="DVD rental payments" \
 
         style when="PAGE_COUNT % 2" bgcolor="#F3EDE7"
 
-        // Alternating row shading: the style supplies the colour,
-        // the rectangle's own printwhen decides whether it is drawn.
-        rectangle width=0 printwhen="PAGE_COUNT % 2"
+        // Alternating row shading: the style supplies the colour, and the
+        // rectangle's own printwhen decides whether it is drawn. stroke=#false
+        // keeps it fill-only -- the layout style's color="black" would
+        // otherwise put a hairline border round every shaded row.
+        rectangle stroke=#false printwhen="PAGE_COUNT % 2"
 
         field expr="film.title" stretch=#true height=10 width="35mm"
 

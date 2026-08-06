@@ -63,6 +63,10 @@ expensive step because it wraps text.
 Measurements are cached against resolved content and available width,
 so re-measuring after an eject at the same width is free.
 
+A band whose expressions read `VERTICAL_POSITION` or `VERTICAL_SPACE` is
+not cached. Its content depends on where in the frame it lands, which the
+cache key does not capture.
+
 ## Frames
 
 A **frame** is a rectangular region that bands fill from the top down.
@@ -112,6 +116,47 @@ use a group `summary`.
 Deferred values inside a header or footer are sized from their placeholder
 content; see [deferred evaluation](#deferred-evaluation).
 
+### What a header or footer sees
+
+A footer is built against the **outgoing** context, a header against
+the **incoming** one — before and after the advance in the [eject
+sequence](#sequence) respectively. So a page footer reports the page it sits on,
+and a page header the page it opens.
+
+In both, the names resolve as they do anywhere else. Specifically:
+
+- `THIS` is the last record that entered the [record loop](#the-record-loop),
+  and the record field names read from it.
+- Counters hold their current values: end-of-page values in a page footer,
+  and the reset values in the next page's header.
+- Variables hold their accumulated values. In a footer that is before the reset
+  for the scope just ended, so a `reset="page"` total is that page's.
+
+Before the first record — on a page filled by a tall `title`, or in a report with
+no data at all — `THIS` is `None` and reading a record field from it is an error.
+A header or footer that names a record field must therefore guard for it:
+
+```kdl
+field expr="region" printwhen="THIS != None"
+```
+
+### `swapheader` and `swapfooter`
+
+`swapheader` on `title` and `swapfooter` on `summary` attach the band to the page
+frame, outside the page header and footer. The space comes out of the page it
+lands on:
+
+- The `title` is placed at the top of the page frame on the first page, and that
+  page's header is reserved below it. Content on page 1 starts that much lower.
+- The `summary` is placed in the page frame's reserved bottom band on the last
+  page, and that page's footer is placed immediately above it. The last page's
+  content space is that much shorter.
+
+Since the last page is only known when the record loop ends, the summary is
+placed like any other band: if what remains above the enlarged bottom
+reservation is already filled, a page eject happens first, and the summary gets a
+fresh page carrying that page's header and footer.
+
 ## Building a band
 
 Given a band template and a context, measurement proceeds:
@@ -153,15 +198,32 @@ Given a band template and a context, measurement proceeds:
       - A field or barcode with `evaltime` is measured from its placeholder content
         and [registered](#deferred-evaluation).
 5. **Resolve floating elements.** See [below](#floating-elements).
-6. **Determine band height.** With an explicit `height`, that value.
-   With `height="auto"`, the maximum bottom edge over all elements
-   that produced marks — zero if none did.
+6. **Determine band height.** The band is as tall as the greater of its declared
+   `height` and the lowest bottom edge any element produced. A declared `height`
+   is a **minimum, not a cap**: content that needs more room gets it, and the band
+   grows. `height="auto"` is the same rule with a minimum of zero.
 
-   An element whose vertical extent is **container-dependent** — its `bottom` was
-   derived rather than its `height` given, so it stretches to the band's bottom
-   edge — is excluded from that maximum and resolved afterwards against the height
-   the other elements produced. If every element in an auto band is
-   container-dependent, the band's height is zero and all of them collapse.
+   An element whose vertical extent is **container-dependent** takes no part in
+   that maximum. It is resolved afterwards, against the height the other elements
+   produced. Container-dependent means the element's height comes from the band's
+   bottom edge rather than from the element itself: its `bottom` was derived, and
+   it has no height of its own to contribute.
+
+   An element has a height of its own — a **content height** — when it is
+
+   - a `field` with `stretch=#true`: the wrapped text's height;
+   - a `barcode`: the symbol's minimum height;
+   - an `image` with `scale="grow"`: the bitmap's natural height.
+
+   Those three participate in the maximum even with no vertical geometry given
+   at all, which is why a band of barcodes and stretch fields sizes to them.
+   A non-stretch `field`, a `line`, a `rectangle`, and an image that is
+   not `grow` have no content height, so with a derived `bottom` they are
+   container-dependent.
+
+   If every element in a band is container-dependent and the band declares
+   no height, the height is zero and all of them collapse.
+   [Validation](template.md#validation) warns about that.
 7. **Align content.** For each element, align its content box inside its resolved
    box per `halign` / `valign`; for a `field`, align each line per `align`.
 
@@ -174,9 +236,10 @@ whatever lies above it, using measured heights rather than declared ones.
 
 Resolution is a partial order, not declaration order:
 
-1. Consider every element whose `top` and `height` are known and non-negative —
-   positioned from the top rather than anchored to the bottom. Elements anchored by
-   `bottom` do not participate.
+1. Consider every element whose vertical extent is **its own** and non-negative:
+   either a declared `height`, or a
+   [content height](#building-a-band) the element determines itself.
+   An element sized from the band's bottom edge does not participate.
 2. Build the minimal DAG of "wholly above" relations from the **declared** boxes:
    - a non-floating element precedes a floating element it is wholly above;
    - a floating element precedes another floating element only when it starts
@@ -191,6 +254,25 @@ Resolution is a partial order, not declaration order:
 Zero-height elements are skipped, so a suppressed field does not push its
 followers down.
 
+### What a floating element may be
+
+A floating element **may** `stretch`, and a floating `barcode` or `scale="grow"`
+image is fine too. Content is resolved in step 4, before this pass, so by the time
+the DAG is walked a stretch field's wrapped height, a barcode's symbol height,
+and a grow image's natural height are all known. Step 1 asks for a height
+the element owns, not for a declared one.
+
+What a floating element may **not** do is take its height from the band — a derived
+`bottom` with no content height of its own. Its top is not known until this pass
+has finished, and the band's height is not known until step 6, so such an element
+has neither end fixed. It is excluded here for the same reason it is excluded from
+the band's height: the two would define each other.
+
+The DAG itself is built from **declared** boxes, so it depends on the template and
+not on the data. Measured heights are used to propagate positions along it, but they
+never change which element precedes which — the same template floats things in the
+same order for every record.
+
 ## Placing a band
 
 ```
@@ -200,15 +282,26 @@ available   := frame.bottom - frame.fillY
 if measurement.height <= available + TOLERANCE:
     commit(measurement)
 
-else if band allows splitting and a legal split point exists:
-    split, commit the head, column eject, continue with the tail
+else if band splits and a legal split point fits `available`:
+    split there, commit the head, column eject, continue with the tail
 
 else if measurement.height <= frame.height(empty):
     column eject, re-measure, commit
 
+else if band splits and any cut point fits `available`:
+    # taller than an empty frame: orphans and widows are given up
+    split at the last such cut point, commit the head, column eject, continue
+
 else:
     band cannot fit any frame → see Errors
 ```
+
+A **cut point** is an offset no unsplittable element spans. A **legal split
+point** is a cut point that also satisfies `orphans` and `widows`. The two differ
+only in the last-resort branch: a band too tall for any frame is split wherever it
+can be split, because making progress beats honouring a line-count preference. A
+band too tall for any frame in which *no* cut point exists at all — an image or a
+barcode taller than the frame — is an error either way.
 
 `frame.height(empty)` is `bottom - top` for a fresh frame — the most a band could
 ever get.
@@ -255,8 +348,10 @@ lines, its elements re-placed from the tail's top.
 
 Non-splittable elements below the cut move to the tail whole.
 
-A band that does not fit even an empty frame and does allow splitting is split
-unconditionally, ignoring `orphans` and `widows`.
+A band that does not fit even an empty frame is split at the last available
+**cut point**, giving up `orphans` and `widows` — see
+[placing a band](#placing-a-band). If it has no cut point at all,
+it is an [error](#errors).
 
 ## Ejects
 
@@ -279,12 +374,18 @@ Given the frame of the band that triggered the eject:
    **outgoing** context, so a page footer reports the page it belongs to.
 2. **Resolve deferred values** for the scopes that just ended — `column` for a
    column eject, `page` and `column` for a page eject.
-3. **Advance.** For a page eject: increment `PAGE_NUMBER`, reset `PAGE_COUNT` and
-   `COLUMN_COUNT`, update each group's `_PAGE_NUMBER`, start a new page. For a
-   column eject: reset `COLUMN_COUNT`, apply column-scoped variable resets and
-   iterations, increment the ejecting frame's `column`, set its `x` to
-   `parent.x + (width + gap) × column`, and reset every descendant frame to column
-   0.
+3. **Advance.** A column eject:
+   - resets `COLUMN_COUNT`;
+   - applies `column`-scoped variable resets, then `column`-scoped iterations;
+   - increments the ejecting frame's `column`, sets its `x`
+     to `parent.x + (width + gap) × column`, and resets
+     every descendant frame to column 0.
+
+   A page eject ends a column as well, so it does all of the above and then:
+   - increments `PAGE_NUMBER` and resets `PAGE_COUNT`;
+   - applies `page`-scoped variable resets, then `page`-scoped iterations;
+   - updates each group's `_PAGE_NUMBER`;
+   - starts a new page, with every frame's `column` back to 0.
 4. **Headers, outermost first** — the reverse of the footer order.
 
 The two orders together are the order in which the bands appear on the page.
@@ -297,12 +398,16 @@ node is skipped and the next is tried. The selected node ejects unconditionally 
 it has no `require`, and otherwise only when less than `require` remains in the
 frame. Full table in [template.md](template.md#eject).
 
-For `title`, ejects are evaluated **after** the band is placed. For every other
-band, before.
+Ejects are evaluated **before** the band is placed, with one exception: a report's
+own `title` — the band at `layout` or `embedded` level — evaluates them **after**,
+so an `eject` there gives the title a page of its own. A group's `title` is not the
+exception; its ejects run first, which is what lets one say "open this group
+somewhere it has room".
 
 ## Keeping content together
 
-Three mechanisms, from coarsest to finest.
+Three mechanisms, from coarsest to finest. They compose by taking the maximum:
+see [how they combine](#how-they-combine).
 
 ### `group keeptogether`
 
@@ -329,13 +434,32 @@ remain, they are measured together; if they do not fit, an eject happens before 
 first of them.
 
 Both are counted in rows, distinct from a band's line-counted `orphans` and
-`widows`.
+`widows`. **Rows means printed rows**: a record whose `detail` is suppressed
+by `printwhen` occupies no space, so the lookahead skips it and counts on to
+the next one that prints. A group whose remaining records all suppress can
+satisfy neither count and neither forces an eject.
 
 ### `eject require`
 
 Ejects when less than a given amount of space remains — "start this band with at
 least this much room". Combine it with `when` on the same node to restrict it to the
 records where it matters; see [`eject`](template.md#eject).
+
+### How they combine
+
+More than one may apply to the same group — invoices commonly set `keeptogether`
+along with `minrows`. They are not applied in turn. Before the group's `title`
+is committed, each mechanism that applies contributes the height it wants available:
+
+- `keeptogether`: the whole group's extent, capped at an empty frame's height;
+- `minrows`: the title plus the next `minrows` printed detail rows;
+- `eject require` on the title: the `require` dimension,
+  if a `when` selected that node.
+
+The largest of those is compared against the space remaining, and **at most one
+eject results** — the mechanisms decide whether to eject, not how many times.
+`mintailrows` is separate because it is tested later in the record loop,
+at the group's tail rather than its head.
 
 ## The record loop
 
@@ -388,13 +512,71 @@ summary
 
 `swapheader` on `title` places it above the first page header; `swapfooter` on
 `summary` places it below the last page footer. Both attach the band to the page
-frame instead of the inner frame.
+frame instead of the inner frame — see
+[`swapheader` and `swapfooter`](#swapheader-and-swapfooter) for where the space
+comes from.
 
 ## Deferred evaluation
 
 A `field` or `barcode` with `evaltime` is not evaluated when its band is built. It
 is registered against the named scope; when that scope ends, the real value is
 computed and substituted. This is how a page footer prints the final page count.
+
+`evaltime` names the scope. What the expression takes from the end of that scope,
+rather than from where it sits, is [`FINAL`](expressions.md#final) — so the two
+always appear together.
+
+### What a deferred expression sees
+
+Two rules, and they cover every case:
+
+- Every name reads its value **where the element sits**, exactly as it would
+  with no `evaltime` at all.
+- [`FINAL.`*name*](expressions.md#final) reads the value that name holds
+  when the `evaltime` scope **ends**.
+
+So the author says which half of the expression is deferred, name by name.
+The engine keeps no list of which quantities a given scope makes final.
+
+```kdl
+field expr="'Page %d of %d' % (PAGE_NUMBER, FINAL.PAGE_NUMBER)" \
+      evaltime="report" text="Page 999 of 999"
+```
+
+`PAGE_NUMBER` is the page the field is printed on. `FINAL.PAGE_NUMBER` is
+what `PAGE_NUMBER` has become by the end of the report. One expression, one field,
+and nothing in the engine that knows what a page total is.
+
+### How the substitution works
+
+When the band is measured, the engine evaluates nothing. It **snapshots** the value
+of every name the expression references except `FINAL`, which it does not bind yet.
+It knows those names from [compilation](expressions.md#compilation), which has
+already turned each expression into a function of exactly the names it uses — so
+the snapshot costs a lookup per name and no analysis.
+
+When the scope ends, `FINAL` is bound to the values reached at that moment
+and the function is called. Everything else it sees is the snapshot.
+
+That is why the snapshot is per element rather than per band: two fields
+in one footer may sit at the same place but name different things.
+
+### When a scope ends
+
+| `evaltime` | Resolved |
+|---|---|
+| `column` | at each column eject, and at the end of the report |
+| `page` | at each page eject, and at the end of the report |
+| *group* | when that group breaks, after its `summary` is committed, and at the end of the report |
+| `report` | after the `summary` band is committed |
+
+The trailing "and at the end of the report" covers the last page, last column,
+and last group, which end without an eject or a break.
+
+A group's deferrals resolve after its `summary`, so both read the same final group
+totals. Report-scoped variables are not reset until after the `summary` is
+committed, for the same reason — see
+[the report boundary](expressions.md#the-report-boundary).
 
 ### Placeholders
 
@@ -419,22 +601,15 @@ After substitution the element is re-measured:
 - **Height larger** — **error**, naming the field, its placeholder, and both
   heights.
 
-Size placeholders for the worst case:
-
-```kdl
-field expr="'Page %d of %d' % (PAGE_NUMBER, PAGE_COUNT)" evaltime="report" \
-      text="Page 999 of 999"
-```
+So a placeholder must be sized for the worst case — `text="Page 999 of 999"`, not
+`text="Page 1 of 1"`.
 
 ## Subreports
 
-A `subreport` runs another template over a nested sequence, ordered within its band
-by `seq` — negative before the band's content, non-negative after, ties on document
-order.
-
-A subreport is a nested builder with its own context: its own parameters, fed by
-`arg` nodes, its own variables and groups, and its own record loop. It shares the
-enclosing report's fonts and data blobs.
+A `subreport` runs another template over a nested sequence. It is a nested builder
+with its own context: its own parameters, fed by `arg` nodes, its own
+[records](template.md#records), its own variables and groups, and its own record
+loop. It shares the enclosing report's fonts and data blobs.
 
 - **Non-inline** (default): the child builds complete pages, which are spliced into
   the parent's page list at the point the subreport occurs. `ownpageno` restarts
@@ -442,11 +617,42 @@ enclosing report's fonts and data blobs.
   and resumes after it.
 - **Inline**: the child's bands are placed into the parent's current frame,
   continuing the parent's pagination. An inline subreport must match the parent's
-  page size and inherits its margins, and its page headers and footers are the
-  parent's — the child does not emit its own. `inline` and `ownpageno` are mutually
+  page size and inherits its margins. `inline` and `ownpageno` are mutually
   exclusive.
 
 A subreport may not appear inside a `columns` block.
+
+### Where a subreport's bands go
+
+A subreport is not laid out inside its host band's box. A band is a fixed region;
+a subreport emits whole bands of its own. `seq` orders it against the host band
+as a whole:
+
+- `seq` negative — the subreport's bands are placed into the frame **before**
+  the host band, so the host band follows them.
+- `seq` non-negative — the host band is committed first and the subreport's bands
+  follow it, starting at the frame's new `fillY`.
+
+Ties break on document order. Either way the subreport consumes frame space
+of its own; it takes nothing from the host band's height, and the host band's
+height is unaffected by it.
+
+When the host band splits, the subreport goes outside the whole split,
+not between the fragments: `seq` negative places it before the head,
+`seq` non-negative after the tail.
+
+### Page headers and footers
+
+Only a paginating report has them. A **non-inline** subreport builds its own pages
+and so uses its own `header` and `footer`. An **inline** subreport shares the
+parent's pages, whose header and footer are already reserved, so it has no frames
+of its own to attach them to: an inline subreport must not define `header` or
+`footer`, and doing so is a [validation error](template.md#validation).
+
+For a heading that prints once per invocation — column labels above a line-item
+table, say — use `title` and `summary`, which are per-report bands and work in
+both modes. Under `inline` they print once at the start and end of each
+invocation, in the parent's frame.
 
 ## Errors
 
@@ -454,14 +660,23 @@ Each of these names the template node, the record index, and the measured values
 
 | Condition | Behaviour |
 |---|---|
-| Band taller than an empty frame, splitting not allowed | error |
-| Band taller than an empty frame, splitting allowed | split unconditionally, ignoring `orphans` / `widows` |
+| Band taller than an empty frame, splitting not allowed | **overflow** |
+| Band taller than an empty frame, splitting allowed, some cut point exists | split there, giving up `orphans` / `widows` |
+| Band taller than an empty frame, splitting allowed, no cut point exists | **overflow** |
+| A mark lands outside the page's printable area | **overflow** |
 | Deferred value taller than its placeholder | error |
 | Header and footer reservations together exceed the frame | error |
 | Barcode content not encodable in the selected type | error |
-| Expression type mismatch or missing field | error |
+| Expression type mismatch, missing field, or a `null` in a column that is not `nullable` | error |
+| `FINAL` without `evaltime`, or `evaltime` without `FINAL` | error, at template validation |
 | Column count so high that column width is non-positive | error, at template validation |
 
-`--allow-overflow` downgrades the first row to a warning and places the band
-anyway. The warning is recorded in the printout header, so an overflowing document
-is identifiable from the artifact.
+The rows marked **overflow** are errors that `--allow-overflow` downgrades to a
+warning, placing the marks anyway. The warning is recorded in the printout header,
+so an overflowing document is identifiable from the artifact.
+
+A mark outside the printable area is the case a negative `right` or `bottom`
+produces. Such an offset is legal in the template — it means the box reaches past
+its container, which for a container in the middle of the page is perfectly
+ordinary. Overflow is judged on the resulting page coordinates, not on the
+declaration, so only a mark that actually crosses a margin is one.

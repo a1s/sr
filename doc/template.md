@@ -202,7 +202,10 @@ Missing values are filled in a fixed order — `left` then `right`, `top` then
 Vertically the same, with `top`/`bottom`/`height`.
 
 A negative `right` or `bottom` means the box extends past the container edge,
-and is legal.
+and is legal — for a container in the middle of the page that is perfectly ordinary.
+A mark that ends up outside the *page's* printable area is an
+[overflow](layout.md#errors), judged on the final page coordinates
+rather than on the declaration.
 
 `x` and `y` are accepted as aliases for `left` and `top`.
 
@@ -215,8 +218,19 @@ field left=10 right=10 maxwidth=50
 
 ### Section height
 
-A section takes `height="auto"` (the default), meaning content-determined: the
-band is as tall as the lowest mark it produces. An explicit `height` fixes it.
+A section's `height` is a **minimum**. The band is as tall as the greater of that
+value and the lowest mark it produces, so content that needs more room gets it
+and the band grows. `height="auto"` is the default and means a minimum of zero —
+purely content-determined.
+
+That is why `stretch=#true` works inside a band with a declared height: a row
+declared `height=12` stays 12 points tall until a wrapped field needs 24, and
+then it is 24. To hold a band to a fixed size instead, leave `stretch` off —
+a `field` without it truncates at a line boundary rather than growing.
+
+Which elements contribute to the measured height, and which are left to fill
+whatever height the others settle on, is in
+[layout.md](layout.md#building-a-band).
 
 An element's `bottom=0` is a different thing: it means extend to the container's
 bottom edge.
@@ -225,6 +239,7 @@ bottom edge.
 
 `halign` and `valign` align an element's **content inside its box**,
 once the content's natural size is known. They do not move the box.
+The defaults are `halign="left"` and `valign="top"`.
 
 For a `field`, content is the wrapped text; for an `image`, the bitmap;
 for a `barcode`, the symbol. `align` on a `field` is separate: it aligns
@@ -236,6 +251,12 @@ each line of text within the field, and adds `justified`.
 pushed down below whatever elements lie above it, after their actual heights are
 known. Placement is by partial order, not declaration order — see
 [layout.md](layout.md#floating-elements).
+
+A floating element's height must come from the element: a declared `height`, or
+content, which includes `stretch=#true` on a `field`. It cannot come from the
+container, since a floating element's own top is not settled until the other
+elements have been placed. In practice that rules out giving a floating element
+`bottom` and nothing else.
 
 ## Ordering rules
 
@@ -251,7 +272,10 @@ Node order is significant in three places. Reordering siblings changes output.
    `when` is true is selected and stops the search, even if its `require`
    then declines to eject. See [`eject`](#eject).
 
-`outline` nodes with `when` conditions also resolve first-win.
+`outline` nodes resolve first-win too, so a section emits **at most one** outline
+entry each time it prints. Several `outline` nodes in one section are alternatives
+selected by `when`, not a list of entries. For a nested outline, nest the groups
+that produce it.
 
 `subreport` is ordered by its numeric `seq`, not by document position.
 Negative `seq` runs before the section's own content, non-negative after.
@@ -371,8 +395,17 @@ A field present in the data but not declared is not an error — data often carr
 columns a report does not use. It is not reachable as a bare name, but remains
 reachable as `THIS["name"]`.
 
+A JSON `null` in a column that is not `nullable` is an error naming the column
+and the record index. In a `nullable` column it becomes `None`, which is
+[false](expressions.md#truth-values).
+
 `type="object"` and `type="list"` pass nested JSON through; their contents are
-not declared and are reached by attribute or subscript.
+not declared and are reached by attribute or subscript. A `list` column is what
+a [`subreport`](#subreport) runs over, and the subreport's own `records` is what
+declares and coerces the elements — a raw JSON string `"4.25"` inside the list
+becomes an exact decimal there, exactly as at report level. Without that
+declaration the elements stay as JSON gives them, and `unit * qty` on two strings
+is string repetition rather than arithmetic.
 
 ### Data input
 
@@ -457,7 +490,7 @@ data "footnote" expr="parameter_notice"
 
 | | Type | Default |
 |---|---|---|
-| *(arg 1)* | string, the name | — |
+| *(arg 1)* | string, the name | required |
 | `encoding` | encoding enum | none — content is literal text |
 | `compress` | compress enum | none |
 | `expr` | expression | — |
@@ -540,10 +573,17 @@ field expr="amount" format="%.2f"
 field text="Total:"
 
 // deferred — expr is the content, text sizes the box until it resolves
-field expr="'Page %d of %d' % (PAGE_NUMBER, PAGE_COUNT)" evaltime="report" \
-      text="Page 999 of 999"
-barcode type="2of5i" expr="PAGE_COUNT" evaltime="page" text="90"
+field expr="'Page %d of %d' % (PAGE_NUMBER, FINAL.PAGE_NUMBER)" \
+      evaltime="report" text="Page 999 of 999"
+barcode type="2of5i" expr="FINAL.PAGE_COUNT" format="%04d" evaltime="page" \
+      text="9999"
 ```
+
+`evaltime` names the scope; [`FINAL`](expressions.md#final) names what is taken
+from the end of it. Everything else reads its value where the element sits,
+so `PAGE_NUMBER` above is the page the field prints on while `FINAL.PAGE_NUMBER`
+is the page count. The two properties require each other — see
+[what a deferred expression sees](layout.md#what-a-deferred-expression-sees).
 
 A placeholder is **required** exactly when the element's own size depends
 on its content, which is two cases:
@@ -603,8 +643,10 @@ So the two combine as a conjunction, and `require` is reachable only through a t
 The three examples above therefore mean: eject whenever the customer has more than
 20 rows; eject whenever less than 3cm remains; and eject only when both hold.
 
-For `title`, eject is evaluated at the **end** of the section.
-For every other section, at the beginning.
+Eject is evaluated at the **beginning** of the section, except in a report's own
+`title` — the band directly under `layout` or `embedded` — where it is evaluated
+at the end, so that an `eject` there puts the title on a page of its own. A group's
+`title` follows the ordinary rule.
 
 A band that does not fit the space remaining ejects on its own, without any `eject`
 node — see [layout.md](layout.md#placing-a-band).
@@ -613,7 +655,7 @@ node — see [layout.md](layout.md#placing-a-band).
 
 | Property | Type | Default | Applies to |
 |---|---|---|---|
-| `height` | dimension or `"auto"` | `"auto"` | all |
+| `height` | dimension or `"auto"`, a **minimum** | `"auto"` | all |
 | `printwhen` | expression | — | all |
 | `split` | boolean | `#false` | all |
 | `orphans` | integer, text lines | 1 | all, when `split` |
@@ -723,9 +765,9 @@ field expr="(customer.last_name, customer.first_name, customer_amount)"
       format="Total for %s, %s: %.2f"
 ```
 
-`evaltime` defers evaluation until the named scope is complete — this is
-how a page footer prints the final page count. See
-[layout.md](layout.md#deferred-evaluation).
+`evaltime` names a scope whose end the expression's [`FINAL`](expressions.md#final)
+names are read at — this is how a page footer prints the final page count.
+See [layout.md](layout.md#deferred-evaluation).
 
 `stretch=#true` grows the box's height to fit wrapped text.
 Without it, text that does not fit is truncated at a line boundary.
@@ -754,8 +796,9 @@ Use `left`/`right` for a line's horizontal extent.
 ### `rectangle`
 
 ```kdl
-rectangle width=0 radius=2
-rectangle width=1 opaque=#false
+rectangle width=1 radius=2
+rectangle width=1 opaque=#false          // outline only
+rectangle stroke=#false                  // fill only
 ```
 
 | Property | Type | Default |
@@ -764,12 +807,19 @@ rectangle width=1 opaque=#false
 | `dash` | dash enum | `solid` |
 | `radius` | dimension, corner radius | 0 |
 | `opaque` | boolean | `#true` |
+| `stroke` | boolean | `#true` |
 
 Plus geometry, `printwhen`, and `style*`.
 
-The stroke uses the style's `color`, the fill its `bgcolor`. `opaque=#false`
-suppresses the fill. A `width` of 0 draws a hairline; to draw fill only, set
-`opaque=#true` and give the style no `color`.
+The stroke uses the style's `color`, the fill its `bgcolor`. The two switch off
+independently: `opaque=#false` suppresses the fill, `stroke=#false` suppresses
+the outline. A `width` of 0 draws a hairline, which is the thinnest line the device
+can manage — it does **not** mean "no outline".
+
+For a background block, then, `rectangle stroke=#false` is the form to use.
+Leaving `color` out of the rectangle's own `style` does not work: unset style
+properties fall through to the enclosing styles, so a `color` set at `layout` level
+still reaches it and the block gets a hairline border.
 
 ### `image`
 
@@ -807,7 +857,12 @@ with `#false` it is stretched to the box exactly.
 Only `cut` clips, and the clipped region is what the printout records
 as [`crop`](printout.md#image).
 
-`embed=#false` records a file reference in the printout instead of the bytes.
+`embed=#true`, the default, copies the image bytes into the printout, so the
+printout is self-contained. `embed=#false` records a file reference instead:
+the path is resolved against `basedir` when the template is read, and written
+into the printout relative to the printout itself, so the two travel together —
+see [printout.md](printout.md#image). The cost is that rendering then depends
+on the image still being where the printout expects it.
 
 `type` is optional and sniffed from the content; give it to override.
 
@@ -848,7 +903,23 @@ The box always grows along the coding direction — vertically when
 `grow=#true` additionally expands the symbol to use the available box: for 2-D
 types this recomputes `module`, for 1-D types it grows the bar height.
 
-Characters the selected type cannot encode are an error.
+Each type constrains what it can encode, and content it cannot encode is an error
+naming the type, the value, and the reason:
+
+| Type | Accepts |
+|---|---|
+| `Code128` | any of ASCII 0–127 |
+| `Code39` | digits, `A`–`Z` upper case, space, and `- . $ / + %` |
+| `Code93` | as `Code39`, plus the full ASCII range through its shift characters |
+| `2of5i` | digits only, and an **even** number of them |
+| `DataMatrix` `Aztec` `QR-*` | any bytes, up to the symbol's capacity, which for the `QR-*` types shrinks as the error-correction level rises |
+
+`2of5i` encodes digits in pairs, so an odd-length value is an error
+rather than being padded. Use `format` to fix the width:
+
+```kdl
+barcode type="2of5i" expr="PAGE_COUNT" format="%04d"
+```
 
 Barcodes are always embedded in the printout, as stripe geometry
 rather than a bitmap; see [printout.md](printout.md#barcode).
@@ -873,9 +944,13 @@ xref type="url" target="'https://dev.mysql.com/doc/sakila/en/'" \
 Plus geometry and body-element children (`field`, `line`, `rectangle`, `image`,
 `barcode`, and nested `xref`).
 
-`type="url"` links to the expression's string result. `type="outline"` links
-to an `outline` whose `name` matches. An `xref` with no explicit width sizes
-to its content.
+`type="url"` links to the expression's string result.
+`type="outline"` links to an `outline` whose `name` matches.
+
+An `xref`'s box follows the ordinary [geometry](#geometry) rules, the same as
+a body element's: it is a container for the elements inside it, and with nothing
+specified it fills its section. Use `halign` to put a narrower run of content at
+one end of it.
 
 ### `outline`
 
@@ -896,6 +971,10 @@ outline title="'%s, %s' % (customer.last_name, customer.first_name)" level=2
 
 `name` makes the entry a target for `xref type="outline"`. `closed=#true` renders
 the entry collapsed.
+
+A section emits at most one outline entry per print. Where a section has several
+`outline` nodes they are alternatives, resolved first-win by `when` — see
+[ordering](#ordering-rules).
 
 ### `subreport`
 
@@ -919,11 +998,16 @@ subreport seq=10 template="detail_lines.kdl" data="THIS.lines" {
 
 Exactly one of `template` or `embedded`.
 
-`seq` orders subreports within a section: negative before the section's own
-content, non-negative after. `inline=#true` splices the subreport's bands into the
-current frame instead of starting fresh pages; an inline subreport must match the
-parent's page size and inherits its margins. `ownpageno=#true` restarts page
-numbering inside the subreport, and is incompatible with `inline`.
+`seq` orders a subreport against the section it belongs to: negative places its
+bands before the section, non-negative after it. A subreport is not laid out inside
+the section's box and takes nothing from its height — see
+[where a subreport's bands go](layout.md#where-a-subreports-bands-go).
+
+`inline=#true` places the subreport's bands into the current frame instead of
+starting fresh pages; an inline subreport must match the parent's page size,
+inherits its margins, and defines no `header` or `footer` of its own.
+`ownpageno=#true` restarts page numbering inside the subreport, and is
+incompatible with `inline`.
 
 A `subreport` may not appear inside a `columns` block.
 
@@ -953,13 +1037,22 @@ Children: `parameter*`, `records?`, `variable*`, `style*`, `title?`, `summary?`,
 `header?`, `footer?`, `columns?`, exactly one of `group?` / `detail?`,
 and nested `embedded*`.
 
-An `embedded` layout is its own namespace for parameter, variable, and group
-names, but shares the enclosing report's `font` and `data` definitions.
+An `embedded` layout is its own namespace for its `parameter`, `records`,
+`variable`, and `group` names, but shares the enclosing report's `font`
+and `data` definitions.
 
 Its `records` declares the fields of the sequence the subreport runs over, which
 is a different shape from the parent's records — an invoice report's records are
-invoices, its subreport's are line items. Without the declaration the subreport's
-expressions have no names to compile against, exactly as at report level.
+invoices, its subreport's are line items. It also **coerces** those elements:
+a `list` column arrives from JSON untyped, and the subreport's `records` is what
+turns each element's fields into ints, decimals, and times. Without the declaration
+the subreport's expressions have no names to compile against, and no types to
+compute with, exactly as at report level.
+
+`header` and `footer` are per-page bands and belong only to a subreport
+that paginates itself. An `embedded` layout used by an
+[`inline`](layout.md#page-headers-and-footers) subreport must not define them;
+use `title` and `summary` for content that prints once per invocation.
 
 A subreport given by `template=` is an ordinary `report` document and carries
 its own `records`.
@@ -980,9 +1073,22 @@ A `font` node naming a `typeface` is resolved by trying, in order:
 **Strict mode** stops after step 1 and fails with the unresolved typeface named.
 Enable it with `--strict-fonts` on the CLI, or the equivalent library option.
 
-The printout records which file and face were actually measured,
-and which step of the chain produced them — see
-[printout.md](printout.md#fonts).
+The printout records which file and face were actually measured, and which step of
+the chain produced them — see [printout.md](printout.md#fonts). A font the template
+named with `file=` is recorded relative to the printout, so it travels with it;
+one the engine found on the host is recorded as it was opened. Under strict mode
+only the first case can arise.
+
+### Missing glyphs
+
+A resolved font may still lack a character the data or the template asks for. That
+is not an error: the engine measures and the renderer draws the font's `.notdef`
+glyph, which is visible as an empty box, and records a warning in the printout
+header naming the character, the font, and the node. Text keeps its metrics, so
+nothing shifts.
+
+Under `--strict-fonts` the pinned file is the only one considered, which makes this
+the likelier failure — a template using `…` or `—` needs a font that has them.
 
 ## Validation
 
@@ -994,10 +1100,22 @@ Validation runs once, at load, before any data is read. It checks:
 - `layout` has `pagesize`, or both `width` and `height`.
 - Unique names within a namespace: `parameter`, `variable`, `group`, `font`,
   `data`, `embedded`. An `embedded` layout is a separate namespace for parameters,
-  variables, and groups.
+  records, variables, and groups.
+- No `parameter`, `variable`, or `group` name collides with a
+  [predefined name](expressions.md#predefined-variables), a module, or a builtin,
+  since resolution puts those first and the declaration would be unreachable.
+  For a `group` the derived names count too: a group may not be called `PAGE`
+  or `DATA`, because `PAGE_COUNT` and `DATA_COUNT` already exist.
 - Every `style font=` names a defined `font`.
 - Every `itergrp` / `resetgrp` names a defined `group`, and every `evaltime` names
   `report`, `page`, `column`, or a defined group.
+- `FINAL` and `evaltime` accompany each other: `FINAL` appears only in an expression
+  whose element has an `evaltime`, and an element with `evaltime` has at least one
+  `FINAL` in its expression. Each without the other is a mistake rather than
+  a no-op — the first has no scope to read from, the second defers an expression
+  that would give the same answer in place.
+- Every name used as `FINAL.`*name* is a predefined variable or a declared
+  `variable`. Parameters and bare record fields are not in `FINAL`.
 - Every `xref type="outline"` has a reachable target `outline name=`.
 - Per axis, at most two of `left`/`right`/`width` and at most two of
   `top`/`bottom`/`height`.
@@ -1008,18 +1126,22 @@ Validation runs once, at load, before any data is read. It checks:
   one of `expr` / `content`.
 - At most one of `default` / `defaultexpr` on a `parameter`, and any `default`
   parses as its declared `type`.
-- `format` appears only on a `parameter` or `column` whose type is `date` or
-  `datetime`.
+- `format` on a `parameter` or a `column` — where it is a date parsing layout —
+  appears only when that node's type is `date` or `datetime`. `format` on a `field`
+  or a `barcode` is a different property, a `%` format specification, and carries
+  no such restriction; see [Formatting](expressions.md#formatting).
 - Every `arg` names a `parameter` of the subreport it belongs to.
 - Every deferred `stretch` field and every deferred `barcode` has a placeholder.
 - `subreport` has exactly one of `template` / `embedded`, is not inside `columns`,
   and does not combine `inline` with `ownpageno`.
+- An `inline` subreport's layout defines no `header` and no `footer`.
 - `font` does not combine `file` or `data` with `bold` or `italic`.
 - `columns count` does not make the column width non-positive.
 - Expressions parse. Name resolution is not checked at load, since undeclared
   record fields are reached dynamically.
 
-It warns when an `height="auto"` band contains only elements whose vertical extent
-is container-dependent, since such a band collapses to zero height.
+It warns when a band that declares no `height` contains only elements whose
+vertical extent is [container-dependent](layout.md#building-a-band), since
+such a band collapses to zero height.
 
 Every diagnostic names the file, the node path, and the property.

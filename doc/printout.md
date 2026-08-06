@@ -30,7 +30,8 @@ Two encodings carry the same data model:
   Smaller, for large printouts.
 
 The in-memory structure is the primary artifact — the engine hands it to a renderer
-directly, and serializes only when asked.
+directly, and serializes only when asked. Serializing is not purely a re-encoding:
+[paths](#paths) are rewritten relative to where the printout is being written.
 
 ### Units and number format
 
@@ -39,6 +40,66 @@ decimal places. Colors are `"#RRGGBB"` strings.
 
 Numbers serialize in the shortest form that round-trips. Integral values are
 written without a fractional part, so `72` not `72.0`.
+
+### Paths
+
+Two fields hold filesystem paths: an [`image`](#image) mark's `file`,
+and a [font](#fonts) entry's `resolvedFile`. One rule reads both:
+
+- A **relative** path resolves against the directory the printout was read from.
+- An **absolute** path is used as it stands.
+
+So a renderer needs no base directory, and the header carries none. The printout is
+a file, and a file has a location; that base cannot drift out of step with the document
+the way a stored path could. Separators are `/` on every platform, so a printout
+written on Windows renders on Linux.
+
+Which form a path takes follows from where it came from, not from where it happens
+to sit:
+
+| Path | Form |
+|---|---|
+| Named by the template — `image file=` with `embed=#false`, or `font file=` | relative to the printout |
+| Found on the host — a `font` resolved by `table`, `os`, `scan`, or `substitute` | absolute, as opened |
+
+A path the template named is a project asset, so it travels with the printout. A font
+the engine found is a system resource that was never in the project tree, and
+`resolvedFile` doubles as the record of which file was measured — a diagnostic should
+say literally what was opened. `resolvedBy` on the same entry distinguishes the two,
+though a renderer need not look: relative or absolute is enough.
+
+Relative paths are written at **serialization**, since that is when the printout's
+location is known. In memory a path is whatever the engine resolved against the
+template's `basedir`. Two consequences:
+
+- Writing one printout to two directories gives two different values, and both are
+  right.
+- With no destination directory — a pipe, or an in-memory hand-off straight to a
+  renderer — the process's working directory stands in.
+
+A template-named file with no relative path to the printout at all, such as one on a
+different Windows drive, is written absolute. There is nothing else to say about it.
+
+### Nothing is copied onto the filesystem
+
+Bytes go **into the document**: `embed=#true` puts an image's bytes, and a `data=`
+font puts a font file's bytes, into the header's [`data`](#data) table. Files are
+never put **beside the document**: writing a printout creates one file, the printout,
+and nothing else.
+
+So rewriting a path is only a rewrite. The file it names stays where it is, and a
+relative path that reaches outside the printout's own directory —
+`../fonts/Go-Bold.ttf` — is the ordinary case, not a defect. "A printout and its files
+move as one tree" means the tree its paths span, which is normally the project.
+
+A file the printout can already reach is therefore never duplicated. Where the same
+font already sits at the destination, it is referenced rather than written again, and
+never overwritten: two printouts in one directory using one font point at that font,
+not at two copies of it. Inside the document the same rule holds — two images from one
+source share one `data` entry.
+
+Making the printout's own directory self-contained is a separate, deliberate act:
+`embed=#true` for an image, a `data` node for a font, or moving the files yourself.
 
 ## Header line
 
@@ -82,7 +143,7 @@ written without a fractional part, so `72` not `72.0`.
 | `page` | Default page geometry, inherited by every page that does not override it. |
 | `fonts` | Resolved font table. |
 | `data` | Shared blobs, keyed by name. |
-| `warnings` | Present only when `--allow-overflow` suppressed an error. An array of objects with `kind`, `node`, `record`, and `message`. |
+| `warnings` | Present only when the build produced any. An array of objects with `kind`, `node`, `record`, and `message`. `kind` is `overflow` for an error `--allow-overflow` suppressed, or `glyph` for a [character the resolved font lacks](template.md#missing-glyphs). |
 
 ### `fonts`
 
@@ -100,11 +161,20 @@ One entry per distinct font used, sorted by `name`.
 }
 ```
 
-`requested` is the template's `typeface`; `resolvedFile` and `resolvedFace`
-are what was measured. `resolvedBy` is the step of the
-[resolution chain](template.md#font-resolution) that produced it — one of
-`explicit`, `table`, `os`, `scan`, `substitute`. A value of `substitute` means
-text may overflow.
+`resolvedFile` and `resolvedFace` are what was measured. `resolvedBy` is the step
+of the [resolution chain](template.md#font-resolution) that produced it — one of
+`explicit`, `table`, `os`, `scan`, `substitute`. A value of `substitute` means text
+may overflow.
+
+`resolvedFile` follows the [path rule](#paths): relative to the printout when
+`resolvedBy` is `explicit`, because then the template named the file, and absolute
+otherwise. Under `--strict-fonts` only `explicit` can occur, so every font path in a
+strict printout is relative and the printout carries its fonts with it.
+
+`requested` is the template's `typeface`. A `font` node that named a `file`
+or `data` instead has no typeface to record, so `requested` is **absent** and
+`resolvedBy` is `explicit`. Absent `requested` and `resolvedBy: "explicit"`
+together mean the template pinned the font outright.
 
 An embedded font names a `data` entry via `"resolvedData": "<name>"` instead of
 `resolvedFile`.
@@ -122,6 +192,12 @@ no matter how many pages show the logo.
 
 `encoding` is `"base64"` for binary, absent for literal text.
 Content is stored decompressed.
+
+Entries come from three places: the template's `data` nodes, which keep their
+declared names; embedded fonts; and images the template gave as `file=` with
+`embed=#true`, the default. Those last have no name in the template, so the engine
+assigns one, stable for a given source file, and distinct from every declared name.
+Two images from the same file share one entry.
 
 ## Page lines
 
@@ -218,9 +294,10 @@ the stroke width; `0` means a hairline — the thinnest the device draws.
 }
 ```
 
-`stroke` and `fill` are independently optional. Absent `stroke` means
-no outline is drawn regardless of `width`; absent `fill` means the interior
-is untouched. The template's `opaque=#false` resolves to an absent `fill`.
+`stroke` and `fill` are independently optional. Absent `stroke` means no outline
+is drawn regardless of `width`; absent `fill` means the interior is untouched.
+The template's `stroke=#false` resolves to an absent `stroke`, and its
+`opaque=#false` to an absent `fill`.
 
 ### `image`
 
@@ -238,8 +315,17 @@ is untouched. The template's `opaque=#false` resolves to an absent `fill`.
 |---|---|
 | `type` | `png` `jpeg` `gif`. Always present. |
 | `data` | Name of a header `data` entry. |
-| `file` | Path, when the template set `embed=#false`. Mutually exclusive with `data`. |
+| `file` | Path to the image, when the template set `embed=#false`. Relative to the printout. Mutually exclusive with `data`. |
 | `crop` | Optional source-pixel rectangle. Present only when the image was clipped, which only `scale="cut"` does. |
+
+Exactly one of `data` and `file` is present. `data` is the default case: an image
+given as `file=` with `embed=#true` has its bytes copied into the header's
+[`data`](#data) table under a generated name, so the printout stands alone.
+
+`file` appears only for `embed=#false`. The template named it, so it follows the
+[path rule](#paths) and is written relative to the printout — a printout and the
+images it points at can be copied, archived, or checked in as one tree and still
+render.
 
 `box` is the final drawn rectangle. `crop` names the source pixels that fill it;
 when `crop` is absent the whole image does. Scaling is whatever maps the one onto
@@ -325,17 +411,20 @@ produced in the test suite.
    `name`, somewhere in the printout.
 6. Every box has non-negative `width` and `height`.
 7. Every mark lies within its page's printable area — inside the margins — to
-   within the 3-decimal rounding tolerance, unless the header carries an overflow
-   warning.
-8. Every `text` mark has at least one line, and `lines` count times `leading`
-   does not exceed the box height by more than the rounding tolerance.
+   within the 3-decimal rounding tolerance, unless the header carries a warning of
+   kind `overflow`. A negative `right` or `bottom` in the template is what usually
+   produces one; see [errors](layout.md#errors).
+8. Every `text` mark has at least one line, and `lines` count times `leading` does
+   not exceed the box height by more than the rounding tolerance.
 9. `stripes` sums, times `module`, equal the box extent along the coding
    direction, within tolerance.
 10. Outline `level` never jumps by more than one from the previous entry.
 
 ## Example
 
-A one-page printout with one font, a rule, and two detail rows:
+A one-page printout with one font, a rule, and two detail rows.
+The template pinned its font with `file=`, so `resolvedFile`
+is [relative to the printout](#paths):
 
 ```json
 {"sr":1,"kind":"header","report":{"name":"Minimal"},"built":"2026-08-04T09:12:44Z","engine":"sr 0.1.0","strictFonts":true,"pages":1,"page":{"width":595.276,"height":841.89,"leftMargin":42.52,"rightMargin":42.52,"topMargin":28.35,"bottomMargin":28.35},"fonts":[{"name":"body","size":9,"bold":false,"italic":false,"underline":false,"requested":"DejaVuSans","resolvedFile":"testdata/fonts/DejaVuSans.ttf","resolvedFace":"DejaVu Sans","resolvedBy":"explicit"}],"data":{}}

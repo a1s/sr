@@ -12,6 +12,7 @@ the formatting mechanism, and variable accumulation semantics.
 - [Predefined variables](#predefined-variables)
 - [Modules and builtins](#modules-and-builtins)
 - [The `decimal` type](#the-decimal-type)
+- [Truth values](#truth-values)
 - [Formatting](#formatting)
 - [Variables](#variables)
 - [Compilation](#compilation)
@@ -90,14 +91,75 @@ Nested objects come from nested JSON and are declared
 | `PAGE_NUMBER` | int | Current page number, 1-based. |
 | `COLUMN_NUMBER` | int | Current column number, 1-based. |
 | *group*`_PAGE_NUMBER` | int | Page number relative to the start of the named group, 1-based. |
-| `VERTICAL_POSITION` | float, points | Top of the current section within the frame. |
-| `VERTICAL_SPACE` | float, points | Space from the top of the current section to the nearest footer, or to the frame bottom if there is none. |
+| `VERTICAL_POSITION` | float, points | Distance from the top of the frame to where the section being measured begins. |
+| `VERTICAL_SPACE` | float, points | Space from there to the frame's reserved bottom — what the section has left to grow into. |
 | `BUILD_TIME` | time | When this run started. Constant for the whole run. |
+| `FINAL` | namespace | Every name above, and every `variable`, read at the end of a scope instead of now. See [`FINAL`](#final). |
 
-Counters read the value current at the moment the expression is evaluated,
-so a `PAGE_COUNT` in a page footer reports that page's detail count.
-Counts that are only final later — the total page count, a group's total —
-need `evaltime`; see [layout.md](layout.md#deferred-evaluation).
+The names divide into two families. `DATA_COUNT` and `ITEM_NUMBER` describe
+the **input**: how many records there are, and which one is current. Everything
+ending in `_COUNT` other than `DATA_COUNT` describes the **output**: how many
+detail sections have been *printed* since the start of some scope. So `DATA_COUNT`
+is records and `REPORT_COUNT` is rows on paper, and they differ whenever a `printwhen`
+suppresses a detail.
+
+The `_COUNT` names therefore count detail sections, not pages. `PAGE_COUNT` is how
+many detail rows this page has printed. For the number of pages, see
+[`FINAL`](#final).
+
+`DATA_COUNT` is a total and needs nothing special, because the engine buffers
+the whole dataset before laying anything out — the same fact that makes
+[keep-together](layout.md#keeping-content-together) lookahead possible. Totals
+about the *output* are different: nothing knows how many pages there will be
+until there are none left to make.
+
+### `FINAL`
+
+Every name in the table above, and every `variable`, is also reachable as
+`FINAL.`*name*, which reads the value that name holds when a scope **ends**
+rather than the value it holds now. Which scope is the element's
+[`evaltime`](template.md#content-sources).
+
+```kdl
+field expr="'Page %d of %d' % (PAGE_NUMBER, FINAL.PAGE_NUMBER)" \
+      evaltime="report" text="Page 999 of 999"
+```
+
+`PAGE_NUMBER` is the page this field prints on. `FINAL.PAGE_NUMBER` is what
+`PAGE_NUMBER` reaches by the end of the report, which is the number of pages.
+There is no separate name for the page total: it is the page number at the end,
+spelled that way.
+
+The same form gives every other end-of-scope value, with no new names
+for any of them:
+
+| | |
+|---|---|
+| `FINAL.PAGE_NUMBER`, `evaltime="report"` | pages in the report |
+| `FINAL.PAGE_COUNT`, `evaltime="page"` | detail rows on this page |
+| `FINAL.customer_COUNT`, `evaltime="customer"` | rows in this customer's group |
+| `FINAL.total_amount`, `evaltime="report"` | a report-scoped variable's final total |
+| `FINAL.THIS.region`, `evaltime="page"` | a field of the last record on this page |
+
+`FINAL` holds only names whose value changes as the report is built: the predefined
+variables and the `variable` accumulators. A `parameter` is constant, and a record
+field belongs to a record rather than to a scope — reach one through `FINAL.THIS`.
+
+`FINAL` and `evaltime` require each other. `FINAL` in an expression whose element
+has no `evaltime` has no scope to refer to; an `evaltime` whose expression never
+mentions `FINAL` defers an expression that would give the same answer either way.
+Both are [validation errors](template.md#validation).
+
+Mechanics — when the substitution happens, and what it costs — are
+in [layout.md](layout.md#deferred-evaluation).
+
+`VERTICAL_POSITION` and `VERTICAL_SPACE` are read at
+[measurement](layout.md#measure-decide-commit) time, so they describe the frame
+the section is being tried against. If the section does not fit and ejects,
+it is re-measured in the new frame and both names read the new values.
+A band whose expressions reference either is not
+[cached](layout.md#measure-decide-commit), because the cache key is
+content and width, which do not capture a dependence on position.
 
 ## Modules and builtins
 
@@ -109,6 +171,31 @@ Available: `abs` `all` `any` `bool` `bytes` `chr` `dict` `dir` `enumerate` `fail
 
 `print` is not available — a template has nowhere to print to.
 There is no `round` builtin; use `math.round` or [`format`](#formatting).
+
+List and dict comprehensions, conditional expressions (`a if c else b`),
+and slicing are all available.
+
+### Methods
+
+Every value in scope is **frozen**: records, parameters, and variable
+accumulators cannot be mutated from an expression. The mutating methods below
+exist but fail on a frozen receiver, so in practice only the query methods
+are usable.
+
+| Type | Methods |
+|---|---|
+| string | `capitalize` `codepoint_ords` `codepoints` `count` `elem_ords` `elems` `endswith` `find` `format` `index` `isalnum` `isalpha` `isdigit` `islower` `isspace` `istitle` `isupper` `join` `lower` `lstrip` `partition` `removeprefix` `removesuffix` `replace` `rfind` `rindex` `rpartition` `rsplit` `rstrip` `split` `splitlines` `startswith` `strip` `title` `upper` |
+| list | `index` — plus the mutating `append` `clear` `extend` `insert` `pop` `remove` |
+| dict | `get` `items` `keys` `values` — plus the mutating `clear` `pop` `popitem` `setdefault` `update` |
+| set | `difference` `intersection` `issubset` `issuperset` `union` — plus the mutating `add` `clear` `discard` `pop` `remove` `symmetric_difference`. There is no `update`; sets also support `\|` `&` `-` |
+| bytes | `elems` |
+
+A `list` or `set` variable is frozen too, so build a new value rather than
+extending one:
+
+```
+', '.join(sorted(set(all_tags)))
+```
 
 ### `math`
 
@@ -123,9 +210,21 @@ nanosecond=, location=)`, `time.parse_time(s, format=, location=)`,
 `time.from_timestamp(sec, nsec=)`, `time.parse_duration(s)`.
 
 `time.now` is **not** available; see [Determinism](#determinism).
+`time.is_valid_timezone(name)` is.
 
 A time value has `.year .month .day .hour .minute .second .nanosecond .unix
 .unix_nano`, plus `.in_location(name)` and `.format(layout)`.
+
+Times compare with `<` `<=` `==` and so on. Subtracting two times gives a
+**duration**; adding a duration to a time gives a time. A duration has `.hours
+.minutes .seconds .milliseconds .microseconds .nanoseconds`, all floats, and the
+module supplies the constants `time.hour` `time.minute` `time.second`
+`time.millisecond` `time.microsecond` `time.nanosecond` to build them from.
+
+```
+(period_end - period_start).hours / 24        # days in the period
+rental_date + 3 * time.hour
+```
 
 `.format` takes a **Go reference-time layout**:
 
@@ -184,6 +283,40 @@ int(d)                      # truncates toward zero
 
 `calc="sum"`, `"avg"`, `"min"`, `"max"` over decimals produce decimals;
 `avg` quantizes like `/`. `"std"` and `"var"` produce floats.
+
+## Truth values
+
+`printwhen`, `style when`, `eject when`, and `outline when` take an expression
+and test it for truth. The rules:
+
+| Value | True when |
+|---|---|
+| `None` | never |
+| bool | it is `True` |
+| int, float | non-zero |
+| `decimal` | non-zero |
+| string, list, dict, set | non-empty |
+| time | it is not the **zero time** (year 1, January 1, midnight UTC) |
+| duration | non-zero |
+| record | it is not `None` — an empty record is still true |
+
+The time rule matters for the common "is this field filled in?" test. A JSON
+`null` in a `nullable` column becomes `None`, which is false, so this suppresses
+the field when there is no return date:
+
+```kdl
+field expr="strftime(return_date, '%d.%m.%Y')" printwhen="return_date"
+```
+
+A stored timestamp that happens to *be* the zero time is also false. Where that
+distinction matters, test for it exactly:
+
+```kdl
+field expr="…" printwhen="return_date != None"
+```
+
+A JSON `null` in a column that is **not** `nullable` is an error naming the
+column and the record index, not a silent `None`.
 
 ## Formatting
 
@@ -276,6 +409,15 @@ otherwise. `sum` of nothing is `None` rather than `0`, so "no rows" stays
 distinguishable from "rows summing to zero" — write `total_amount or 0`
 where the distinction does not matter.
 
+`std` and `var` are **sample** statistics, dividing by *n*−1, so they are `None`
+for a single value as well as for none at all. A summary line that prints them
+needs a guard, or a `printwhen` on the field:
+
+```kdl
+field expr="format('std %.2f, var %.2f', total_std, total_var)" \
+      printwhen="total_std != None"
+```
+
 ### `iter` and `reset`
 
 `iter` says when `expr` is evaluated and folded in.
@@ -317,6 +459,29 @@ own total.
 A detail section that turns out not to fit and is deferred to the next frame has
 its variable fold rolled back and reapplied after the eject, so a value is never
 counted twice.
+
+### The report boundary
+
+`iter="report"` fires once, before the `title` band is built, so a report-scoped
+value seeded by `init` is available to the title.
+
+At the other end the order is: the last record's detail is committed, every
+remaining group summary is built innermost-first, the report's `summary` band
+is built, and only then do `reset="report"` variables clear. So the `summary` band
+reads the final report totals. The reset is nominal — nothing is built after it.
+
+### Inside a subreport
+
+A subreport has its own variables, and its scopes are its own:
+
+- `report` means **one invocation** of the subreport. A `reset="report"`
+  variable starts empty for each invocation, which is how a line-item total
+  resets per invoice.
+- `page` and `column` mean the boundaries of whatever pages the subreport's bands
+  land on. For a non-inline subreport those are its own pages; for an
+  [inline](layout.md#subreports) one they are the parent's,
+  since it shares the parent's pagination.
+- `group` and `detail` mean the subreport's own groups and detail band.
 
 ## Compilation
 
