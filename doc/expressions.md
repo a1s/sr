@@ -145,10 +145,18 @@ for any of them:
 variables and the `variable` accumulators. A `parameter` is constant, and a record
 field belongs to a record rather than to a scope — reach one through `FINAL.THIS`.
 
-`FINAL` and `evaltime` require each other. `FINAL` in an expression whose element
-has no `evaltime` has no scope to refer to; an `evaltime` whose expression never
-mentions `FINAL` defers an expression that would give the same answer either way.
-Both are [validation errors](template.md#validation).
+`FINAL` lives in **`expr` and nowhere else.** `expr` is the only property whose
+evaluation `evaltime` defers; a `printwhen`, a `style when`, an `outline title`
+and the rest are all evaluated when the band is measured, which is before the scope
+ends, so `FINAL` in one of those would have nothing to bind to. Deciding whether to
+print a band from a value that does not exist yet is not something the engine can do,
+and writing it is a [validation error](template.md#validation) rather than a value
+that quietly reads as `None`.
+
+`FINAL` and `evaltime` require each other. `FINAL` in the `expr` of an element with
+no `evaltime` has no scope to refer to; an `evaltime` whose `expr` never mentions
+`FINAL` defers an expression that would give the same answer either way. Both are
+validation errors.
 
 Mechanics — when the substitution happens, and what it costs — are
 in [layout.md](layout.md#deferred-evaluation).

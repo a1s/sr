@@ -330,13 +330,29 @@ marks:
 - the element's vertical span does not strictly contain *y*, **or**
 - the element is a `stretch` field and *y* falls on one of its line boundaries.
 
-Barcodes, images, and band-spanning rectangles therefore block a cut anywhere
-inside their span. A `stretch` field permits cuts between its lines.
+An element's **vertical span is the span of the marks it produced** — its
+[content box](#building-a-band), not its resolved box. What cannot be cut is
+what is drawn; empty space inside a box that content did not fill has nothing
+in it to divide. This is also the only reading the printout can express,
+since a mark's box *is* the content box.
+
+The distinction decides ordinary bands rather than exotic ones. A non-stretch `field`
+with no vertical geometry is [container-dependent](#building-a-band): its resolved box
+fills the band, but it draws one line, at the top or wherever `valign` puts it. Under
+the resolved-box reading it would strictly contain every interior offset and no band
+holding such a field could ever split, which would make `split=#true` inert in most
+templates that set it. Under this one it spans its line, and cuts below that line
+are legal.
+
+Barcodes, images, and band-spanning rectangles block a cut anywhere inside their span.
+A `rectangle` has no natural size to shrink to — its content is its box — so one given
+`bottom=0` genuinely does span the band and genuinely does block. A `stretch` field
+permits cuts between its lines.
 
 `orphans` and `widows` constrain which line boundaries qualify: at least `orphans`
 lines must remain above the cut and at least `widows` below it, per field. A field
-with fewer than `orphans + widows` lines permits no internal cut and blocks like an
-unsplittable element.
+with fewer than `orphans + widows` lines permits no internal cut and blocks like
+an unsplittable element.
 
 ### Splitting
 
@@ -460,6 +476,19 @@ The largest of those is compared against the space remaining, and **at most one
 eject results** — the mechanisms decide whether to eject, not how many times.
 `mintailrows` is separate because it is tested later in the record loop,
 at the group's tail rather than its head.
+
+**Which kind of eject.** Take the maximum on that axis too. A page eject is the
+stronger of the two, and only a selected `eject` node can ask for one — `keeptogether`
+and `minrows` are about fitting a *frame*, which is a column, so they ask for a column
+eject exactly as a band that does not fit does. So if a selected `eject` node says
+`type="page"`, the eject is a page eject, whichever contributor demanded the most
+space.
+
+Escalating costs nothing, which is what makes the rule safe: a new page starts
+at column 0 with a full frame, so it offers a column's worth of room at least.
+Deciding the kind from *which contributor happened to be largest* was the alternative,
+and it would make the kind of break depend on the data — a group ejecting to a column
+on one run and to a page on the next.
 
 ## The record loop
 

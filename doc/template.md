@@ -870,7 +870,7 @@ on the image still being where the printout expects it.
 
 ```kdl
 barcode type="Code128" text="Code 128" valign="top"
-barcode type="QR-Q" expr="PAGE_COUNT" evaltime="page" text="90" grow=#true
+barcode type="QR-Q" expr="FINAL.PAGE_COUNT" evaltime="page" text="90" grow=#true
 ```
 
 | Property | Type | Default |
@@ -1109,11 +1109,15 @@ Validation runs once, at load, before any data is read. It checks:
 - Every `style font=` names a defined `font`.
 - Every `itergrp` / `resetgrp` names a defined `group`, and every `evaltime` names
   `report`, `page`, `column`, or a defined group.
-- `FINAL` and `evaltime` accompany each other: `FINAL` appears only in an expression
-  whose element has an `evaltime`, and an element with `evaltime` has at least one
-  `FINAL` in its expression. Each without the other is a mistake rather than
-  a no-op — the first has no scope to read from, the second defers an expression
-  that would give the same answer in place.
+- `FINAL` appears **only in the `expr` of a `field` or `barcode` that has
+  an `evaltime`**, and such an element's `expr` names `FINAL` at least once.
+  Each without the other is a mistake rather than a no-op — the first has no scope to
+  read from, the second defers an expression that would give the same answer in place.
+- `FINAL` in any other property is an error, including in the same element's
+  `printwhen` or a `style when` beneath it. `expr` is the only property whose
+  evaluation is deferred; everything else on the element is evaluated when the band
+  is measured, which is before the scope ends, so there would be nothing for `FINAL`
+  to bind to.
 - Every name used as `FINAL.`*name* is a predefined variable or a declared
   `variable`. Parameters and bare record fields are not in `FINAL`.
 - Every `xref type="outline"` has a reachable target `outline name=`.

@@ -153,7 +153,8 @@ them as a reference does not mislead:
 
 | | |
 |---|---|
-| Properties | `layout width` / `height` / `landscape`, `font typeface` / `data` / `bold` / `italic`, `line backslant`, `rectangle opaque`, `image type`, `barcode data`, `data expr`, `maxheight`, `column format`, `subreport template` / `ownpageno` |
+| Properties | `layout width` / `height` / `landscape`, `font typeface` / `data` / `bold` / `italic`, `line backslant`, `rectangle opaque`, `image type`, `barcode data`, `data expr`, `maxheight`, `format` as a date-parse layout on either `parameter` or `column`, `subreport template` / `ownpageno` |
+| Spellings | the `x` / `y` aliases for `left` / `top` — both examples use `left` and `top` throughout |
 | Enumerations | barcode types `Code93`, `DataMatrix`, `QR-M`, `QR-H`; `image scale="cut"` and `"grow"`; `dash="dash"` |
 | Scopes | `iter="report"` / `"page"` / `"column"`; `reset="detail"` / `"item"` |
 

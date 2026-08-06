@@ -192,7 +192,10 @@ report name="Invoice register" \
 
         // No `type`, so this is a page eject. It sits alongside keeptogether
         // and minrows on the same band: each says how much room the title wants,
-        // the largest wins, and at most one eject results.
+        // the largest wins, and at most one eject results -- a page one, because
+        // a selected eject node's `type` decides the kind whichever contributor
+        // asked for the most space. This layout has no columns, so here the two
+        // kinds coincide anyway.
         eject require="40mm"
 
         field expr="'Region: ' + region" left=0 width="80mm"
@@ -214,6 +217,10 @@ report name="Invoice register" \
               align="right" right=0 top="8mm" width="120mm"
       }
 
+      // Only `customer` can split, and it needs orphans+widows = 4 lines before
+      // any cut is legal. No name in invoices.jsonl wraps past one line in
+      // 60mm, so this band does not split on this data -- the properties are
+      // here to be read, not to fire.
       detail height="13mm" printwhen="not void and total >= min_total" \
              split=#true orphans=2 widows=2 \
       {
