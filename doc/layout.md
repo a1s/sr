@@ -289,19 +289,25 @@ else if measurement.height <= frame.height(empty):
     column eject, re-measure, commit
 
 else if band splits and any cut point fits `available`:
-    # taller than an empty frame: orphans and widows are given up
+    # taller than an empty frame: every split preference is given up
     split at the last such cut point, commit the head, column eject, continue
 
 else:
     band cannot fit any frame → see Errors
 ```
 
-A **cut point** is an offset no unsplittable element spans. A **legal split
-point** is a cut point that also satisfies `orphans` and `widows`. The two differ
-only in the last-resort branch: a band too tall for any frame is split wherever it
-can be split, because making progress beats honouring a line-count preference. A
-band too tall for any frame in which *no* cut point exists at all — an image or a
-barcode taller than the frame — is an error either way.
+A **cut point** is an offset no mark's span falls through; a **legal split point**
+is a cut point that also divides content and satisfies `orphans` and `widows`.
+Both are defined in [legal split points](#legal-split-points).
+
+The two differ only in the last-resort branch: a band too tall for any frame is split
+wherever it can be cut at all, because making progress beats honouring a preference.
+A band too tall for any frame in which *no* cut point exists — an image or a barcode
+taller than the frame — is an error either way.
+
+Branch order matters. A cut that leaves one side blank is excluded by requirement 2
+precisely so that branch 2 declines it and branch 3 ejects the band whole, which is
+the better outcome. Without that, branch 2 would win by being tried first.
 
 `frame.height(empty)` is `bottom - top` for a fresh frame — the most a band could
 ever get.
@@ -324,8 +330,13 @@ A band with `split=#true` may break across frames.
 
 ### Legal split points
 
-A cut at band-relative offset *y* is legal when, for every element that produced
-marks:
+Three requirements. A **cut point** satisfies the first;
+a **legal split point** satisfies all three.
+
+#### 1. The cut must not fall through a mark
+
+A **cut point** is a band-relative offset *y* such that,
+for every element that produced marks:
 
 - the element's vertical span does not strictly contain *y*, **or**
 - the element is a `stretch` field and *y* falls on one of its line boundaries.
@@ -349,10 +360,33 @@ A `rectangle` has no natural size to shrink to — its content is its box — so
 `bottom=0` genuinely does span the band and genuinely does block. A `stretch` field
 permits cuts between its lines.
 
-`orphans` and `widows` constrain which line boundaries qualify: at least `orphans`
-lines must remain above the cut and at least `widows` below it, per field. A field
-with fewer than `orphans + widows` lines permits no internal cut and blocks like
-an unsplittable element.
+#### 2. The cut must divide content
+
+A cut point with all the band's marks on **one side** of it is not a legal split
+point. Splitting there would move whitespace to another frame and nothing else.
+
+This is not an edge case, because a band's declared `height` is a
+[minimum](#building-a-band) and so a band is routinely taller than what is in it.
+A 13 mm detail row whose four fields each draw one line is 36.85 pt of band around 11 pt
+of text, and **every** offset below the text's bottom edge is a cut point: no mark span
+contains it, and `orphans` and `widows` hold vacuously because no line boundary is
+being crossed. With 20 pt of room left, the greatest such offset is 20 — so without
+this requirement the band would split there, the head taking all four fields and the
+tail carrying 16.85 pt of blank onto the next frame, pushing everything after it down.
+
+Ejecting the band whole is better in every case of that shape, and it is what the
+third branch of [placing a band](#placing-a-band) does once this requirement takes
+the cut out of consideration.
+
+The rule is symmetric: a cut whose **head** would be empty is excluded for the same
+reason, since that only relocates a blank strip. A split divides content or it does
+not happen.
+
+#### 3. `orphans` and `widows` must hold
+
+At least `orphans` lines remain above the cut and at least `widows` below it, per
+field. A field with fewer than `orphans + widows` lines permits no internal cut and
+blocks like an unsplittable element.
 
 ### Splitting
 
@@ -364,10 +398,10 @@ lines, its elements re-placed from the tail's top.
 
 Non-splittable elements below the cut move to the tail whole.
 
-A band that does not fit even an empty frame is split at the last available
-**cut point**, giving up `orphans` and `widows` — see
-[placing a band](#placing-a-band). If it has no cut point at all,
-it is an [error](#errors).
+A band that does not fit even an empty frame is split at the last available **cut
+point**, giving up `orphans`, `widows`, and the requirement that both sides carry
+marks — see [placing a band](#placing-a-band). If it has no cut point at all, it is an
+[error](#errors).
 
 ## Ejects
 
@@ -690,7 +724,7 @@ Each of these names the template node, the record index, and the measured values
 | Condition | Behaviour |
 |---|---|
 | Band taller than an empty frame, splitting not allowed | **overflow** |
-| Band taller than an empty frame, splitting allowed, some cut point exists | split there, giving up `orphans` / `widows` |
+| Band taller than an empty frame, splitting allowed, some cut point exists | split there, giving up every split preference |
 | Band taller than an empty frame, splitting allowed, no cut point exists | **overflow** |
 | A mark lands outside the page's printable area | **overflow** |
 | Deferred value taller than its placeholder | error |

@@ -5,8 +5,9 @@
 // `records` inside `embedded`, a group that keeps itself together with
 // `minrows` and `mintailrows`, a `summary` with `swapfooter`, a referenced
 // rather than embedded image, a compressed `data` blob read through a field,
-// a splitting detail band with `orphans` and `widows`, and the variable modes
-// sakila leaves out -- `set`, `chain`, `std`, `var`, and `iter="item"`.
+// a detail band configured to split with `orphans` and `widows`, and the
+// variable modes sakila leaves out -- `set`, `chain`, `std`, `var`, and
+// `iter="item"`.
 //
 // Build it with:
 //   sr build -t invoices.kdl -d invoices.jsonl -o invoices.pdf
@@ -218,9 +219,10 @@ report name="Invoice register" \
       }
 
       // Only `customer` can split, and it needs orphans+widows = 4 lines before
-      // any cut is legal. No name in invoices.jsonl wraps past one line in
-      // 60mm, so this band does not split on this data -- the properties are
-      // here to be read, not to fire.
+      // any cut is legal. A cut below the whole row would leave no marks on the
+      // far side, so it is not a legal split point either. No name in
+      // invoices.jsonl wraps past one line in 60mm, so this band does not split
+      // on this data -- the properties are here to be read, not to fire.
       detail height="13mm" printwhen="not void and total >= min_total" \
              split=#true orphans=2 widows=2 \
       {

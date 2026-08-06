@@ -870,7 +870,7 @@ on the image still being where the printout expects it.
 
 ```kdl
 barcode type="Code128" text="Code 128" valign="top"
-barcode type="QR-Q" expr="FINAL.PAGE_COUNT" evaltime="page" text="90" grow=#true
+barcode type="QR-Q" expr="FINAL.PAGE_COUNT" evaltime="page" text="1000" grow=#true
 ```
 
 | Property | Type | Default |

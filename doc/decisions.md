@@ -482,6 +482,25 @@ that declined to eject. Both would break `when` + `require` on one node, which i
 the combination that expresses "start a new page for this group if there is not
 enough room left".
 
+**A split must divide content.** Two rules that were each right on their own
+combined into a wrong one. A band's declared `height` is a
+[minimum](#a-band-height-is-a-minimum), so a band is routinely taller than what
+is drawn in it; and a cut is blocked only by the span of the *marks*, not of
+the resolved boxes, so that an ordinary band of one-line fields can split at all.
+Together they make every offset below a band's content a valid cut — and since
+the split branch is tried before the eject branch, and takes the greatest cut
+that fits, a 13 mm row with 11 pt of text in a 20 pt gap would split at 20:
+all four fields in the head, and a tail of pure whitespace committed on the
+next frame, pushing everything after it down.
+
+Ejecting the band whole is better in every case of that shape, so a cut with all the
+marks on one side of it is not a legal split point, and the split branch declines it.
+Stated symmetrically — marks on both sides — because a cut whose head is empty
+relocates a blank strip just as pointlessly.
+
+The last-resort branch, for a band too tall for any frame, gives this up along with
+`orphans` and `widows`: there, a blank tail beats not making progress.
+
 **Eject-after-placement applies to a report's `title` only, not to a group's.**
 The predecessor's rule was "for `title`, at the end of the section", which reads
 as though it covers every band named `title`. For the report title it is right:
