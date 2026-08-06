@@ -60,7 +60,7 @@ to sit:
 | Path | Form |
 |---|---|
 | Named by the template — `image file=` with `embed=#false`, or `font file=` | relative to the printout |
-| Found on the host — a `font` resolved by `table`, `os`, `scan`, or `substitute` | absolute, as opened |
+| Found on the host — a `font` resolved by `table`, `host`, or `substitute` | absolute, as opened |
 
 A path the template named is a project asset, so it travels with the printout. A font
 the engine found is a system resource that was never in the project tree, and
@@ -157,7 +157,7 @@ One entry per distinct font used, sorted by `name`.
   "requested": "Helvetica",
   "resolvedFile": "C:/Windows/Fonts/arial.ttf",
   "resolvedFace": "Arial",
-  "resolvedBy": "os"
+  "resolvedBy": "host"
 }
 ```
 
@@ -165,14 +165,23 @@ This is the host-discovered case: a `typeface` went through the resolution chain
 so `requested` is present and `resolvedFile` is the absolute path that was opened.
 
 `resolvedFile` and `resolvedFace` are what was measured. `resolvedBy` is the step
-of the [resolution chain](template.md#font-resolution) that produced it — one of
-`explicit`, `table`, `os`, `scan`, `substitute`. A value of `substitute` means text
-may overflow.
+of the [resolution chain](template.md#font-resolution) that produced it:
+
+| | |
+|---|---|
+| `explicit` | the template named a `file` or `data` |
+| `table` | the built-in typeface-to-filename table |
+| `host` | [enumeration](template.md#host-enumeration) of the machine's fonts |
+| `substitute` | the [last resort](template.md#the-substitute-face) — text may overflow, or overlap |
+
+`host` covers every way a face was found on the machine — the Windows registry,
+fontconfig, a directory scan — because nothing observable follows from which
+of them produced it, and `resolvedFile` already says what was opened.
 
 `resolvedFile` follows the [path rule](#paths): relative to the printout when
 `resolvedBy` is `explicit`, because then the template named the file, and absolute
-otherwise. Under `--strict-fonts` only `explicit` can occur, so every font path in a
-strict printout is relative and the printout carries its fonts with it.
+otherwise. Under `--strict-fonts` only `explicit` can occur, so every font path
+in a strict printout is relative and the printout carries its fonts with it.
 
 `requested` is the template's `typeface`. A `font` node that named a `file`
 or `data` instead has no typeface to record, so `requested` is **absent** and

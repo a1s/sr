@@ -1064,11 +1064,9 @@ A `font` node naming a `typeface` is resolved by trying, in order:
 1. An explicit `file` or `data` on the `font` node. If either is present,
    resolution ends there and failure is an error.
 2. A built-in typeface-to-filename table covering the common desktop faces.
-3. OS font enumeration: the Windows registry, fontconfig on Linux, the standard
-   directories on macOS.
-4. A scan of known font directories.
-5. A last-resort substitute, deliberately wider than most faces so that text
-   overflows visibly rather than overlapping silently.
+3. [Host enumeration](#host-enumeration): every font the machine has, matched by
+   family and style.
+4. A last-resort [substitute](#the-substitute-face).
 
 **Strict mode** stops after step 1 and fails with the unresolved typeface named.
 Enable it with `--strict-fonts` on the CLI, or the equivalent library option.
@@ -1078,6 +1076,59 @@ the chain produced them — see [printout.md](printout.md#fonts). A font the tem
 named with `file=` is recorded relative to the printout, so it travels with it;
 one the engine found on the host is recorded as it was opened. Under strict mode
 only the first case can arise.
+
+### Host enumeration
+
+Step 3 builds a table of every font on the machine, keyed by family and style,
+and looks the requested `typeface` up in it. Sources, all of them merged into
+the one table:
+
+| Platform | |
+|---|---|
+| Windows | the registry, plus `%WINDIR%\Fonts` and `%LOCALAPPDATA%\Microsoft\Windows\Fonts` |
+| Linux | fontconfig's font list and its configured directories |
+| macOS | `/System/Library/Fonts`, `/Library/Fonts`, `~/Library/Fonts`, and their `Supplemental` subdirectories |
+
+These are sources for one table, not alternatives tried in turn, and
+the printout records `host` without naming which of them found the face.
+
+The matching obeys three rules:
+
+- **The engine matches by family itself.** It may not delegate to a platform
+  matcher that answers every query rather than reporting a miss — `fc-match`
+  is one such, returning the host's default for a family that does not exist.
+- **A face is keyed by the family and style it declares together.** Where a font
+  gives both a family (name IDs 1 and 2) and a typographic family (16 and 17),
+  the pair is taken from one or the other and never mixed; 16/17 wins when present.
+- **Nothing is dropped silently.** A file that cannot be parsed, or whose style is
+  unrecognised, is recorded as a warning naming the file.
+
+Matching is case-insensitive on the family name, and `bold` and `italic` select
+the style. Collections (`.ttc`) are enumerated face by face.
+
+### The substitute face
+
+Step 4 tries, per platform, in order, searching the directories listed above:
+
+| Platform | |
+|---|---|
+| Windows | `cour.ttf`, then `lucon.ttf` |
+| Linux | fontconfig's answer for the generic family `monospace`; failing that `DejaVuSansMono.ttf`, `LiberationMono-Regular.ttf`, `NotoSansMono-Regular.ttf` |
+| macOS | `Monaco.ttf`, then `Menlo.ttc`, then `Courier New.ttf` |
+
+Every candidate is **monospaced**. Where the platform is asked for a generic family
+rather than a named file, the engine checks that the face it gets back has
+a uniform advance, and warns if it does not.
+
+If nothing is found, resolution fails with an error naming the typeface and what
+was tried. `bold` and `italic` are ignored at this step, since only regular faces
+are named. A `.ttc` candidate resolves to the regular face of the collection.
+
+A substitute is a guess, and text set in one may overlap rather than overflow
+visibly. So the dependable signal that one was used is not the appearance
+of the page: it is `resolvedBy: "substitute"` in the [printout
+header](printout.md#fonts), together with a warning naming the typeface.
+A reader that cares whether the output can be trusted tests that field.
 
 ### Missing glyphs
 
