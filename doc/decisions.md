@@ -21,6 +21,7 @@ can state what is true without also arguing for it.
 - [Deferral is per name, not per element](#deferral-is-per-name-not-per-element)
 - [Smaller decisions](#smaller-decisions)
 - [Spike results](#spike-results)
+- [Enumeration and matching are one step](#enumeration-and-matching-are-one-step)
 - [Inherited defects, and what replaced them](#inherited-defects-and-what-replaced-them)
 
 ## Relationship to PythonReports
@@ -840,31 +841,68 @@ Pinned at `github.com/tdewolff/font v0.0.0-20260424075104-b5eeb1e23189`,
 Measured against `example/fonts/Go-Regular.ttf` at 8 pt — sakila's body size —
 and against `arial.ttf`, which unlike the committed fonts has a `kern` table.
 
-**The metrics source: `tdewolff/font`.** All three candidates read the same
+**The metrics source: `go-text/typesetting`.** All three candidates read the same
 tables and, asked at a ppem equal to the font's units per em, agree exactly on
-every glyph present in both fonts. That is the sanity check, not the decision:
-only two of the three will report a font unit at all, and the third's error
-at a real text size is not small.
+every glyph present in both fonts. That is the sanity check. It is also as far as
+an ASCII probe set gets you, and the thing that decided this was found outside it.
 
-| | advance of `A`, Go-Regular at 8 pt | error |
-|---|---|---|
-| exact (1366 units × 8 ÷ 2048) | 5.335937500 pt | — |
-| `x/image/font/sfnt` | 5.343750000 pt | **+0.0078 pt, 0.15%** |
-| `go-text/typesetting` | 5.335937500 pt | 0 |
-| `tdewolff/font` | 5.335937500 pt | 0 |
+**`tdewolff/font` returns the wrong glyph for Latin-1 characters in some fonts.**
+Not a wrong width for the right glyph — the wrong glyph. In `verdana.ttf`:
 
-`sfnt`'s only advance API is `GlyphAdvance(buf, gid, ppem, hinting)`, which
-returns 26.6 fixed point at the requested ppem — so it quantises to 1/64 pt
-*per glyph* and there is no way to ask it for the underlying unit value.
-The other two return font units and leave the single scaling multiply to the caller.
+| | `ä` | `é` | `ß` | `¤` | `§` |
+|---|---|---|---|---|---|
+| `x/image/font/sfnt` | 108 | 112 | 137 | 892 | 134 |
+| `go-text/typesetting` | 108 | 112 | 137 | 892 | 134 |
+| `tdewolff/font` | **197** | **202** | **192** | **134** | **137** |
 
-That 1/64 pt is not a rounding curiosity, it is a wrap defect. Sweeping five
-paragraphs against box widths from 30 to 400 pt in 0.05 pt steps, at five sizes —
-185,000 wraps in all — exact and quantised metrics disagreed about where the
-words fall in 0.17% to 0.52% of cases, and **about how many lines there are in
-0.04% to 0.14%**:
+Glyph 197 is `‰`. Over `"äéß¤§ café"` at 10 pt the string measures 55.0830 pt by
+the first two and 64.9268 pt by the third — **17.9% wrong**, and set with the wrong
+characters.
 
-| size | widths tested | different breaks | **different line count** |
+The mechanism is the `cmap` subtable choice. Verdana and Georgia carry
+`(1,0)fmt0 (3,1)fmt4` — a 256-entry Macintosh table and a Windows Unicode table —
+and `tdewolff` reads the Macintosh one for code points below U+0100, where the
+byte values mean MacRoman rather than Latin-1. Arial (`(0,3) (1,0) (3,1) (3,10)`)
+and Segoe UI (`(0,3) (3,1)`) both have a `(0,x)` Unicode subtable, it is preferred,
+and they come out correct. So the defect appears exactly when a font has a
+Macintosh subtable and no platform-0 subtable, which Verdana and Georgia are
+two very common instances of.
+
+Over U+00A0–U+2FFF, `go-text` and `sfnt` agree on **every** character in all four
+fonts tested — 0 disagreements — while `tdewolff` differs on 91 in Verdana and 91
+in Georgia. Two independent implementations agreeing against the third is as close
+to an oracle as this gets. Separately, `tdewolff` maps the 32 C1 controls
+U+0080–U+009F to real glyphs where the others return `.notdef`; harmless,
+and the same root cause.
+
+`go-text/typesetting` is therefore the metrics source. It returns font units from
+`Face.HorizontalAdvance`, its `cmap` handling matches `sfnt` exactly, and it leaves
+shaping available if that is ever wanted. `tdewolff/font` keeps a narrower role —
+`SFNT.Subset` and table access — and must not be asked to map a rune to a glyph.
+Since the chosen writer embeds and subsets on its own, that role may turn out
+to be empty.
+
+This is the second defect in this spike that an ASCII test cannot see, and it is
+the same shape as the kerning one below: the first probe set here ran
+`A V W i l m o y . , 0 9 % ’ — € Ж` and found perfect agreement, because it
+contained nothing in U+00A0–U+00FF. Both reference templates are ASCII too. So
+the rule for the test suite is not "test a font" but **test a range**: Latin-1
+supplement and General Punctuation at minimum, against a font with a Macintosh
+`cmap` subtable, on top of the `kern`-bearing font the kerning finding already
+called for.
+
+Everything below this point was measured with `tdewolff/font` before the defect was
+known. None of it moves: the sample text is ASCII throughout, and in Go Regular,
+Go Bold and Arial the disagreement is confined to the 32 C1 controls, which no
+sample contains. The substitute bound table was affected and has been recomputed.
+
+**On the wrap sweep, which does not disqualify anything.** `sfnt`'s only advance
+API is `GlyphAdvance(buf, gid, ppem, hinting)`, returning 26.6 fixed point at the
+requested ppem. Passing the text size — the obvious thing to do — quantises to
+1/64 pt per glyph, +0.0078 pt on `A` at 8 pt, 0.15%. Sweeping five paragraphs
+against box widths from 30 to 400 pt in 0.05 pt steps, at five sizes:
+
+| size | wraps tested | different breaks | **different line count** |
 |---|---|---|---|
 | 7 pt | 37,000 | 177 (0.48%) | 50 (0.135%) |
 | 8 pt | 37,000 | 193 (0.52%) | 53 (0.143%) |
@@ -872,14 +910,18 @@ words fall in 0.17% to 0.52% of cases, and **about how many lines there are in
 | 10 pt | 37,000 | 62 (0.17%) | 14 (0.038%) |
 | 12 pt | 37,000 | 111 (0.30%) | 26 (0.070%) |
 
-A different word on a line is cosmetic. A different line count is not: it changes
-the band's height, which changes what fits in the frame, which changes the
-pagination of everything after it. So `x/image/font/sfnt` is out.
+7,400 box widths per paragraph, five paragraphs. A different word on a line is
+cosmetic; a different line count changes the band's height, which changes what
+fits in the frame, which changes the pagination of everything after it.
 
-Between the remaining two, `tdewolff/font` also does subsetting
-(`SFNT.Subset`) and exposes the `name`, `OS/2`, `hhea` and `kern` tables
-the resolution chain and the printout header need, from one type.
-`go-text` would be the choice if shaping were wanted; it is not — see below.
+But this is a hazard of the obvious call, not a property of the library. Asking at
+`ppem == unitsPerEm` makes the fixed-point result the font unit exactly — that is
+how the agreement above was measured — and the caller then does the same single
+multiply the other two need. So `sfnt` can be exact, and is ruled out only on
+scope: no subsetting, and less of the table access the resolution chain wants than
+`go-text` offers. What the sweep is worth recording for is the trap: an advance API
+that takes a size looks like the one to use, and using it that way silently repaginates
+the document.
 
 **Kerning is a decision, and it has to be the same decision on both sides.**
 This is the finding that mattered most, because it does not show up in the
@@ -901,9 +943,9 @@ than a constant offset. Arial kerns uppercase and punctuation pairs and leaves
 most lowercase pairs alone, so the sakila summary sentence measures identically
 under both. A kerning-heavy line does not:
 
-| line, Arial 8 pt | printout says | `canvas` drew | worst glyph |
-|---|---|---|---|
-| `"TAVATTA WAVY TOWN Yorick."` | 115.1172 | 109.6320 | **−5.49 pt** |
+| line, Arial 8 pt | printout says | `canvas` measured | `canvas` drew | drawn delta |
+|---|---|---|---|---|
+| `"TAVATTA WAVY TOWN Yorick."` | 115.1172 | 109.5039 | 109.6320 | **−5.49 pt** |
 
 Two things follow. First, `sr` does not kern, matching the predecessor, and the
 renderer must be *told* so rather than left on its default —
@@ -955,9 +997,16 @@ rounded rectangles and dash patterns for free. It was still not chosen:
 `fpdf` measures by summing per-rune widths with no shaping, so there is no
 kerning to configure away, and it has `RoundedRect`, `SetDashPattern`, `Image`,
 `Link` / `SetLink` / `LinkString` and `Bookmark`, covering the printout's mark
-set. Its two blemishes are cosmetic: it omits the six-character subset tag PDF
-requires on a subset `BaseFont`, and it names the font from the family string
-the caller passed rather than the face's PostScript name.
+set.
+
+It has two defects, and calling them cosmetic would be wrong: it omits the
+six-character tag PDF requires on a subset `BaseFont`, which is a conformance
+violation that PDF/A validators flag, and it names the font from the family string
+the caller passed rather than the face's PostScript name. The reason they do not
+decide against it is narrower than harmlessness — neither affects the round-trip
+test or reproducibility, since both read glyph positions and `/W` rather than the
+`BaseFont` string. `canvas` emits `SUBSET+GoRegular` correctly and is the better
+citizen here.
 
 **The round trip works, and the position error is PDF's own, not the writer's.**
 Reading the generated files back and replaying the text operators:
@@ -974,8 +1023,10 @@ belongs to the format, not to them: a PDF advances the pen inside a shown string
 from the font dictionary's `/W` array, which is in 1/1000 em, and a
 2048-unit-per-em font does not divide into that. Worst deviation between `/W` and
 the original `hmtx`, over the glyphs actually used, was 0.24/1000 em with `fpdf`
-and 0.17/1000 em with `canvas` — 0.002 pt and 0.001 pt at 8 pt, accumulating to
-0.012 pt across a 30-glyph line.
+and 0.17/1000 em with `canvas` — 0.002 pt and 0.001 pt at 8 pt. The worst
+accumulation actually measured across a line was 0.012 pt; it is not a per-glyph
+figure times a glyph count, since the per-glyph errors carry opposite signs and
+partly cancel.
 
 That is the floor on how closely a rendered line can match the printout. Unlike
 a measurement error it cannot change a line break, because by then the lines are
@@ -1075,22 +1126,36 @@ by picking a wider face fails in an instructive way.
 **No face guarantees overflow.** That would require the substitute to be at least
 as wide as the replaced face for every glyph, and nothing is. What can be asked
 of a candidate is a *bound*: the worst ratio of substitute width to replaced
-width, over any text. That is its narrowest glyph divided by the target's widest,
-and it is where monospace earns its place:
+width, over the text it might be asked to set. That is its narrowest glyph divided
+by the target's widest — and **the bound is only as good as the character range
+quoted with it**, which a first pass at this left unsaid. Over ten desktop faces:
 
-| candidate | narrowest glyph | bound | worst case |
+| admitted range | widest glyph in it | `cour.ttf` | `arial.ttf` |
 |---|---|---|---|
-| `cour.ttf` | 0.6001 em (uniform) | 0.558 | **44% narrow** |
-| `DejaVuSansMono.ttf` | 0.6021 em (uniform) | 0.559 | 44% narrow |
-| `lucon.ttf` | 0.6025 em (uniform) | 0.560 | 44% narrow |
-| `DejaVuSans.ttf` | 0.2749 em (`'`) | 0.255 | 74% narrow |
-| `verdana.ttf` | 0.2686 em (`'`) | 0.250 | 75% narrow |
-| `arial.ttf` | 0.1909 em (`'`) | 0.177 | 82% narrow |
+| printable ASCII | 1.0762 em — Verdana `%` | 44% narrow | 82% narrow |
+| Latin-1 | 1.0762 em — Verdana `%` | 44% narrow | 82% narrow |
+| Latin-1 + punctuation, currency | 1.8027 em — Tahoma `‱` | 67% narrow | **100% narrow** |
+| everything, spacing glyphs | 1.9941 em — Segoe UI `⸻` | 70% narrow | **100% narrow** |
+| everything | as above | **100% narrow** | **100% narrow** |
 
-Against the widest desktop glyph measured, Verdana's `%` at 1.0762 em.
-A monospaced substitute roughly halves the worst case, and it does so
-for a structural reason: a uniform advance has no narrow glyphs for the
-ratio to collapse on. A proportional face is only better *on average*.
+Measured with `go-text`, after the `cmap` defect above invalidated the first run of
+this table. The 44% figure quoted earlier was ASCII-only and said so nowhere; it
+happens to survive to the end of Latin-1, and then does not. Widening the range
+costs half of it: `‰` and `‱` are ordinary in a financial report, Roman numerals
+(Times' `Ⅷ` at 1.6733 em) in a legal one, and two- and three-em dashes exist
+precisely in order to be wide.
+
+Admit *everything* and every candidate reaches zero, because **no real face is
+uniform over a whole `cmap` and none should be** — a combining acute must not
+advance the pen. Arial has 314 zero-advance glyphs, Courier New picks one up at
+U+200C, and the Adwaita Mono that Linux's fontconfig hands back has them at U+055F
+and U+200B. Zero advance is correct typography and fatal to a bound, so the bound
+has to be quoted over spacing glyphs at most.
+
+Within that, the gap is structural rather than marginal. Over spacing glyphs
+Courier New and DejaVu Sans Mono hold 0.30 while Verdana falls to 0.082 and Arial
+to 0 — a uniform advance has no narrow glyphs for the ratio to collapse on. A
+proportional face is better only *on average*.
 
 An average is what a first pass at this measured, and it misled. Ranking
 candidates by their worst *string* ratio over seven strings and six target faces
@@ -1101,12 +1166,30 @@ sample is not a ranking, and neither sample is privileged: what the template
 asked for and what the data says are both unknown when the substitute is chosen.
 Only the bound is sample-independent, which is why it is the figure to use.
 
-Two smaller notes from the same measurements. Go Mono scores identically to
-Courier New, because the score belongs to the 0.6 em advance rather than to the
-face — so embedding a monospaced face in the binary buys availability, not width.
-And `consola.ttf` is a poor second choice on Windows at 0.5498 em; `lucon.ttf` is
-marginally the widest of the monospaced candidates tested and is present on every
-Windows.
+Go Mono scores identically to Courier New, because the score belongs to the 0.6 em
+advance rather than to the face — so embedding a monospaced face in the binary buys
+availability, not width.
+
+**Coverage is the third criterion, and it outranks the second.** A last resort
+that lacks the character prints `.notdef`, which is the visible failure this section
+is trying to arrange — except that it arrives one glyph at a time and for the wrong
+reason. Counting spacing glyphs a face actually has:
+
+| candidate | advance | spacing glyphs | bound over ASCII |
+|---|---|---|---|
+| `DejaVuSansMono.ttf` | 0.6021 em | 3159 | 44% narrow |
+| `cour.ttf` | 0.6001 em | 2883 | 44% narrow |
+| `consola.ttf` | 0.5498 em | 2343 | 49% narrow |
+| `lucon.ttf` | 0.6025 em | **644** | 44% narrow |
+
+That reverses the Windows fallback. Lucida Console was picked as the second
+candidate for being 0.4% wider than Courier New; it has **less than a quarter** of
+its coverage. Consolas is 8.7% narrower — five points of bound — for 3.6× the
+glyphs, and 0.4% of width against 1,700 characters is not a trade worth making. The
+second Windows candidate is `consola.ttf`.
+
+Courier New stays first on all three criteria at once: on every Windows host,
+uniform, and 2,883 glyphs.
 
 **The decision: keep monospace, and give it company on the other two platforms.**
 `cour.ttf` stands, for the reason it was originally chosen — it is on every
@@ -1159,6 +1242,14 @@ rather than fails: the substitute path is already the one where output is not
 to be trusted, and a second-guessed guess is still better than an error
 on a report the author may not care about.
 
+The check needs a stated range, because a naive one fails on the very faces this
+section recommends. Over a full `cmap` nothing is uniform: Lucida Console's `€`
+is 0.6030 em against 0.6025 everywhere else, and Adwaita Mono and Consolas both carry
+zero-advance glyphs. Over **Latin-1, spacing glyphs only**, every candidate named
+here is uniform to the last unit — Lucida Console's outlier is `€` at U+20AC, just
+outside — and a proportional face is caught immediately, since Arial's `'` is 0.19 em
+against `%` at 1.02. So that is the range, with equality, not a tolerance.
+
 **`fc-match` never reports a miss.** On this host it returned Adwaita Mono for
 `Helvetica`, `Arial`, `Times New Roman`, `serif`, `sans-serif`, and for the
 invented family `NoSuchFaceXYZ`. The chain used to say its third step was
@@ -1178,7 +1269,30 @@ and ideal in the other, worth knowing before either gets written.
 The macOS list is still unverified — no host to check it on — and is the point
 at which `.ttc` support matters, since `Menlo.ttc` is a collection.
 
-### Enumeration and matching are one step
+**Measurement is cheap; shaping is not.** Wrapping a 95-character paragraph into
+three lines calls the width function 21 times:
+
+| | per wrap |
+|---|---|
+| `hmtx` sum, no cache | 2.61 µs |
+| `hmtx` sum, rune → advance cache | 2.34 µs |
+| `canvas` shaping, `kern=0` | **154.14 µs** |
+
+A rune cache is barely worth having, because the cost is per string rather than
+per rune. Shaping is 59× slower, which at 100k rows with two stretch fields each
+would put half a minute into measurement alone. This is the second reason not to
+let a shaping renderer re-measure what the printout already settled.
+
+**Leading is still unspecified.** [printout.md](printout.md#text) shows
+`leading: 10.8` for a 9 pt font, which is 1.2 × size, but nothing states the
+rule. The Go faces suggest a tighter value: at 8 pt, `hhea`
+ascent + descent + lineGap is 9.2461 pt, or 1.1558 × size, and both `OS/2`
+metric pairs give the same number. The choice is between a constant multiplier,
+which is predictable and font-independent, and the font's own suggestion, which
+looks right per face but makes line spacing change when a font is substituted.
+Not decided here.
+
+## Enumeration and matching are one step
 
 The chain originally had five steps, with "OS font enumeration" and "a scan of
 known font directories" as separate rungs and `resolvedBy` recording which one
@@ -1209,29 +1323,6 @@ printout header and the accompanying warning — machine-readable, unambiguous,
 and available whatever the geometry does. The predecessor needed geometry as
 the signal because it had no such output. `sr` does, so the geometry is a
 belt-and-braces measure and is described as one.
-
-**Measurement is cheap; shaping is not.** Wrapping a 95-character paragraph into
-three lines calls the width function 21 times:
-
-| | per wrap |
-|---|---|
-| `hmtx` sum, no cache | 2.61 µs |
-| `hmtx` sum, rune → advance cache | 2.34 µs |
-| `canvas` shaping, `kern=0` | **154.14 µs** |
-
-A rune cache is barely worth having, because the cost is per string rather than
-per rune. Shaping is 59× slower, which at 100k rows with two stretch fields each
-would put half a minute into measurement alone. This is the second reason not
-to let a shaping renderer re-measure what the printout already settled.
-
-**Leading is still unspecified.** [printout.md](printout.md#text) shows
-`leading: 10.8` for a 9 pt font, which is 1.2 × size, but nothing states the
-rule. The Go faces suggest a tighter value: at 8 pt, `hhea`
-ascent + descent + lineGap is 9.2461 pt, or 1.1558 × size, and both `OS/2`
-metric pairs give the same number. The choice is between a constant multiplier,
-which is predictable and font-independent, and the font's own suggestion, which
-looks right per face but makes line spacing change when a font is substituted.
-Not decided here.
 
 ## Inherited defects, and what replaced them
 

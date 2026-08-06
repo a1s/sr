@@ -1108,17 +1108,19 @@ the style. Collections (`.ttc`) are enumerated face by face.
 
 ### The substitute face
 
-Step 4 tries, per platform, in order, searching the directories listed above:
+Step 4 tries, per platform, in order. A filename is looked for in the directories
+[listed above](#host-enumeration); a generic family is a query to the platform.
 
 | Platform | |
 |---|---|
-| Windows | `cour.ttf`, then `lucon.ttf` |
+| Windows | `cour.ttf`, then `consola.ttf` |
 | Linux | fontconfig's answer for the generic family `monospace`; failing that `DejaVuSansMono.ttf`, `LiberationMono-Regular.ttf`, `NotoSansMono-Regular.ttf` |
-| macOS | `Monaco.ttf`, then `Menlo.ttc`, then `Courier New.ttf` |
+| macOS | `Monaco.ttf` and `Menlo.ttc` in `/System/Library/Fonts`, then `Courier New.ttf` in its `Supplemental` subdirectory |
 
-Every candidate is **monospaced**. Where the platform is asked for a generic family
-rather than a named file, the engine checks that the face it gets back has
-a uniform advance, and warns if it does not.
+Every candidate is **monospaced**, and the engine verifies it: the resolved face's
+spacing glyphs in Latin-1 must all have the same advance, and a warning is recorded
+if they do not. The range is part of the rule — over a whole `cmap` no face is
+uniform, since a combining mark correctly has zero advance.
 
 If nothing is found, resolution fails with an error naming the typeface and what
 was tried. `bold` and `italic` are ignored at this step, since only regular faces
