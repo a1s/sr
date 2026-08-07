@@ -1078,9 +1078,11 @@ engine can control or predict.
 Three narrower findings from the same test:
 
 - Matching is case-sensitive: `Arial` hits, `arial` misses.
-- `Helvetica`, `Times`, `Courier` and `Go` all miss, which confirms step 2
-  is needed and that it is an **alias** table (`Helvetica` → `Arial`),
-  not merely typeface-to-filename.
+- `Helvetica`, `Times`, `Courier` and `Go` all miss, which confirms the built-in
+  table is needed and that it is an **alias** table (`Helvetica` → `Arial`),
+  not typeface-to-filename. On macOS all three of those families are real,
+  which is why the alias table ended up [after host enumeration rather than
+  before](#macos-moves-the-alias-table) and not merely renamed.
 - It scans directories and does not read the Windows registry. That is the first
   of the two observations that later merged those into
   [one step](#enumeration-and-matching-are-one-step); the registry keeps its value
@@ -1266,8 +1268,8 @@ The same behaviour is exactly right for the last resort, where a guess is what i
 wanted, and it is what Linux now uses there. One mechanism, unusable in one place
 and ideal in the other, worth knowing before either gets written.
 
-The macOS list is still unverified — no host to check it on — and is the point
-at which `.ttc` support matters, since `Menlo.ttc` is a collection.
+The macOS list has since been checked on a host, and it held; what did not hold
+is in [macOS](#macos-moves-the-alias-table).
 
 **Measurement is cheap; shaping is not.** Wrapping a 95-character paragraph into
 three lines calls the width function 21 times:
@@ -1323,6 +1325,148 @@ printout header and the accompanying warning — machine-readable, unambiguous,
 and available whatever the geometry does. The predecessor needed geometry as
 the signal because it had no such output. `sr` does, so the geometry is a
 belt-and-braces measure and is described as one.
+
+### macOS moves the alias table
+
+Host enumeration was then implemented to the letter of the specification and run
+on macOS 26.5.2. 395 files, 810 faces, 381 families. Four things the reference
+documentation asserted were wrong there, and the first is the reason
+the chain has a different shape.
+
+**A built-in alias table consulted before the host is a trap on the one platform
+where the aliased-from names are real.** The Windows finding above — `Helvetica`,
+`Times` and `Courier` all miss, so an alias table is needed — is sound on Windows
+and generalised badly. macOS ships all three:
+
+| Requested | Present on the host |
+|---|---|
+| `Helvetica` | `/System/Library/Fonts/Helvetica.ttc`, 6 faces |
+| `Times` | `/System/Library/Fonts/Times.ttc` |
+| `Courier` | `/System/Library/Fonts/Courier.ttc` |
+
+With the alias table at step 2, a template asking for Helvetica got Arial
+while real Helvetica sat in the system font directory — and the printout recorded
+`resolvedBy: "table"`, which reads as a deliberate mapping rather than a fallback.
+That is the same silent-substitution failure as fontconfig's matcher above,
+reached by a different route: a step that always answers, placed before the step
+that answers correctly.
+
+The fix is ordering, not content. The host is searched first; an alias is what to
+try when the machine has no such family, and each alias is then looked up on the
+host in turn. It also settled a disagreement between the two documents, which had
+the table as "typeface-to-filename" in one and "alias" in the other. Those are not
+the same object and they fail differently: a filename table mapping `Helvetica` →
+`arial.ttf` simply misses and falls through, harmlessly, while a family alias
+resolves and wins. Only the alias spelling survives, and `resolvedBy` names it
+`alias` rather than `table`.
+
+**Style cannot come from the subfamily string.** The rule was that a face is
+keyed by "the family and style it declares together", which reads as matching the
+subfamily text. On macOS that text does not say `Italic`: Helvetica's slanted faces
+are `Oblique` and `Bold Oblique`, and seven installed families —
+`Avenir`, `Courier`, `DejaVu Sans`, `DejaVu Sans Mono`, `Galvji`, `Helvetica`,
+`Mshtakan` — use a spelling the literal rule misses. So
+`typeface="Helvetica" italic=#true` failed on the one platform where Helvetica
+is genuinely installed.
+
+`head.macStyle` and `OS/2.fsSelection` carry the italic bit correctly on all of
+them, so style now comes from the bits. That change also dissolves a second gap
+rather than needing its own rule: the old pair rule said family and style are
+taken from name IDs 16/17 or from 1/2 and never mixed, with 16/17 winning when
+present, and two faces on this host have 16 without 17 —
+
+| | name 1 | name 2 | name 16 | name 17 |
+|---|---|---|---|---|
+| `NewYork.ttf` | `.New York` | `Regular` | `.New York` | — |
+| `NewYorkItalic.ttf` | `.New York` | `Regular Italic` | `.New York` | — |
+
+— so both keyed as `('.New York', 'Regular')`, the italic became unreachable,
+and which one answered a lookup depended on directory order. With family from
+a name record and style from the bits there is no pair to mix, and nothing to
+decide about what "present" means when only half of it is.
+
+The bits are not unconditionally authoritative either, which is why the rule
+is a precedence and not a source. On this host the string and the bits disagree
+on 107 of 806 keys, mostly weight names a string test cannot classify, and in
+both directions: `Avenir / Black` is not bold by its string and bold by `macStyle`,
+while `.SF NS Mono / Light Italic` is italic by its string and not by `macStyle`.
+
+**Colliding keys needed a rule and had none.** Four keys collide on this host:
+the two New York faces above, `Arial Unicode MS` installed in two directories,
+and `Hoefler Text Ornaments` keying as `Hoefler Text`. The last is the
+interesting shape — an ornament face claiming its parent's family — and
+in every case the answer was directory order, unstated. It is now stated:
+first found wins, sources in tabulated order, files in Unicode order within
+a directory.
+
+**Collections are the platform, not a corner of it.** The earlier note
+called macOS "the point at which `.ttc` support matters", which undersells it:
+
+| | files | faces |
+|---|---|---|
+| `.ttf` | 227 | 227 |
+| `.ttc` | **128** | **545** |
+| `.otf` | 38 | 38 |
+| no extension | 2 | 0, unparseable |
+
+545 of 810 faces, 67%, come from collections, `Helvetica`, `Times`, `Courier`,
+`Menlo`, `Lucida Grande` and `Hoefler Text` among them. Face-by-face `.ttc`
+enumeration is a prerequisite for the platform working at all.
+
+The same count also corrected "a `.ttc` candidate resolves to the regular face of
+the collection", which was being read as face 0. `Menlo.ttc` happens to be Regular,
+Bold, Italic, Bold Italic in that order, but `Helvetica.ttc` carries `Light` and
+`Light Oblique` after the four standard faces, so a family match that ignored style
+could land on either. The rule is the face whose style bits say neither bold nor
+slanted.
+
+**A permanent warning is a warning nobody reads.** The no-silent-drops rule made
+three files on a stock macOS produce a warning on every run of every report:
+`HelveLTMM` and `TimesLTMM`, Type 1 Multiple Master datafork fonts with
+an `sfntVersion` that is neither TrueType nor OpenType, and
+`Supplemental/NISC18030.ttf`, which parses as sfnt and has no `head` table.
+None can be removed — they are under system integrity protection.
+
+Two changes followed. A format the engine knows it does not support is *classified*
+and skipped rather than warned about, leaving warnings for a file that claims to be
+sfnt and then is not. And enumeration diagnostics were moved out of the printout's
+warning list altogether: they describe the machine, not the document, and the list
+they were sharing is where missing-glyph and overflow warnings live. Attaching an
+unfixable warning to every report is how a reader learns to ignore that list.
+
+The reviewer's observation that the first two files, having no extension, would be
+skipped by an extension filter and satisfy the rule *by accident* is the reason the
+rule now says explicitly that neither case is decided from the filename — that being
+the same shortcut `tdewolff/font` was faulted for above.
+
+**What held.** The substitute list is correct: all three candidates exist
+at the stated paths, and the monospace property the engine must verify holds
+for each, over Latin-1 spacing glyphs exactly as the rule specifies.
+
+| | advance | distinct widths |
+|---|---|---|
+| `Monaco.ttf` | 0.6001 em | 1 |
+| `Menlo.ttc` face 0 | 0.6021 em | 1 |
+| `Supplemental/Courier New.ttf` | 0.6001 em | 1 |
+| `Arial.ttf`, as a control | 0.1909–1.0151 em | **30** |
+
+That is the "four unrelated monospaced faces within 0.0025 em of 0.6" claim
+on a third platform — 0.6001, 0.6021, 0.6001 — so the 44% bound, the Latin-1
+range, and equality rather than a tolerance all survive contact with macOS,
+and a proportional face is caught on the first comparison.
+
+One inaccuracy in the directory list cost nothing: only `/System/Library/Fonts`
+has a `Supplemental` subdirectory, so "and their `Supplemental` subdirectories"
+over-generalised from one case. The table now names the one that exists, and a
+missing directory is explicitly not an error.
+
+**Not verified.** Fonts installed on demand through Font Book land under
+`/System/Library/AssetsV2/com_apple_MobileAsset_Font7` and `…_Font8`, outside
+every directory the chain names, so a template asking for one falls through to the
+substitute. The host had the asset catalogues but no downloaded payload, so whether
+those paths are stable enough to scan is unanswered and needs a machine with one
+installed. And all of this is one host on one OS version: the structure is
+long-standing but the counts are not constants.
 
 ## Inherited defects, and what replaced them
 
