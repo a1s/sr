@@ -21,6 +21,7 @@ can state what is true without also arguing for it.
 - [Deferral is per name, not per element](#deferral-is-per-name-not-per-element)
 - [Smaller decisions](#smaller-decisions)
 - [Spike results](#spike-results)
+- [Enumeration and matching are one step](#enumeration-and-matching-are-one-step)
 - [Inherited defects, and what replaced them](#inherited-defects-and-what-replaced-them)
 
 ## Relationship to PythonReports
@@ -704,7 +705,7 @@ local, raising `NameError` for any report with `summary swapfooter`.
 ## Spike results
 
 Throwaway programs validating the assumptions the specification rests on.
-Two of them contradicted what was planned.
+Each of the three overturned something that had been assumed.
 
 ### Starlark
 
@@ -832,23 +833,691 @@ wrapped behind an internal interface. Its API is also not what a reader guesses 
 
 ### Font metrics and PDF
 
-**Not yet run.** The remaining technical risk, and the one that can invalidate
-output rather than merely cost rework: word wrap is a greedy scan whose line
-breaks flip on fractions of a point, so the measuring and rendering paths must
-share font tables exactly.
+Pinned at `github.com/tdewolff/font v0.0.0-20260424075104-b5eeb1e23189`,
+`github.com/tdewolff/canvas v0.0.0-20260803134256-8e86b9abb917`,
+`github.com/go-pdf/fpdf v0.9.0`, `github.com/signintech/gopdf v0.38.0`,
+`golang.org/x/image v0.44.0`, `github.com/go-text/typesetting v0.3.4`.
 
-To answer:
+Measured against `example/fonts/Go-Regular.ttf` at 8 pt — sakila's body size —
+and against `arial.ttf`, which unlike the committed fonts has a `kern` table.
 
-- Which of `golang.org/x/image/font/sfnt`, `github.com/go-text/typesetting`, and
-  `github.com/tdewolff/canvas` gives advance widths, and which PDF writer can
-  embed and subset the same font.
-- Whether the chosen library can load a font by explicit path **and** report which
-  file it resolved, which the font resolution chain must record in the printout.
-- Round-trip: wrap a paragraph, render it, extract glyph positions from the PDF,
-  confirm they match the printout.
+**The metrics source: `go-text/typesetting`.** All three candidates read the same
+tables and, asked at a ppem equal to the font's units per em, agree exactly on
+every glyph present in both fonts. That is the sanity check. It is also as far as
+an ASCII probe set gets you, and the thing that decided this was found outside it.
 
-Complex-script shaping is out of scope for the first version, as it was
-in the predecessor. Choosing `go-text/typesetting` would leave the door open.
+**`tdewolff/font` returns the wrong glyph for Latin-1 characters in some fonts.**
+Not a wrong width for the right glyph — the wrong glyph. In `verdana.ttf`:
+
+| | `ä` | `é` | `ß` | `¤` | `§` |
+|---|---|---|---|---|---|
+| `x/image/font/sfnt` | 108 | 112 | 137 | 892 | 134 |
+| `go-text/typesetting` | 108 | 112 | 137 | 892 | 134 |
+| `tdewolff/font` | **197** | **202** | **192** | **134** | **137** |
+
+Glyph 197 is `‰`. Over `"äéß¤§ café"` at 10 pt the string measures 55.0830 pt by
+the first two and 64.9268 pt by the third — **17.9% wrong**, and set with the wrong
+characters.
+
+The mechanism is the `cmap` subtable choice. Verdana and Georgia carry
+`(1,0)fmt0 (3,1)fmt4` — a 256-entry Macintosh table and a Windows Unicode table —
+and `tdewolff` reads the Macintosh one for code points below U+0100, where the
+byte values mean MacRoman rather than Latin-1. Arial (`(0,3) (1,0) (3,1) (3,10)`)
+and Segoe UI (`(0,3) (3,1)`) both have a `(0,x)` Unicode subtable, it is preferred,
+and they come out correct. So the defect appears exactly when a font has a
+Macintosh subtable and no platform-0 subtable, which Verdana and Georgia are
+two very common instances of.
+
+Over U+00A0–U+2FFF, `go-text` and `sfnt` agree on **every** character in all four
+fonts tested — 0 disagreements — while `tdewolff` differs on 91 in Verdana and 91
+in Georgia. Two independent implementations agreeing against the third is as close
+to an oracle as this gets. Separately, `tdewolff` maps the 32 C1 controls
+U+0080–U+009F to real glyphs where the others return `.notdef`; harmless,
+and the same root cause.
+
+`go-text/typesetting` is therefore the metrics source. It returns font units from
+`Face.HorizontalAdvance`, its `cmap` handling matches `sfnt` exactly, and it leaves
+shaping available if that is ever wanted. `tdewolff/font` keeps a narrower role —
+`SFNT.Subset` and table access — and must not be asked to map a rune to a glyph.
+Since the chosen writer embeds and subsets on its own, that role may turn out
+to be empty.
+
+This is the second defect in this spike that an ASCII test cannot see, and it is
+the same shape as the kerning one below: the first probe set here ran
+`A V W i l m o y . , 0 9 % ’ — € Ж` and found perfect agreement, because it
+contained nothing in U+00A0–U+00FF. Both reference templates are ASCII too. So
+the rule for the test suite is not "test a font" but **test a range**: Latin-1
+supplement and General Punctuation at minimum, against a font with a Macintosh
+`cmap` subtable, on top of the `kern`-bearing font the kerning finding already
+called for.
+
+Everything below this point was measured with `tdewolff/font` before the defect was
+known. None of it moves: the sample text is ASCII throughout, and in Go Regular,
+Go Bold and Arial the disagreement is confined to the 32 C1 controls, which no
+sample contains. The substitute bound table was affected and has been recomputed.
+
+**On the wrap sweep, which does not disqualify anything.** `sfnt`'s only advance
+API is `GlyphAdvance(buf, gid, ppem, hinting)`, returning 26.6 fixed point at the
+requested ppem. Passing the text size — the obvious thing to do — quantises to
+1/64 pt per glyph, +0.0078 pt on `A` at 8 pt, 0.15%. Sweeping five paragraphs
+against box widths from 30 to 400 pt in 0.05 pt steps, at five sizes:
+
+| size | wraps tested | different breaks | **different line count** |
+|---|---|---|---|
+| 7 pt | 37,000 | 177 (0.48%) | 50 (0.135%) |
+| 8 pt | 37,000 | 193 (0.52%) | 53 (0.143%) |
+| 9 pt | 37,000 | 166 (0.45%) | 46 (0.124%) |
+| 10 pt | 37,000 | 62 (0.17%) | 14 (0.038%) |
+| 12 pt | 37,000 | 111 (0.30%) | 26 (0.070%) |
+
+7,400 box widths per paragraph, five paragraphs. A different word on a line is
+cosmetic; a different line count changes the band's height, which changes what
+fits in the frame, which changes the pagination of everything after it.
+
+But this is a hazard of the obvious call, not a property of the library. Asking at
+`ppem == unitsPerEm` makes the fixed-point result the font unit exactly — that is
+how the agreement above was measured — and the caller then does the same single
+multiply the other two need. So `sfnt` can be exact, and is ruled out only on
+scope: no subsetting, and less of the table access the resolution chain wants than
+`go-text` offers. What the sweep is worth recording for is the trap: an advance API
+that takes a size looks like the one to use, and using it that way silently repaginates
+the document.
+
+**Kerning is a decision, and it has to be the same decision on both sides.**
+This is the finding that mattered most, because it does not show up in the
+committed fonts. The Go faces have neither a `kern` nor a `GPOS` table,
+so shaping and a plain `hmtx` sum agree to within fixed-point noise.
+Arial has a `kern` table, and then:
+
+| text, Arial 8 pt | `hmtx` sum | HarfBuzz | `canvas` |
+|---|---|---|---|
+| `"To"` | 9.33594 | 8.46875 | 8.44922 |
+| `"AV"` | 10.67188 | 10.09375 | 10.07812 |
+| `"AWAY"` | 23.55859 | 22.39062 | 22.37109 |
+
+Nearly 10% on `"To"`. And the two shaping paths do not agree with each other
+either, since they round glyph positions differently.
+
+The divergence is also **sparse and content-dependent**, which makes it worse
+than a constant offset. Arial kerns uppercase and punctuation pairs and leaves
+most lowercase pairs alone, so the sakila summary sentence measures identically
+under both. A kerning-heavy line does not:
+
+| line, Arial 8 pt | printout says | `canvas` measured | `canvas` drew | drawn delta |
+|---|---|---|---|---|
+| `"TAVATTA WAVY TOWN Yorick."` | 115.1172 | 109.5039 | 109.6320 | **−5.49 pt** |
+
+Two things follow. First, `sr` does not kern, matching the predecessor, and the
+renderer must be *told* so rather than left on its default —
+`canvas`'s `SetFeatures("kern=0")` (also spelled `-kern` or `kern off`,
+all three parse) brings it back to exact agreement, 0.00000 pt on every line
+tested. Second, **no test using only the committed fonts can catch a kerning
+mismatch.** A round-trip test against a `kern`-bearing font belongs in the
+suite, and since it cannot be a committed desktop font, it needs a small
+purpose-built face.
+
+Complex-script shaping stays out of scope, as it was in the predecessor. The
+performance figures below are a second reason: shaping is not a free upgrade
+path.
+
+**The writer: `go-pdf/fpdf`.** All three embed the font and subset it. They do
+not agree about how wide the text they just drew is:
+
+| | own measurement vs. exact | `"a中b"`, missing glyph | subset tag | output, Go-Regular |
+|---|---|---|---|---|
+| `signintech/gopdf` | **−0.07 … −0.14 pt per line** | **11.1120** (ours 14.8984) | absent | 8.9 kB |
+| `go-pdf/fpdf` | −0.013 … +0.011 pt | 14.8960 | absent | 11.5 kB |
+| `tdewolff/canvas` | 0, with `kern=0` | 14.8984 | `SUBSET+GoRegular` | 7.1 kB |
+
+`gopdf` is rejected on both columns. It truncates rather than rounds when
+converting advances to PDF's 1/1000 em units, so its `/W` array is up to
+0.99/1000 em short per glyph and a drawn line comes out about a tenth of a point
+narrower than the printout says — roughly ten times the floor the other two
+reach. Worse, it drops a character the font has no glyph for instead of measuring
+`.notdef`, which the specification requires it to keep
+([Missing glyphs](template.md#missing-glyphs)); on a three-character string that
+is a 25% width error, and it reports no error while doing it.
+
+`canvas` is correct once kerning is off, produces the smallest and most
+conformant output, and has `AddAnchor` / `AddLink` / `AddOutline` matching the
+printout's `xref` and `outline` marks, plus a general path renderer that gives
+rounded rectangles and dash patterns for free. It was still not chosen:
+
+- Its coordinate space is millimetres throughout — the canvas size, the
+  renderer's page-size argument, drawing coordinates, and `FontFace.TextWidth`'s
+  return value, though `Font.Face(size)` takes its size in points — and every
+  page it writes opens with a `2.8346457 0 0 2.8346457 0 0 cm` matrix to get
+  back to PDF units. The printout is in points.
+- Its text path shapes, and shaping is 59× slower than an `hmtx` sum
+  (see below). Handing a renderer lines that are already wrapped and having it
+  re-shape them is work that buys nothing.
+- It pulls in a large dependency tree — a TeX engine, a Markdown parser, Brotli,
+  a triangulation library — none of which a report renderer needs.
+
+`fpdf` measures by summing per-rune widths with no shaping, so there is no
+kerning to configure away, and it has `RoundedRect`, `SetDashPattern`, `Image`,
+`Link` / `SetLink` / `LinkString` and `Bookmark`, covering the printout's mark
+set.
+
+It has two defects, and calling them cosmetic would be wrong: it omits the
+six-character tag PDF requires on a subset `BaseFont`, which is a conformance
+violation that PDF/A validators flag, and it names the font from the family string
+the caller passed rather than the face's PostScript name. The reason they do not
+decide against it is narrower than harmlessness — neither affects the round-trip
+test or reproducibility, since both read glyph positions and `/W` rather than the
+`BaseFont` string. `canvas` emits `SUBSET+GoRegular` correctly and is the better
+citizen here.
+
+**The round trip works, and the position error is PDF's own, not the writer's.**
+Reading the generated files back and replaying the text operators:
+
+| | line start x | baseline y | line width | worst per-glyph x |
+|---|---|---|---|---|
+| `fpdf` | exact | exact | −0.013 … +0.011 pt | +0.012 pt |
+| `canvas`, `kern=0` | exact | exact | +0.002 … +0.011 pt | +0.012 pt |
+| `canvas`, kerning on | exact | exact | −5.49 … −1.45 pt | −5.49 pt |
+
+Line starts and baselines are exact — the writers put the text where they were
+told. The residual *width* error is the same for both surviving writers and
+belongs to the format, not to them: a PDF advances the pen inside a shown string
+from the font dictionary's `/W` array, which is in 1/1000 em, and a
+2048-unit-per-em font does not divide into that. Worst deviation between `/W` and
+the original `hmtx`, over the glyphs actually used, was 0.24/1000 em with `fpdf`
+and 0.17/1000 em with `canvas` — 0.002 pt and 0.001 pt at 8 pt. The worst
+accumulation actually measured across a line was 0.012 pt; it is not a per-glyph
+figure times a glyph count, since the per-glyph errors carry opposite signs and
+partly cancel.
+
+That is the floor on how closely a rendered line can match the printout. Unlike
+a measurement error it cannot change a line break, because by then the lines are
+fixed: the printout carries them already wrapped, and a renderer that re-wraps is
+in violation ([printout.md](printout.md#text)). It shows only as
+hundredth-of-a-point drift where a renderer positions from a line's width,
+which is right-aligned and justified text.
+
+**Extraction needs a purpose-built reader.** `rsc.io/pdf` cannot do this job:
+for an `Identity-H` composite font — which is what all three writers emit — it
+returns the raw two-byte CIDs as separate characters and reports every one as
+zero width. The round trip above uses a content-stream reader written for the
+spike: tokenise the stream, track `cm` / `Tm` / `Td` / `TD` / `T*` / `Tf` /
+`Tc` / `Tw` / `Tz`, replay `Tj` and `TJ`, and map CIDs back to runes through
+the `ToUnicode` CMap. **Stage 2 has to reimplement this as a test helper**;
+it is about 400 lines and it is the only way the round-trip test in the
+verification plan can exist.
+
+One thing that reader must not do is parse the embedded subset as a font.
+A `CIDFontType2` with `Identity-H` and an identity `CIDToGIDMap` needs no `cmap`
+table, and none of the three writers emits one, so `tdewolff/font` rejects all
+three subsets with `cmap: missing table`. That is correct on both sides.
+The test compares `/W` against the *original* file.
+
+**Font resolution must be ours.** `tdewolff/font` ships `FindSystemFonts`
+and `SystemFonts.Match(name, style)`, which looked like
+[host enumeration](template.md#host-enumeration) for free. It is not usable:
+
+```
+Match("Arial", Regular) -> C:\Windows\Fonts\ariblk.ttf     # Arial Black
+```
+
+The scan records `ariblk.ttf` under family `Arial`, style `Regular`, and since
+it sorts after `arial.ttf` in the directory it overwrites the real entry — so
+plain Arial becomes unreachable and every template asking for Arial gets Arial
+Black. The mechanism is a filter that reads
+
+```go
+if platform != PlatformWindows && (language&0x00FF) != 0x0009 { continue }
+```
+
+where `||` was meant. Every Windows-platform name record passes regardless
+of language, so the loop over name IDs 1/2/16/17 ends on whichever *localised*
+subfamily string comes last in the file. For `ariblk.ttf` that is Portuguese
+`"Normal"` at language `0x0c0c`, which parses as `Regular`. The result depends
+on the order of localised names inside a font file, which is not something the
+engine can control or predict.
+
+Three narrower findings from the same test:
+
+- Matching is case-sensitive: `Arial` hits, `arial` misses.
+- `Helvetica`, `Times`, `Courier` and `Go` all miss, which confirms the built-in
+  table is needed and that it is an **alias** table (`Helvetica` → `Arial`),
+  not typeface-to-filename. On macOS all three of those families are real,
+  which is why the alias table ended up [after host enumeration rather than
+  before](#macos-moves-the-alias-table) and not merely renamed.
+- It scans directories and does not read the Windows registry. That is the first
+  of the two observations that later merged those into
+  [one step](#enumeration-and-matching-are-one-step); the registry keeps its value
+  for fonts installed by reference rather than by copy, and reading it is ours
+  to write either way.
+
+A fourth, and on its own disqualifying: the scan **matches the file extension
+case-sensitively**, against `".ttf"` and `".otf"` only.
+
+```go
+switch filepath.Ext(path) {
+case ".ttf", ".otf":
+    getMetadata = getSFNTMetadata
+    // TODO: handle .ttc, .woff, .woff2, .eot
+}
+```
+
+`C:\Windows\Fonts` on this host holds 165 files named `*.ttf`, **234 named
+`*.TTF`**, and 15 `*.ttc`. Only the first group is looked at, so 60% of the
+installed fonts — which on a stock Windows install is most of the ones
+a template would name, the faces that arrive with Office — are invisible,
+along with every collection. Every failure in this path is swallowed with
+`return nil`, so nothing says so: 414 files go in and 160 `(family, style)`
+entries come out, with no error.
+
+What is worth borrowing is `DefaultFontDirs()` — `C:\Windows\Fonts` and
+`%LOCALAPPDATA%\Microsoft\Windows\Fonts` on this host, and the equivalents
+elsewhere. Scanning is cheap enough that the chain needs no cache: 11–19 ms
+for the files it does look at. `SystemFonts.Save` / `LoadSystemFonts` exist,
+but reloading the resulting 10 kB file took 9 ms, which is no faster than
+rescanning.
+
+**The substitute face has two jobs, and `cour.ttf` was chosen for the first.**
+The last resort has to be *found* — a name that is present on essentially every
+host, which `cour.ttf` is on Windows — and it should be *wide*, so that text
+overflows visibly rather than overlapping silently. Availability was the
+predecessor's main criterion and it is the harder of the two, since a face
+that is not there cannot be too narrow.
+
+Measured, the width half is not achievable as stated, and the attempt to fix it
+by picking a wider face fails in an instructive way.
+
+**No face guarantees overflow.** That would require the substitute to be at least
+as wide as the replaced face for every glyph, and nothing is. What can be asked
+of a candidate is a *bound*: the worst ratio of substitute width to replaced
+width, over the text it might be asked to set. That is its narrowest glyph divided
+by the target's widest — and **the bound is only as good as the character range
+and the face set quoted with it**, which a first pass at this left unsaid.
+The widest glyph in each row below was found by searching twelve desktop faces:
+Arial, Times New Roman, Verdana, Tahoma, Georgia, Segoe UI, Calibri, Trebuchet MS,
+Comic Sans MS, Courier New, Consolas, Lucida Console. Within a face, only glyphs
+that advance the pen are counted — a *spacing* glyph, as against one with zero
+advance, which every row excludes for the reason below.
+
+| admitted range | widest spacing glyph in it | `cour.ttf` | `arial.ttf` |
+|---|---|---|---|
+| printable ASCII | 1.0762 em — Verdana `%` | 44% narrow | 82% narrow |
+| Latin-1 | 1.0869 em — Comic Sans MS `Æ` | 45% narrow | 82% narrow |
+| Latin-1 + punctuation, currency | 1.8027 em — Tahoma `‱` | 67% narrow | 95% narrow |
+| everything | 1.9941 em — Segoe UI `⸻` | 70% narrow | 96% narrow |
+
+Measured with `go-text`, after the `cmap` defect above invalidated the first run
+of this table. The 44% figure quoted earlier was ASCII-only and said so nowhere,
+and it does not quite reach the end of Latin-1 — Comic Sans MS has a wider `Æ` there
+than Verdana's `%`. Widening the range costs half of it: `‰` and `‱` are ordinary
+in a financial report, Roman numerals (Times' `Ⅷ` at 1.6733 em) in a legal one,
+and two- and three-em dashes exist precisely in order to be wide.
+
+Which is why the face set is named too. Drop Comic Sans MS and the Latin-1 row
+reads 44% again — the same sensitivity to the sample that the objection below
+raises against ranking by strings, and no less real here. What does not move
+is the ordering.
+
+**Advance means `hmtx` throughout.** The engine sums `hmtx` and does not shape,
+so that is the only notion of advance it has, and the bound is computed in it.
+Every row above excludes zero-advance glyphs, because admitting them sends any
+face that has one straight to 100% and measures nothing: Arial has 314, and 283
+of them are combining or enclosing marks it is correct to give no advance.
+
+That generalises badly, and the substitute candidates are where it breaks. Courier
+New and DejaVu Sans Mono give a combining acute a full 0.6 em advance, so by `hmtx`
+they are uniform across their whole `cmap` — arguable typography, but it is what
+the tables say. Consolas has six zero-advance glyphs and they are format characters
+rather than marks: U+000D, U+200C–U+200F and U+FEFF. Lucida Console has none and is
+still not uniform, because its `€` is 0.6030 em against 0.6025 everywhere else.
+Three faces, three different reasons, which is why the range belongs in the rule
+rather than in a caveat on it.
+
+Within that, the gap is structural rather than marginal. Over spacing glyphs
+Courier New and DejaVu Sans Mono hold 0.30 while Verdana falls to 0.082 and Arial
+to 0.042 — a uniform advance has no narrow glyphs for the ratio to collapse on. A
+proportional face is better only *on average*.
+
+An average is what a first pass at this measured, and it misled. Ranking
+candidates by their worst *string* ratio over seven strings and six target faces
+put `verdana.ttf` at 0.999× and `DejaVuSans.ttf` at 0.971× against `cour.ttf` at
+0.755×, which reads as a clear win for proportional. Widening the net to
+seventeen strings and twelve faces reverses it. A ranking that flips with the
+sample is not a ranking, and neither sample is privileged: what the template
+asked for and what the data says are both unknown when the substitute is chosen.
+Only the bound is sample-independent, which is why it is the figure to use.
+
+Go Mono scores identically to Courier New, because the score belongs to the 0.6 em
+advance rather than to the face — so embedding a monospaced face in the binary buys
+availability, not width.
+
+**Coverage is the third criterion, and it outranks the second.** A last resort
+that lacks the character prints `.notdef`, which is the visible failure this section
+is trying to arrange — except that it arrives one glyph at a time and for the wrong
+reason. Counting the characters a face covers — code points in the BMP, excluding
+Unicode non-spacing marks, enclosing marks and format characters, since none
+of those is a character a report sets on its own:
+
+| candidate | advance | characters covered | bound over ASCII |
+|---|---|---|---|
+| `DejaVuSansMono.ttf` | 0.6021 em | 3159 | 44% narrow |
+| `cour.ttf` | 0.6001 em | 2883 | 44% narrow |
+| `consola.ttf` | 0.5498 em | 2343 | 49% narrow |
+| `lucon.ttf` | 0.6025 em | **644** | 44% narrow |
+
+The rule is quoted because it has to be. Courier New is 2883 under it,
+3085 counting distinct glyphs, and 3180 counting either `cmap` entries
+or glyphs with a non-zero `hmtx` advance — three defensible readings
+of "coverage", 300 apart.
+
+That reverses the Windows fallback. Lucida Console was picked as the second
+candidate for being 0.4% wider than Courier New; it has **less than a quarter** of
+its coverage. Consolas is 8.7% narrower — five points of bound — for 3.6× the
+glyphs, and 0.4% of width against 1,700 characters is not a trade worth making. The
+second Windows candidate is `consola.ttf`.
+
+Courier New stays first on all three criteria at once: on every Windows host,
+uniform, and 2,883 glyphs.
+
+**The decision: keep monospace, and give it company on the other two platforms.**
+`cour.ttf` stands, for the reason it was originally chosen — it is on every
+Windows host — with the width argument restated as a bound rather than a promise.
+What it needs is a per-platform list, because Courier New reaches Linux only
+through `ttf-mscorefonts-installer`, which is a licensing step rather than
+a default, so on a plain Linux host the last resort previously found nothing
+and the chain did not say what happened next. It now names candidates per platform
+and fails with a diagnostic if none is found; see
+[the substitute face](template.md#the-substitute-face).
+
+**Checking that on Linux changed the Linux answer, and collapsed two steps of the
+chain into one.**
+The host was Arch under WSL, with fontconfig 2.17.1. It has **six font files, all
+Adwaita** — GNOME's current default — and therefore no DejaVu, no Liberation and
+no Noto. A last resort that named those three filenames would have found nothing,
+and the failure would have been the one the new error path reports rather than a
+substitute.
+
+That is not an Arch quirk. Distributions agree on neither the filenames nor the
+directories, and this one keeps its fonts in `/usr/share/fonts/Adwaita` with
+`/usr/local/share/fonts` and both per-user directories absent. Naming files is
+a Windows technique. So Linux asks fontconfig for the generic family `monospace`,
+which is the platform's own answer to the question the last resort is asking, and
+which returned `AdwaitaMono-Regular.ttf` on this host.
+
+Measured, that face vindicates the bound argument and makes the candidate lists
+matter less than expected. Bounds over printable ASCII, against the same 1.0762 em
+that row of the table above uses:
+
+| face | advance | bound | worst case |
+|---|---|---|---|
+| Adwaita Mono (Arch) | 0.6000 em | 0.558 | 44% narrow |
+| Courier New (Windows) | 0.6001 em | 0.558 | 44% narrow |
+| DejaVu Sans Mono | 0.6021 em | 0.559 | 44% narrow |
+| Lucida Console (Windows) | 0.6025 em | 0.560 | 44% narrow |
+| Adwaita Sans (Arch, proportional) | 0.2422 em | 0.225 | 77% narrow |
+
+Four unrelated monospaced faces land within 0.0025 em of 0.6, so **the bound
+does not depend on which one is found** — only on its being monospaced.
+The proportional face from the same package sits at 77%, in line with every other
+proportional candidate. That makes the exact contents of the per-platform lists
+a detail and the monospace requirement the substantive rule.
+
+Which is why the engine checks it. Asking fontconfig for `monospace` hands the
+choice to the host, and the bound is the only reason this step prefers one face
+to another, so the one property worth verifying is the one being relied on.
+On the host above, fontconfig answered `sans-serif` with a *monospaced* face;
+a configuration that returns the reverse is no less possible. The check warns
+rather than fails: the substitute path is already the one where output is not
+to be trusted, and a second-guessed guess is still better than an error
+on a report the author may not care about.
+
+The check needs a stated range, because a naive one fails on two of the three faces
+this section recommends, and fails differently on each. Over a full `cmap` Lucida
+Console's `€` is 0.6030 em against 0.6025 everywhere else, while Consolas is uniform
+in its spacing glyphs and carries six zero-advance format characters; Adwaita Mono
+has zero-advance glyphs at U+055F and U+200B. Courier New and DejaVu Sans Mono pass
+a naive check, which is luck rather than a property to rely on. Over **Latin-1,
+spacing glyphs only**, every candidate named here is uniform to the last unit —
+Lucida Console's outlier is `€` at U+20AC, just outside — and a proportional face is
+caught immediately, since Arial's `'` is 0.19 em against `%` at 1.02. So that is the
+range, with equality, not a tolerance.
+
+**`fc-match` never reports a miss.** On this host it returned Adwaita Mono for
+`Helvetica`, `Arial`, `Times New Roman`, `serif`, `sans-serif`, and for the
+invented family `NoSuchFaceXYZ`. The chain used to say its third step was
+"fontconfig on Linux"; had that meant letting fontconfig perform the match,
+every typeface would have resolved there, the later steps would have been unreachable
+on Linux, and the printout would have recorded a *found* face for what is really
+a fallback — quietly answering a request for Helvetica with a monospaced face and
+calling it a match. That is precisely the silent substitution the `resolvedBy`
+field exists to expose. The rule is now explicit: the engine enumerates and matches
+by family itself, and may not delegate the match to a platform matcher that answers
+everything.
+
+The same behaviour is exactly right for the last resort, where a guess is what is
+wanted, and it is what Linux now uses there. One mechanism, unusable in one place
+and ideal in the other, worth knowing before either gets written.
+
+The macOS list has since been checked on a host, and it held; what did not hold
+is in [macOS](#macos-moves-the-alias-table).
+
+**Measurement is cheap; shaping is not.** Wrapping a 95-character paragraph into
+three lines calls the width function 21 times:
+
+| | per wrap |
+|---|---|
+| `hmtx` sum, no cache | 2.61 µs |
+| `hmtx` sum, rune → advance cache | 2.34 µs |
+| `canvas` shaping, `kern=0` | **154.14 µs** |
+
+A rune cache is barely worth having, because the cost is per string rather than
+per rune. Shaping is 59× slower, which at 100k rows with two stretch fields each
+would put half a minute into measurement alone. This is the second reason not to
+let a shaping renderer re-measure what the printout already settled.
+
+**Leading is still unspecified.** [printout.md](printout.md#text) shows
+`leading: 10.8` for a 9 pt font, which is 1.2 × size, but nothing states the
+rule. The Go faces suggest a tighter value: at 8 pt, `hhea`
+ascent + descent + lineGap is 9.2461 pt, or 1.1558 × size, and both `OS/2`
+metric pairs give the same number. The choice is between a constant multiplier,
+which is predictable and font-independent, and the font's own suggestion, which
+looks right per face but makes line spacing change when a font is substituted.
+Not decided here.
+
+## Enumeration and matching are one step
+
+The chain originally had five steps, with "OS font enumeration" and "a scan of
+known font directories" as separate rungs and `resolvedBy` recording which one
+answered. Two measurements collapsed them.
+
+On Windows, the library that was meant to supply the enumeration step scans
+directories and never touches the registry, so the two rungs were already
+the same code path. On Linux, fontconfig's font list *is* the directory scan — its
+configured directories are where the scan would look, and on the Arch host above
+they were the single `/usr/share/fonts/Adwaita`. Neither platform has a case where
+a face is found by one rung and not the other, except one that runs the other way
+round: the Windows registry can name a font installed by reference, outside the
+font directories, which a scan misses. That argues for reading the registry as
+an additional *source*, not for keeping a separate step.
+
+So there is one step, `host`, fed by every source the platform offers, and the
+distinction the printout used to draw between `os` and `scan` is gone. It was
+recording which internal mechanism fired, which is not a fact about the document:
+`resolvedFile` already says what was opened, and that is the diagnostic anyone
+actually wants. `resolvedBy` now has four values — `explicit`, `host`, `alias`,
+`substitute` — and each one now corresponds to something a reader might act on.
+The one that matters is still `substitute`. `alias` arrived later, with the macOS
+findings below, and replaced the `table` this section originally listed.
+
+The honest consequence, recorded in the reference documentation rather than
+buried: a bound of 44% over printable ASCII, and worse over any wider range,
+means text in a substituted font can still overlap.
+The signal that a substitute was used is `resolvedBy: "substitute"` in the
+printout header and the accompanying warning — machine-readable, unambiguous,
+and available whatever the geometry does. The predecessor needed geometry as
+the signal because it had no such output. `sr` does, so the geometry is a
+belt-and-braces measure and is described as one.
+
+### macOS moves the alias table
+
+Host enumeration was then implemented to the letter of the specification and run
+on macOS 26.5.2. 395 files, 810 faces, 381 families. Four things the reference
+documentation asserted were wrong there, and the first is the reason
+the chain has a different shape.
+
+**A built-in alias table consulted before the host is a trap on the one platform
+where the aliased-from names are real.** The Windows finding above — `Helvetica`,
+`Times` and `Courier` all miss, so an alias table is needed — is sound on Windows
+and generalised badly. macOS ships all three:
+
+| Requested | Present on the host |
+|---|---|
+| `Helvetica` | `/System/Library/Fonts/Helvetica.ttc`, 6 faces |
+| `Times` | `/System/Library/Fonts/Times.ttc` |
+| `Courier` | `/System/Library/Fonts/Courier.ttc` |
+
+With the alias table at step 2, a template asking for Helvetica got Arial
+while real Helvetica sat in the system font directory — and the printout recorded
+`resolvedBy: "table"`, which reads as a deliberate mapping rather than a fallback.
+That is the same silent-substitution failure as fontconfig's matcher above,
+reached by a different route: a step that always answers, placed before the step
+that answers correctly.
+
+The fix is ordering, not content. The host is searched first; an alias is what to
+try when the machine has no such family, and each alias is then looked up on the
+host in turn. It also settled a disagreement between the two documents, which had
+the table as "typeface-to-filename" in one and "alias" in the other. Those are not
+the same object and they fail differently: a filename table mapping `Helvetica` →
+`arial.ttf` simply misses and falls through, harmlessly, while a family alias
+resolves and wins. Only the alias spelling survives, and `resolvedBy` names it
+`alias` rather than `table`.
+
+**Style cannot come from the subfamily string.** The rule was that a face is
+keyed by "the family and style it declares together", which reads as matching the
+subfamily text. On macOS that text does not say `Italic`: Helvetica's slanted faces
+are `Oblique` and `Bold Oblique`, and seven installed families —
+`Avenir`, `Courier`, `DejaVu Sans`, `DejaVu Sans Mono`, `Galvji`, `Helvetica`,
+`Mshtakan` — use a spelling the literal rule misses. So
+`typeface="Helvetica" italic=#true` failed on the one platform where Helvetica
+is genuinely installed.
+
+`head.macStyle` and `OS/2.fsSelection` carry the italic bit correctly on all of
+them, so style now comes from the bits. That change also dissolves a second gap
+rather than needing its own rule: the old pair rule said family and style are
+taken from name IDs 16/17 or from 1/2 and never mixed, with 16/17 winning when
+present, and two faces on this host have 16 without 17 —
+
+| | name 1 | name 2 | name 16 | name 17 |
+|---|---|---|---|---|
+| `NewYork.ttf` | `.New York` | `Regular` | `.New York` | — |
+| `NewYorkItalic.ttf` | `.New York` | `Regular Italic` | `.New York` | — |
+
+— so both keyed as `('.New York', 'Regular')`, the italic became unreachable,
+and which one answered a lookup depended on directory order. With family from
+a name record and style from the bits there is no pair to mix, and nothing to
+decide about what "present" means when only half of it is.
+
+The bits are not unconditionally authoritative either. On this host the string and
+the bits disagree on 107 of 806 keys, mostly weight names a string test cannot
+classify, and in both directions: `Avenir / Black` is not bold by its string and
+bold by `macStyle`, while `.SF NS Mono / Light Italic` is italic by its string and
+not by `macStyle`.
+
+The precedence does not resolve that second case, and it is worth being plain
+about why not. It ranks the *sources*, so a table that is present wins even
+where the subfamily string contradicts it, and the string is reached only when
+both tables are absent. `.SF NS Mono / Light Italic` therefore comes out
+non-italic unless `OS/2.fsSelection` disagrees with `head.macStyle` on that face,
+which was not measured — the spike recorded only `macStyle`. So the rule is chosen
+on the argument that the bits are machine-readable and a weight string is not
+classifiable, at a known cost on faces whose bits are wrong; it is not chosen
+because it is right everywhere. Resolving it needs the `fsSelection` column
+the spike did not collect, and a decision about whether a contradicting string
+should override a present bit at all. Left open.
+
+**Colliding keys needed a rule and had none.** Three keys collide on this host,
+so 810 faces enumerate to 807 distinct keys: the two New York faces above,
+`Arial Unicode MS` installed in two directories, and `Hoefler Text Ornaments`
+keying as `Hoefler Text`. The last is the
+interesting shape — an ornament face claiming its parent's family — and
+in every case the answer was directory order, unstated. It is now stated:
+first found wins, sources in tabulated order, files in Unicode order within
+a directory.
+
+**Collections are the platform, not a corner of it.** The earlier note
+called macOS "the point at which `.ttc` support matters", which undersells it:
+
+| | files | faces |
+|---|---|---|
+| `.ttf` | 227 | 227 |
+| `.ttc` | **128** | **545** |
+| `.otf` | 38 | 38 |
+| no extension | 2 | 0, unparseable |
+
+545 of 810 faces, 67%, come from collections, `Helvetica`, `Times`, `Courier`,
+`Menlo`, `Lucida Grande` and `Hoefler Text` among them. Face-by-face `.ttc`
+enumeration is a prerequisite for the platform working at all.
+
+The same count also corrected "a `.ttc` candidate resolves to the regular face of
+the collection", which was being read as face 0. `Menlo.ttc` happens to be Regular,
+Bold, Italic, Bold Italic in that order, but `Helvetica.ttc` carries `Light` and
+`Light Oblique` after the four standard faces, so a family match that ignored style
+could land on either. The rule is the face whose style bits say neither bold nor
+slanted.
+
+**A permanent warning is a warning nobody reads.** The no-silent-drops rule made
+three files on a stock macOS produce a warning on every run of every report:
+`HelveLTMM` and `TimesLTMM`, Type 1 Multiple Master datafork fonts with
+an `sfntVersion` that is neither TrueType nor OpenType, and
+`Supplemental/NISC18030.ttf`, which parses as sfnt and has no `head` table.
+None can be removed — they are under system integrity protection.
+
+Two changes followed. A format the engine knows it does not support is *classified*
+and skipped rather than warned about, leaving warnings for a file that claims to be
+sfnt and then is not. And enumeration diagnostics were moved out of the printout's
+warning list altogether: they describe the machine, not the document, and the list
+they were sharing is where missing-glyph and overflow warnings live. Attaching an
+unfixable warning to every report is how a reader learns to ignore that list.
+
+The reviewer's observation that the first two files, having no extension, would be
+skipped by an extension filter and satisfy the rule *by accident* is the reason the
+rule now says explicitly that neither case is decided from the filename — that being
+the same shortcut `tdewolff/font` was faulted for above.
+
+**What held.** The substitute list is correct: all three candidates exist
+at the stated paths, and the monospace property the engine must verify holds
+for each, over Latin-1 spacing glyphs exactly as the rule specifies.
+
+| | advance | distinct widths |
+|---|---|---|
+| `Monaco.ttf` | 0.6001 em | 1 |
+| `Menlo.ttc` face 0 | 0.6021 em | 1 |
+| `Supplemental/Courier New.ttf` | 0.6001 em | 1 |
+| `Arial.ttf`, as a control | 0.1909–1.0151 em | **30** |
+
+That is the "four unrelated monospaced faces within 0.0025 em of 0.6" claim
+on a third platform — 0.6001, 0.6021, 0.6001 — so the Latin-1 range and equality
+rather than a tolerance both survive contact with macOS, and a proportional face
+is caught on the first comparison.
+
+The *bound* does not transfer, and the table above does not measure it. A bound is
+the substitute's narrowest advance over the widest advance of the face it replaces,
+so it belongs to the target set, not to the substitute: against this host's Arial
+alone it computes to 41% rather than 44%. What the widest Latin-1 glyph is across
+381 macOS families was not measured, and with that many families it is likely wider
+than the Windows set's, which would make the bound worse rather than equal.
+The figure that carries over is the 0.6 em clustering.
+
+One inaccuracy in the directory list cost nothing: only `/System/Library/Fonts`
+has a `Supplemental` subdirectory, so "and their `Supplemental` subdirectories"
+over-generalised from one case. The table now names the one that exists, and a
+missing directory is explicitly not an error.
+
+**Not verified.** Fonts installed on demand through Font Book land under
+`/System/Library/AssetsV2/com_apple_MobileAsset_Font7` and `…_Font8`, outside
+every directory the chain names, so a template asking for one falls through to the
+substitute. The host had the asset catalogues but no downloaded payload, so whether
+those paths are stable enough to scan is unanswered and needs a machine with one
+installed. And all of this is one host on one OS version: the structure is
+long-standing but the counts are not constants.
 
 ## Inherited defects, and what replaced them
 

@@ -1063,12 +1063,15 @@ A `font` node naming a `typeface` is resolved by trying, in order:
 
 1. An explicit `file` or `data` on the `font` node. If either is present,
    resolution ends there and failure is an error.
-2. A built-in typeface-to-filename table covering the common desktop faces.
-3. OS font enumeration: the Windows registry, fontconfig on Linux, the standard
-   directories on macOS.
-4. A scan of known font directories.
-5. A last-resort substitute, deliberately wider than most faces so that text
-   overflows visibly rather than overlapping silently.
+2. [Host enumeration](#host-enumeration): every font the machine has, matched by
+   family and style.
+3. A built-in table of **family aliases** — `Helvetica` → `Arial`,
+   `Courier` → `Courier New` and the rest — each alias then looked for by step 2.
+4. A last-resort [substitute](#the-substitute-face).
+
+The alias table is consulted **after** the host has been searched, never before: an
+alias is what to try when the machine has no family of that name, and a machine that
+has one must win. `Helvetica`, `Times` and `Courier` are all real families on macOS.
 
 **Strict mode** stops after step 1 and fails with the unresolved typeface named.
 Enable it with `--strict-fonts` on the CLI, or the equivalent library option.
@@ -1078,6 +1081,110 @@ the chain produced them — see [printout.md](printout.md#fonts). A font the tem
 named with `file=` is recorded relative to the printout, so it travels with it;
 one the engine found on the host is recorded as it was opened. Under strict mode
 only the first case can arise.
+
+### Host enumeration
+
+Step 2 builds a table of every face on the machine, keyed by family, boldness and
+slant, and looks the requested `typeface` up in it. Sources, all of them merged
+into the one table:
+
+| Platform | |
+|---|---|
+| Windows | the registry, plus `%WINDIR%\Fonts` and `%LOCALAPPDATA%\Microsoft\Windows\Fonts` |
+| Linux | fontconfig's font list and its configured directories |
+| macOS | `/System/Library/Fonts` and its `Supplemental` subdirectory, `/Library/Fonts`, `~/Library/Fonts` |
+
+These are sources for one table, not alternatives tried in turn, and the printout
+records `host` without naming which of them found the face. A directory that does
+not exist is not an error.
+
+**Collections are enumerated face by face.** A `.ttc` holds several faces and every
+one of them is a separate entry. This is not a refinement to add later: on macOS
+two thirds of the installed faces live in collections, `Helvetica`, `Times`,
+`Courier` and `Menlo` among them, so an enumeration that skips `.ttc` does
+not work on that platform at all.
+
+**The family name comes from a name record, the style does not.** Family is name ID
+16 where the font has one and name ID 1 otherwise. Boldness and slant come from the
+style bits, in this order:
+
+1. `OS/2.fsSelection` — bit 0 `ITALIC`, bit 5 `BOLD`, bit 9 `OBLIQUE`.
+2. `head.macStyle` — bit 0 bold, bit 1 italic.
+3. The subfamily string, name ID 17 or 2, as a last resort.
+
+This ranks **sources, not answers**: the first table the face has decides, and the
+subfamily string is read only when neither table is present — not when it disagrees.
+A face whose bits are wrong is therefore classified wrongly, and the engine has no
+way to tell that case from a face whose subfamily string is merely a weight name it
+could not have classified anyway. Reading a contradicting string as an override
+would trade a rare wrong answer for a common one.
+
+**The engine matches by family itself.** It may not delegate to a platform matcher
+that answers every query rather than reporting a miss — `fc-match` is one such,
+returning the host's default for a family that does not exist. Matching is
+case-insensitive.
+
+No rule here recovers a weight the format cannot express: `bold` is a boolean,
+so a family offering `Semibold`, `Bold` and `Black` is matched on the bit,
+not on which of them is *most* bold.
+
+**Two faces can claim one key.** The first found wins, scanning the sources in the
+order tabulated above and files within a directory in Unicode order by name. The
+loser is recorded as an enumeration diagnostic. This is not rare — a font installed
+in two directories, or an ornament face declaring its parent's family, will do it.
+
+**Nothing is dropped silently.** A file the engine cannot use is one of two cases:
+
+- A format it does not support — Type 1, Multiple Master, a datafork font,
+  a bitmap face — is **classified and skipped**, recorded as an enumeration
+  diagnostic.
+- A file that presents itself as sfnt and then fails to parse is a **warning**.
+
+Neither is decided from the filename extension. Filtering on `.ttf`/`.ttc`/`.otf`
+would satisfy this rule by accident while hiding real faces, which is the defect
+it exists to prevent.
+
+**Enumeration diagnostics are not report warnings.** They describe the machine,
+not the document, so they do not enter the [printout's warning
+list](printout.md#header-line) and are surfaced by `sr validate` and by the library's
+diagnostic hook instead. A stock macOS has three files that can never be parsed
+and cannot be removed, so putting them in the printout would attach a permanent,
+unfixable warning to every report and teach the reader to ignore the list that also
+carries missing glyphs and overflow. A file that *would* have answered a lookup and
+could not be read is a different matter, and is a warning.
+
+### The substitute face
+
+Step 4 tries, per platform, in order. A filename is looked for in the directories
+[listed above](#host-enumeration); a generic family is a query to the platform.
+
+| Platform | |
+|---|---|
+| Windows | `cour.ttf`, then `consola.ttf` |
+| Linux | fontconfig's answer for the generic family `monospace`; failing that `DejaVuSansMono.ttf`, `LiberationMono-Regular.ttf`, `NotoSansMono-Regular.ttf` |
+| macOS | `Monaco.ttf` and `Menlo.ttc` in `/System/Library/Fonts`, then `Courier New.ttf` in its `Supplemental` subdirectory |
+
+Every candidate is **monospaced**, and the engine verifies it: in the resolved face,
+every Latin-1 character whose glyph advances the pen must advance it by the same
+amount, and a warning is recorded if they do not. Glyphs with zero advance are
+not compared, since a combining mark correctly has none.
+
+The range is part of the rule rather than a shortcut. Beyond Latin-1 a genuinely
+monospaced face may carry zero-advance format characters, and may give a stray glyph
+such as `€` an advance a fraction of a unit off the rest, so a check over the whole
+`cmap` warns on faces that are fit for the purpose.
+
+If nothing is found, resolution fails with an error naming the typeface and what
+was tried. `bold` and `italic` are ignored at this step, since only regular faces
+are named. A `.ttc` candidate resolves to the face in the collection whose style
+bits say neither bold nor slanted — not to face 0, which is the same face in `Menlo.ttc`
+but is not a rule collections keep.
+
+A substitute is a guess, and text set in one may overlap rather than overflow
+visibly. So the dependable signal that one was used is not the appearance
+of the page: it is `resolvedBy: "substitute"` in the [printout
+header](printout.md#fonts), together with a warning naming the typeface.
+A reader that cares whether the output can be trusted tests that field.
 
 ### Missing glyphs
 

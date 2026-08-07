@@ -60,7 +60,7 @@ to sit:
 | Path | Form |
 |---|---|
 | Named by the template — `image file=` with `embed=#false`, or `font file=` | relative to the printout |
-| Found on the host — a `font` resolved by `table`, `os`, `scan`, or `substitute` | absolute, as opened |
+| Found on the host — a `font` resolved by `host`, `alias`, or `substitute` | absolute, as opened |
 
 A path the template named is a project asset, so it travels with the printout. A font
 the engine found is a system resource that was never in the project tree, and
@@ -143,7 +143,7 @@ Making the printout's own directory self-contained is a separate, deliberate act
 | `page` | Default page geometry, inherited by every page that does not override it. |
 | `fonts` | Resolved font table. |
 | `data` | Shared blobs, keyed by name. |
-| `warnings` | Present only when the build produced any. An array of objects with `kind`, `node`, `record`, and `message`. `kind` is `overflow` for an error `--allow-overflow` suppressed, or `glyph` for a [character the resolved font lacks](template.md#missing-glyphs). |
+| `warnings` | Present only when the build produced any. An array of objects with `kind`, `node`, `record`, and `message`. `kind` is `overflow` for an error `--allow-overflow` suppressed, `glyph` for a [character the resolved font lacks](template.md#missing-glyphs), or `font` for a `typeface` that reached the [substitute](template.md#the-substitute-face). Diagnostics about fonts on the host that this report did not use are [not warnings](template.md#host-enumeration). |
 
 ### `fonts`
 
@@ -157,22 +157,34 @@ One entry per distinct font used, sorted by `name`.
   "requested": "Helvetica",
   "resolvedFile": "C:/Windows/Fonts/arial.ttf",
   "resolvedFace": "Arial",
-  "resolvedBy": "os"
+  "resolvedBy": "alias"
 }
 ```
 
-This is the host-discovered case: a `typeface` went through the resolution chain,
-so `requested` is present and `resolvedFile` is the absolute path that was opened.
+This is the alias case: the template asked for `Helvetica`, the host had no family
+of that name, and the alias table pointed at Arial. `requested` is present because
+a `typeface` went through the resolution chain, and `resolvedFile` is the absolute
+path that was opened. Had the machine held a real Helvetica — macOS does —
+`resolvedBy` would be `host` and `resolvedFace` would say `Helvetica`.
 
 `resolvedFile` and `resolvedFace` are what was measured. `resolvedBy` is the step
-of the [resolution chain](template.md#font-resolution) that produced it — one of
-`explicit`, `table`, `os`, `scan`, `substitute`. A value of `substitute` means text
-may overflow.
+of the [resolution chain](template.md#font-resolution) that produced it:
+
+| | |
+|---|---|
+| `explicit` | the template named a `file` or `data` |
+| `host` | [enumeration](template.md#host-enumeration) of the machine's fonts |
+| `alias` | the family-alias table, then found on the host under the aliased name |
+| `substitute` | the [last resort](template.md#the-substitute-face) — text may overflow, or overlap |
+
+`host` covers every way a face was found on the machine — the Windows registry,
+fontconfig, a directory scan — because nothing observable follows from which
+of them produced it, and `resolvedFile` already says what was opened.
 
 `resolvedFile` follows the [path rule](#paths): relative to the printout when
 `resolvedBy` is `explicit`, because then the template named the file, and absolute
-otherwise. Under `--strict-fonts` only `explicit` can occur, so every font path in a
-strict printout is relative and the printout carries its fonts with it.
+otherwise. Under `--strict-fonts` only `explicit` can occur, so every font path
+in a strict printout is relative and the printout carries its fonts with it.
 
 `requested` is the template's `typeface`. A `font` node that named a `file`
 or `data` instead has no typeface to record, so `requested` is **absent** and
