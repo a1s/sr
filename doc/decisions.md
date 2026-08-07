@@ -1130,33 +1130,50 @@ as wide as the replaced face for every glyph, and nothing is. What can be asked
 of a candidate is a *bound*: the worst ratio of substitute width to replaced
 width, over the text it might be asked to set. That is its narrowest glyph divided
 by the target's widest — and **the bound is only as good as the character range
-quoted with it**, which a first pass at this left unsaid. Over ten desktop faces:
+and the face set quoted with it**, which a first pass at this left unsaid.
+The widest glyph in each row below was found by searching twelve desktop faces:
+Arial, Times New Roman, Verdana, Tahoma, Georgia, Segoe UI, Calibri, Trebuchet MS,
+Comic Sans MS, Courier New, Consolas, Lucida Console. Within a face, only glyphs
+that advance the pen are counted — a *spacing* glyph, as against one with zero
+advance, which every row excludes for the reason below.
 
-| admitted range | widest glyph in it | `cour.ttf` | `arial.ttf` |
+| admitted range | widest spacing glyph in it | `cour.ttf` | `arial.ttf` |
 |---|---|---|---|
 | printable ASCII | 1.0762 em — Verdana `%` | 44% narrow | 82% narrow |
-| Latin-1 | 1.0762 em — Verdana `%` | 44% narrow | 82% narrow |
-| Latin-1 + punctuation, currency | 1.8027 em — Tahoma `‱` | 67% narrow | **100% narrow** |
-| everything, spacing glyphs | 1.9941 em — Segoe UI `⸻` | 70% narrow | **100% narrow** |
-| everything | as above | **100% narrow** | **100% narrow** |
+| Latin-1 | 1.0869 em — Comic Sans MS `Æ` | 45% narrow | 82% narrow |
+| Latin-1 + punctuation, currency | 1.8027 em — Tahoma `‱` | 67% narrow | 95% narrow |
+| everything | 1.9941 em — Segoe UI `⸻` | 70% narrow | 96% narrow |
 
-Measured with `go-text`, after the `cmap` defect above invalidated the first run of
-this table. The 44% figure quoted earlier was ASCII-only and said so nowhere; it
-happens to survive to the end of Latin-1, and then does not. Widening the range
-costs half of it: `‰` and `‱` are ordinary in a financial report, Roman numerals
-(Times' `Ⅷ` at 1.6733 em) in a legal one, and two- and three-em dashes exist
-precisely in order to be wide.
+Measured with `go-text`, after the `cmap` defect above invalidated the first run
+of this table. The 44% figure quoted earlier was ASCII-only and said so nowhere,
+and it does not quite reach the end of Latin-1 — Comic Sans MS has a wider `Æ` there
+than Verdana's `%`. Widening the range costs half of it: `‰` and `‱` are ordinary
+in a financial report, Roman numerals (Times' `Ⅷ` at 1.6733 em) in a legal one,
+and two- and three-em dashes exist precisely in order to be wide.
 
-Admit *everything* and every candidate reaches zero, because **no real face is
-uniform over a whole `cmap` and none should be** — a combining acute must not
-advance the pen. Arial has 314 zero-advance glyphs, Courier New picks one up at
-U+200C, and the Adwaita Mono that Linux's fontconfig hands back has them at U+055F
-and U+200B. Zero advance is correct typography and fatal to a bound, so the bound
-has to be quoted over spacing glyphs at most.
+Which is why the face set is named too. Drop Comic Sans MS and the Latin-1 row
+reads 44% again — the same sensitivity to the sample that the objection below
+raises against ranking by strings, and no less real here. What does not move
+is the ordering.
+
+**Advance means `hmtx` throughout.** The engine sums `hmtx` and does not shape,
+so that is the only notion of advance it has, and the bound is computed in it.
+Every row above excludes zero-advance glyphs, because admitting them sends any
+face that has one straight to 100% and measures nothing: Arial has 314, and 283
+of them are combining or enclosing marks it is correct to give no advance.
+
+That generalises badly, and the substitute candidates are where it breaks. Courier
+New and DejaVu Sans Mono give a combining acute a full 0.6 em advance, so by `hmtx`
+they are uniform across their whole `cmap` — arguable typography, but it is what
+the tables say. Consolas has six zero-advance glyphs and they are format characters
+rather than marks: U+000D, U+200C–U+200F and U+FEFF. Lucida Console has none and is
+still not uniform, because its `€` is 0.6030 em against 0.6025 everywhere else.
+Three faces, three different reasons, which is why the range belongs in the rule
+rather than in a caveat on it.
 
 Within that, the gap is structural rather than marginal. Over spacing glyphs
 Courier New and DejaVu Sans Mono hold 0.30 while Verdana falls to 0.082 and Arial
-to 0 — a uniform advance has no narrow glyphs for the ratio to collapse on. A
+to 0.042 — a uniform advance has no narrow glyphs for the ratio to collapse on. A
 proportional face is better only *on average*.
 
 An average is what a first pass at this measured, and it misled. Ranking
@@ -1175,14 +1192,21 @@ availability, not width.
 **Coverage is the third criterion, and it outranks the second.** A last resort
 that lacks the character prints `.notdef`, which is the visible failure this section
 is trying to arrange — except that it arrives one glyph at a time and for the wrong
-reason. Counting spacing glyphs a face actually has:
+reason. Counting the characters a face covers — code points in the BMP, excluding
+Unicode non-spacing marks, enclosing marks and format characters, since none
+of those is a character a report sets on its own:
 
-| candidate | advance | spacing glyphs | bound over ASCII |
+| candidate | advance | characters covered | bound over ASCII |
 |---|---|---|---|
 | `DejaVuSansMono.ttf` | 0.6021 em | 3159 | 44% narrow |
 | `cour.ttf` | 0.6001 em | 2883 | 44% narrow |
 | `consola.ttf` | 0.5498 em | 2343 | 49% narrow |
 | `lucon.ttf` | 0.6025 em | **644** | 44% narrow |
+
+The rule is quoted because it has to be. Courier New is 2883 under it,
+3085 counting distinct glyphs, and 3180 counting either `cmap` entries
+or glyphs with a non-zero `hmtx` advance — three defensible readings
+of "coverage", 300 apart.
 
 That reverses the Windows fallback. Lucida Console was picked as the second
 candidate for being 0.4% wider than Courier New; it has **less than a quarter** of
@@ -1219,7 +1243,8 @@ which is the platform's own answer to the question the last resort is asking, an
 which returned `AdwaitaMono-Regular.ttf` on this host.
 
 Measured, that face vindicates the bound argument and makes the candidate lists
-matter less than expected:
+matter less than expected. Bounds over printable ASCII, against the same 1.0762 em
+that row of the table above uses:
 
 | face | advance | bound | worst case |
 |---|---|---|---|
@@ -1244,13 +1269,16 @@ rather than fails: the substitute path is already the one where output is not
 to be trusted, and a second-guessed guess is still better than an error
 on a report the author may not care about.
 
-The check needs a stated range, because a naive one fails on the very faces this
-section recommends. Over a full `cmap` nothing is uniform: Lucida Console's `€`
-is 0.6030 em against 0.6025 everywhere else, and Adwaita Mono and Consolas both carry
-zero-advance glyphs. Over **Latin-1, spacing glyphs only**, every candidate named
-here is uniform to the last unit — Lucida Console's outlier is `€` at U+20AC, just
-outside — and a proportional face is caught immediately, since Arial's `'` is 0.19 em
-against `%` at 1.02. So that is the range, with equality, not a tolerance.
+The check needs a stated range, because a naive one fails on two of the three faces
+this section recommends, and fails differently on each. Over a full `cmap` Lucida
+Console's `€` is 0.6030 em against 0.6025 everywhere else, while Consolas is uniform
+in its spacing glyphs and carries six zero-advance format characters; Adwaita Mono
+has zero-advance glyphs at U+055F and U+200B. Courier New and DejaVu Sans Mono pass
+a naive check, which is luck rather than a property to rely on. Over **Latin-1,
+spacing glyphs only**, every candidate named here is uniform to the last unit —
+Lucida Console's outlier is `€` at U+20AC, just outside — and a proportional face is
+caught immediately, since Arial's `'` is 0.19 em against `%` at 1.02. So that is the
+range, with equality, not a tolerance.
 
 **`fc-match` never reports a miss.** On this host it returned Adwaita Mono for
 `Helvetica`, `Arial`, `Times New Roman`, `serif`, `sans-serif`, and for the
@@ -1314,12 +1342,14 @@ So there is one step, `host`, fed by every source the platform offers, and the
 distinction the printout used to draw between `os` and `scan` is gone. It was
 recording which internal mechanism fired, which is not a fact about the document:
 `resolvedFile` already says what was opened, and that is the diagnostic anyone
-actually wants. `resolvedBy` now has four values — `explicit`, `table`, `host`,
+actually wants. `resolvedBy` now has four values — `explicit`, `host`, `alias`,
 `substitute` — and each one now corresponds to something a reader might act on.
-The one that matters is still `substitute`.
+The one that matters is still `substitute`. `alias` arrived later, with the macOS
+findings below, and replaced the `table` this section originally listed.
 
 The honest consequence, recorded in the reference documentation rather than
-buried: a 44% bound means text in a substituted font can still overlap.
+buried: a bound of 44% over printable ASCII, and worse over any wider range,
+means text in a substituted font can still overlap.
 The signal that a substitute was used is `resolvedBy: "substitute"` in the
 printout header and the accompanying warning — machine-readable, unambiguous,
 and available whatever the geometry does. The predecessor needed geometry as
@@ -1385,15 +1415,28 @@ and which one answered a lookup depended on directory order. With family from
 a name record and style from the bits there is no pair to mix, and nothing to
 decide about what "present" means when only half of it is.
 
-The bits are not unconditionally authoritative either, which is why the rule
-is a precedence and not a source. On this host the string and the bits disagree
-on 107 of 806 keys, mostly weight names a string test cannot classify, and in
-both directions: `Avenir / Black` is not bold by its string and bold by `macStyle`,
-while `.SF NS Mono / Light Italic` is italic by its string and not by `macStyle`.
+The bits are not unconditionally authoritative either. On this host the string and
+the bits disagree on 107 of 806 keys, mostly weight names a string test cannot
+classify, and in both directions: `Avenir / Black` is not bold by its string and
+bold by `macStyle`, while `.SF NS Mono / Light Italic` is italic by its string and
+not by `macStyle`.
 
-**Colliding keys needed a rule and had none.** Four keys collide on this host:
-the two New York faces above, `Arial Unicode MS` installed in two directories,
-and `Hoefler Text Ornaments` keying as `Hoefler Text`. The last is the
+The precedence does not resolve that second case, and it is worth being plain
+about why not. It ranks the *sources*, so a table that is present wins even
+where the subfamily string contradicts it, and the string is reached only when
+both tables are absent. `.SF NS Mono / Light Italic` therefore comes out
+non-italic unless `OS/2.fsSelection` disagrees with `head.macStyle` on that face,
+which was not measured — the spike recorded only `macStyle`. So the rule is chosen
+on the argument that the bits are machine-readable and a weight string is not
+classifiable, at a known cost on faces whose bits are wrong; it is not chosen
+because it is right everywhere. Resolving it needs the `fsSelection` column
+the spike did not collect, and a decision about whether a contradicting string
+should override a present bit at all. Left open.
+
+**Colliding keys needed a rule and had none.** Three keys collide on this host,
+so 810 faces enumerate to 807 distinct keys: the two New York faces above,
+`Arial Unicode MS` installed in two directories, and `Hoefler Text Ornaments`
+keying as `Hoefler Text`. The last is the
 interesting shape — an ornament face claiming its parent's family — and
 in every case the answer was directory order, unstated. It is now stated:
 first found wins, sources in tabulated order, files in Unicode order within
@@ -1451,9 +1494,17 @@ for each, over Latin-1 spacing glyphs exactly as the rule specifies.
 | `Arial.ttf`, as a control | 0.1909–1.0151 em | **30** |
 
 That is the "four unrelated monospaced faces within 0.0025 em of 0.6" claim
-on a third platform — 0.6001, 0.6021, 0.6001 — so the 44% bound, the Latin-1
-range, and equality rather than a tolerance all survive contact with macOS,
-and a proportional face is caught on the first comparison.
+on a third platform — 0.6001, 0.6021, 0.6001 — so the Latin-1 range and equality
+rather than a tolerance both survive contact with macOS, and a proportional face
+is caught on the first comparison.
+
+The *bound* does not transfer, and the table above does not measure it. A bound is
+the substitute's narrowest advance over the widest advance of the face it replaces,
+so it belongs to the target set, not to the substitute: against this host's Arial
+alone it computes to 41% rather than 44%. What the widest Latin-1 glyph is across
+381 macOS families was not measured, and with that many families it is likely wider
+than the Windows set's, which would make the bound worse rather than equal.
+The figure that carries over is the 0.6 em clustering.
 
 One inaccuracy in the directory list cost nothing: only `/System/Library/Fonts`
 has a `Supplemental` subdirectory, so "and their `Supplemental` subdirectories"

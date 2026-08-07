@@ -1112,15 +1112,21 @@ style bits, in this order:
 2. `head.macStyle` — bit 0 bold, bit 1 italic.
 3. The subfamily string, name ID 17 or 2, as a last resort.
 
+This ranks **sources, not answers**: the first table the face has decides, and the
+subfamily string is read only when neither table is present — not when it disagrees.
+A face whose bits are wrong is therefore classified wrongly, and the engine has no
+way to tell that case from a face whose subfamily string is merely a weight name it
+could not have classified anyway. Reading a contradicting string as an override
+would trade a rare wrong answer for a common one.
+
 **The engine matches by family itself.** It may not delegate to a platform matcher
 that answers every query rather than reporting a miss — `fc-match` is one such,
 returning the host's default for a family that does not exist. Matching is
 case-insensitive.
 
-The bits are not unconditionally right either — hence the precedence rather than a
-single source — and no rule here recovers a weight the format cannot express:
-`bold` is a boolean, so a family offering `Semibold`, `Bold` and `Black` is matched
-on the bit, not on which of them is *most* bold.
+No rule here recovers a weight the format cannot express: `bold` is a boolean,
+so a family offering `Semibold`, `Bold` and `Black` is matched on the bit,
+not on which of them is *most* bold.
 
 **Two faces can claim one key.** The first found wins, scanning the sources in the
 order tabulated above and files within a directory in Unicode order by name. The
@@ -1147,10 +1153,15 @@ Step 4 tries, per platform, in order. A filename is looked for in the directorie
 | Linux | fontconfig's answer for the generic family `monospace`; failing that `DejaVuSansMono.ttf`, `LiberationMono-Regular.ttf`, `NotoSansMono-Regular.ttf` |
 | macOS | `Monaco.ttf` and `Menlo.ttc` in `/System/Library/Fonts`, then `Courier New.ttf` in its `Supplemental` subdirectory |
 
-Every candidate is **monospaced**, and the engine verifies it: the resolved face's
-spacing glyphs in Latin-1 must all have the same advance, and a warning is recorded
-if they do not. The range is part of the rule — over a whole `cmap` no face is
-uniform, since a combining mark correctly has zero advance.
+Every candidate is **monospaced**, and the engine verifies it: in the resolved face,
+every Latin-1 character whose glyph advances the pen must advance it by the same
+amount, and a warning is recorded if they do not. Glyphs with zero advance are
+not compared, since a combining mark correctly has none.
+
+The range is part of the rule rather than a shortcut. Beyond Latin-1 a genuinely
+monospaced face may carry zero-advance format characters, and may give a stray glyph
+such as `€` an advance a fraction of a unit off the rest, so a check over the whole
+`cmap` warns on faces that are fit for the purpose.
 
 If nothing is found, resolution fails with an error naming the typeface and what
 was tried. `bold` and `italic` are ignored at this step, since only regular faces
