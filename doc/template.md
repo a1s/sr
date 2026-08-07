@@ -1133,6 +1133,17 @@ order tabulated above and files within a directory in Unicode order by name. The
 loser is recorded as an enumeration diagnostic. This is not rare — a font installed
 in two directories, or an ornament face declaring its parent's family, will do it.
 
+**Nothing is dropped silently.** A file the engine cannot use is one of two cases:
+
+- A format it does not support — Type 1, Multiple Master, a datafork font,
+  a bitmap face — is **classified and skipped**, recorded as an enumeration
+  diagnostic.
+- A file that presents itself as sfnt and then fails to parse is a **warning**.
+
+Neither is decided from the filename extension. Filtering on `.ttf`/`.ttc`/`.otf`
+would satisfy this rule by accident while hiding real faces, which is the defect
+it exists to prevent.
+
 **Enumeration diagnostics are not report warnings.** They describe the machine,
 not the document, so they do not enter the [printout's warning
 list](printout.md#header-line) and are surfaced by `sr validate` and by the library's
