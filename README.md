@@ -8,9 +8,12 @@ page count.
 A Go library with a CLI over it. Template plus JSON in, PDF out,
 one static binary.
 
-> **Status:** the specification and the two reference examples are complete; the
-> engine is not yet implemented. The documents below describe the system as
-> specified.
+> **Status:** the engine is implemented and produces printouts. Two things named
+> below are not built yet: the **PDF renderer**, so `WritePDF` and `sr render`
+> do not exist, and **subreports**, which a build refuses with the offending
+> node named. There is no CLI binary yet either — the flags below describe the
+> shell that will sit over the library. Everything else in these documents is
+> implemented and tested.
 
 ## Documentation
 
@@ -24,6 +27,9 @@ one static binary.
 | [example/sakila/](example/sakila/) | Reference template and dataset |
 | [example/invoices/](example/invoices/) | Second example: subreports, region grouping, the remaining variable modes |
 | [example/fonts/](example/fonts/) | Fonts committed so examples resolve identically everywhere |
+
+The Go packages are `github.com/a1s/sr` for the library and
+`github.com/a1s/sr/printout` for the document a renderer reads.
 
 ## How it works
 
@@ -108,15 +114,16 @@ func main() {
         panic(err)
     }
 
-    out, _ := os.Create("report.pdf")
-    defer out.Close()
-    if err := printout.WritePDF(out); err != nil {
+    if err := printout.WriteFile("report.srp.jsonl"); err != nil {
         panic(err)
     }
 }
 ```
 
-Records may be `map[string]any` or structs; struct fields map to declared columns
+`WritePDF` arrives with the renderer; until then a printout serializes to
+NDJSON or CBOR, which is the artifact a renderer consumes.
+
+Records may be `map[string]any` or structs; struct fields map to declared members
 by name, or by an `sr:"..."` tag. The CLI is a thin shell over this API.
 
 ## Running the examples
@@ -153,7 +160,7 @@ them as a reference does not mislead:
 
 | | |
 |---|---|
-| Properties | `layout width` / `height` / `landscape`, `font typeface` / `data` / `bold` / `italic`, `line backslant`, `rectangle opaque`, `image type`, `barcode data`, `data expr`, `maxheight`, `format` as a date-parse layout on either `parameter` or `column`, `subreport template` / `ownpageno` |
+| Properties | `layout width` / `height` / `landscape`, `font typeface` / `data` / `bold` / `italic`, `line backslant`, `rectangle opaque`, `image type`, `barcode data`, `data expr`, `maxheight`, `format` as a date-parse layout on either `parameter` or `member`, `subreport template` / `ownpageno` |
 | Spellings | the `x` / `y` aliases for `left` / `top` — both examples use `left` and `top` throughout |
 | Enumerations | barcode types `Code93`, `DataMatrix`, `QR-M`, `QR-H`; `image scale="cut"` and `"grow"`; `dash="dash"` |
 | Scopes | `iter="report"` / `"page"` / `"column"`; `reset="detail"` / `"item"` |

@@ -26,12 +26,12 @@ report name="DVD rental payments" \
   parameter "as_of" type="datetime" defaultexpr="BUILD_TIME"
 
   records {
-    column "customer_id" type="int"
-    column "amount"      type="decimal"
-    column "rental_date" type="datetime"
-    column "return_date" type="datetime" nullable=#true
-    column "customer"    type="object"
-    column "film"        type="object"
+    member "customer_id" type="int"
+    member "amount"      type="decimal"
+    member "rental_date" type="datetime"
+    member "return_date" type="datetime" nullable=#true
+    member "customer"    type="object"
+    member "film"        type="object"
   }
 
   variable "customer_amount" expr="amount" calc="sum" reset="group" resetgrp="customer"
@@ -161,7 +161,10 @@ report name="DVD rental payments" \
             evaltime="report" align="center" \
             left="5.5cm" width="6cm" bottom="3mm"
 
-      field expr="page_amount" align="right" format="Total: %.2f " \
+      // A page footer is measured when the page begins, which on the first
+      // page is before any record has been consumed. `sum` of nothing is None
+      // rather than 0, so the guard is what makes the footer printable there.
+      field expr="page_amount or 0" align="right" format="Total: %.2f " \
             left="12cm" width="5cm" bottom="3mm"
 
       field expr="strftime(as_of, '%Y-%m-%d %H:%M')" align="right" \
@@ -192,7 +195,7 @@ report name="DVD rental payments" \
 
         field expr="COLUMN_COUNT" format=" Count: %i" \
               top=4 bottom=4 width="35mm" valign="center"
-        field expr="column_amount" format="Total: %.2f" align="right" \
+        field expr="column_amount or 0" format="Total: %.2f" align="right" \
               top=4 bottom=4 left="45mm" width="35mm" valign="center"
       }
     }

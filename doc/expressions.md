@@ -75,7 +75,7 @@ THIS["odd name"]            # subscript
 ```
 
 Nested objects come from nested JSON and are declared
-`column ... type="object"`.
+`member ... type="object"`.
 
 ## Predefined variables
 
@@ -261,7 +261,7 @@ See [Formatting](#formatting).
 
 ## The `decimal` type
 
-A column declared `type="decimal"` produces `decimal` values,
+A member declared `type="decimal"` produces `decimal` values,
 and the type is available to expressions.
 
 ```
@@ -276,7 +276,11 @@ Arithmetic:
   gives 2 places, multiplying them gives 4.
 - `/` between decimals produces a decimal quantized to 6 fractional digits,
   rounding half away from zero. Use `quantize` for a different scale.
-- Comparisons and `min` `max` `sum` work as expected and stay exact.
+- Comparisons between decimals are exact, and `min`, `max` and `sorted` follow
+  them. A comparison **between a decimal and an int or a float** is not
+  available: an ordered comparison raises, and `==` is false however the values
+  compare. This is the host dialect's rule for two unrelated types rather than
+  a choice, so write `amount > decimal("0")`, not `amount > 0`.
 - **Mixing a decimal with a float is an error.** Convert deliberately with
   `float(d)` or `decimal(str(f))`.
 
@@ -309,7 +313,7 @@ and test it for truth. The rules:
 | record | it is not `None` — an empty record is still true |
 
 The time rule matters for the common "is this field filled in?" test. A JSON
-`null` in a `nullable` column becomes `None`, which is false, so this suppresses
+`null` in a `nullable` member becomes `None`, which is false, so this suppresses
 the field when there is no return date:
 
 ```kdl
@@ -323,8 +327,8 @@ distinction matters, test for it exactly:
 field expr="…" printwhen="return_date != None"
 ```
 
-A JSON `null` in a column that is **not** `nullable` is an error naming the
-column and the record index, not a silent `None`.
+A JSON `null` in a member that is **not** `nullable` is an error naming the
+member and the record index, not a silent `None`.
 
 ## Formatting
 
@@ -416,6 +420,12 @@ An empty accumulator reads as `0` for `count`; `None` for `first`, `last`, `sum`
 otherwise. `sum` of nothing is `None` rather than `0`, so "no rows" stays
 distinguishable from "rows summing to zero" — write `total_amount or 0`
 where the distinction does not matter.
+
+The guard is not an edge case. A page header and footer are
+[measured when the frame begins](layout.md#headerfooter-reservation),
+which on the first page is before any record has been consumed, so
+a footer that prints a running total reaches an empty accumulator
+every time. Both reference templates need it.
 
 `std` and `var` are **sample** statistics, dividing by *n*−1, so they are `None`
 for a single value as well as for none at all. A summary line that prints them

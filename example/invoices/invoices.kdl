@@ -22,14 +22,14 @@ report name="Invoice register" \
   parameter "min_total" type="decimal" default="0.00"
 
   records {
-    column "invoice_no" type="int"
-    column "customer"   type="string"
-    column "region"     type="string"
-    column "issued"     type="datetime"
-    column "total"      type="decimal"
-    column "void"       type="bool"
-    column "tags"       type="list"
-    column "lines"      type="list"
+    member "invoice_no" type="int"
+    member "customer"   type="string"
+    member "region"     type="string"
+    member "issued"     type="datetime"
+    member "total"      type="decimal"
+    member "void"       type="bool"
+    member "tags"       type="list"
+    member "lines"      type="list"
   }
 
   // `iter="item"` folds once per record even when the detail is suppressed;
@@ -70,56 +70,55 @@ report name="Invoice register" \
       """
   }
 
-  // The line-item subreport. Its records are line items, not invoices, so it
-  // declares its own.
-  embedded "lines" {
-    parameter "heading" type="string"
-
-    records {
-      column "sku"      type="string"
-      column "descr"    type="string"
-      column "qty"      type="int"
-      column "unit"     type="decimal"
-    }
-
-    variable "line_total" expr="unit * qty" calc="sum" reset="report"
-
-    // Column labels for the line items. `title`, not `header`: an inline
-    // subreport shares the parent's pages, whose header and footer are already
-    // reserved, so it has none of its own. A `title` prints once at the start
-    // of each invocation, which is what a per-invoice table wants.
-    title height=12 {
-      style font="small"
-      field text="SKU" left="8mm" width="20mm"
-      field text="Description" left="28mm" width="60mm"
-      field text="Qty" align="right" left="88mm" width="12mm"
-      field text="Unit" align="right" left="100mm" width="18mm"
-      field text="Amount" align="right" left="118mm" width="20mm"
-      line width=0 dash="dot" left="8mm" right=0 bottom=0 height=0
-    }
-
-    detail height=11 {
-      style font="body"
-      field expr="sku"   left="8mm"  width="20mm"
-      field expr="descr" left="28mm" width="60mm" stretch=#true
-      field expr="qty"    format="%d"   align="right" left="88mm"  width="12mm"
-      field expr="unit"   format="%.2f" align="right" left="100mm" width="18mm"
-      field expr="unit * qty" format="%.2f" align="right" left="118mm" width="20mm"
-    }
-
-    summary height=13 {
-      style font="bold"
-      line width=0.5 left="88mm" right=0 height=0
-      field expr="(heading, line_total)" format="%s — lines total %.2f" \
-            align="right" top=2 left="8mm" right=0
-    }
-  }
-
   layout pagesize="A4" leftmargin="18mm" rightmargin="15mm" \
          topmargin="15mm" bottommargin="15mm" \
   {
 
     style font="body" color="black"
+
+    // The line-item subreport. Its records are line items, not invoices.
+    embedded "lines" {
+      parameter "heading" type="string"
+
+      records {
+        member "sku"      type="string"
+        member "descr"    type="string"
+        member "qty"      type="int"
+        member "unit"     type="decimal"
+      }
+
+      variable "line_total" expr="unit * qty" calc="sum" reset="report"
+
+      // Column labels for the line items. `title`, not `header`: an inline
+      // subreport shares the parent's pages, whose header and footer are
+      // already reserved, so it has none of its own. A `title` prints once at
+      // the start of each invocation, which is what a per-invoice table wants.
+      title height=12 {
+        style font="small"
+        field text="SKU" left="8mm" width="20mm"
+        field text="Description" left="28mm" width="60mm"
+        field text="Qty" align="right" left="88mm" width="12mm"
+        field text="Unit" align="right" left="100mm" width="18mm"
+        field text="Amount" align="right" left="118mm" width="20mm"
+        line width=0 dash="dot" left="8mm" right=0 bottom=0 height=0
+      }
+
+      detail height=11 {
+        style font="body"
+        field expr="sku"   left="8mm"  width="20mm"
+        field expr="descr" left="28mm" width="60mm" stretch=#true
+        field expr="qty"    format="%d"   align="right" left="88mm"  width="12mm"
+        field expr="unit"   format="%.2f" align="right" left="100mm" width="18mm"
+        field expr="unit * qty" format="%.2f" align="right" left="118mm" width="20mm"
+      }
+
+      summary height=13 {
+        style font="bold"
+        line width=0.5 left="88mm" right=0 height=0
+        field expr="(heading, line_total)" format="%s — lines total %.2f" \
+              align="right" top=2 left="8mm" right=0
+      }
+    }
 
     title height="22mm" {
       // embed=#false records a file reference in the printout instead of the
@@ -150,12 +149,14 @@ report name="Invoice register" \
       // record's. The guard covers a page that carries no record at all -- a
       // first page filled by the title -- where THIS is None.
       field expr="region" printwhen="THIS != None" top="1mm" width="60mm"
-      field expr="'%d of %d invoices shown' % (printed, considered)" \
+      // The same page carries no record for the counters either, and `sum`
+      // of nothing is None rather than 0, so both need the guard.
+      field expr="'%d of %d invoices shown' % (printed or 0, considered or 0)" \
             align="right" right=0 top="1mm" width="60mm"
     }
 
-    // swapfooter puts this summary below the last page footer rather than above
-    // it, so the closing figures sit at the very bottom of the document.
+    // swapfooter puts this summary below the last page footer rather than
+    // above it, so the closing figures sit at the very bottom of the document.
     summary swapfooter=#true height="36mm" {
       style font="body"
       rectangle width=0.5 left=0 right=0 top="2mm" bottom=0

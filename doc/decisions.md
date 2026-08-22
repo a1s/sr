@@ -23,6 +23,7 @@ can state what is true without also arguing for it.
 - [Spike results](#spike-results)
 - [Enumeration and matching are one step](#enumeration-and-matching-are-one-step)
 - [Inherited defects, and what replaced them](#inherited-defects-and-what-replaced-them)
+- [What building the engine settled](#what-building-the-engine-settled)
 
 ## Relationship to PythonReports
 
@@ -143,7 +144,7 @@ the declaration is not merely a convenience:
    calls and money silently becomes a binary float.
 2. It makes compile-once expression evaluation possible. Starlark resolves names
    when it compiles, so the set of names an expression may reference has to be
-   known before any record is read. The column list is that set.
+   known before any record is read. The member list is that set.
 
 NDJSON exists so a large dataset need not be one enormous JSON value. It does not
 enable streaming: `DATA_COUNT`, every report-scoped aggregate, and keep-together
@@ -566,7 +567,7 @@ from the maximum and resolved afterwards. The predecessor handled this with seve
 special-case branches in its resizeable check.
 
 The exclusion had to be narrowed once the reference template was checked against it.
-Read literally, "its `bottom` was derived" catches a stretch field and abarcode too,
+Read literally, "its `bottom` was derived" catches a stretch field and a barcode too,
 since neither declares a height — which collapsed the whole titleband of `sakila.kdl`
 to the one element that did. The distinction that matters is not where the bottom edge
 came from but whether the element has a height of its own: a stretch field has its
@@ -669,7 +670,7 @@ Group names are checked against their derived names too: a group called `PAGE`
 would produce a `PAGE_COUNT` that already exists.
 
 **`format` means two different things, and keeps one name.** On a `parameter`
-or a `column` it is a date parsing layout; on a `field` or a `barcode` it is a `%`
+or a `member` it is a date parsing layout; on a `field` or a `barcode` it is a `%`
 format specification. They never appear on the same node and each reads naturally
 in place, so renaming one to `parse` was judged more confusing than the overload —
 but validation has to scope its rules to the node type, and an early draft of the
@@ -1544,3 +1545,87 @@ long-standing but the counts are not constants.
 | Output-time shrink pass alters final geometry | Content box computed during measurement |
 | Nested xref marks in xref-relative coordinates | Page coordinates throughout |
 | No specification, no engine tests | This documentation set; tests derived from it |
+
+## What building the engine settled
+
+The specification was written before the engine, which is what makes
+these worth recording separately: each is a question the documents left
+open or answered in a way that implementation showed to be wrong.
+
+**Leading is a constant multiplier, 1.2 times the size.** The spike measured
+the font's own suggestion at 1.156 times the size for the committed faces
+and left the choice open. A constant wins on the property that matters to
+a paginating engine: line spacing must not change when a typeface is
+substituted, because that changes how many lines fit a band, which changes
+what fits a frame, which repaginates everything after it. A per-face value
+makes the substitute path alter pagination as well as appearance, and the
+substitute path is already the one where output is not to be trusted.
+See [layout.md](layout.md#text-metrics).
+
+**`align` and `halign` on a field combine rather than compete.** The two
+properties are documented separately — `halign` aligns content in the box,
+`align` aligns lines in the field — and for a single-line field they
+describe the same operation on the same box. The printout carries one box
+and one alignment, and the box is the field's resolved box, which is what
+[printout.md](printout.md#text)'s own example shows and what makes
+`align="right"` right-align a number in a column. So `halign` supplies
+the alignment when `align` was not written, and `align` wins when it was.
+Reading the content box as "the widest line" instead would have made
+`align` a no-op on every single-line field, which is most of them.
+
+**An element declaring `bottom` and `height` is container-dependent too.**
+The rule said an element is resolved after the band's height when "its `bottom`
+was derived, and it has no height of its own", which reads an element with both
+as participating. It cannot. Its top comes out as `height − bottom − ownHeight`,
+so including its bottom edge in the maximum would require the height that maximum
+is computing. Nor is anything lost by leaving it out: its far edge lands at
+`height − bottom`, at or above the band's bottom edge for any non-negative
+`bottom`, so it could never be the lowest edge anyway. Both reference templates
+write such an element (`line width=2 bottom=2 height=0`, a rule two points above
+the bottom edge), and under the old wording each was resolved in the first pass,
+where the band height still reads zero, landing the line at −2. So the rule is
+now drawn on the anchor rather than on the derivation.
+
+**The floating partial order really is built from declared boxes.**
+The rule says so, and the reason showed up as a bug: a `stretch` field declares
+no height, so its measured height is not zero while its declared extent is.
+Using the measured extent, a floating element two points below a one-line field
+found nothing wholly above it and stayed where it was declared. With declared
+extents the field spans nothing at offset 0, the floater depends on it, and the gap
+propagates against the measured height — which is the whole point of the solver.
+
+**Both reference templates needed `or 0` on a footer total.** A page footer is
+measured when the page begins, which on the first page is before any record has
+been consumed, and `sum` of nothing is `None` rather than `0`. Two of the three
+footers in the examples formatted that `None` with `%.2f` and failed. The rule
+is right — "no rows" and "rows summing to zero" are different — but its
+consequence was under-documented, so [expressions.md](expressions.md#calc)
+now names the case rather than leaving it as an aside.
+
+**`embedded` belongs under `layout`, and the example was moved.** The template
+format states it twice, in the document model and in `layout`'s child list;
+`invoices.kdl` had it under `report`. The specification is the oracle, so the
+example moved.
+
+**Decimal comparison is decimal-to-decimal.** Starlark compares two values
+of different types by returning unequal for `==` and raising for an ordered
+comparison, and there is no hook a value type can use to change that.
+So `amount > 0` does not work on a decimal member and `amount == 0` is
+quietly false. Arithmetic between a decimal and an int is exact, so this is
+an inconsistency, and it is the host dialect's rather than the format's —
+the only honest response was to document it and name the spelling that works,
+`decimal("0")`.
+
+**Barcode quiet zones need a zero-width bar.** A 1-D stripe array alternates
+starting with a bar, and a quiet zone is a leading space. The two are reconciled
+by opening the array with a zero-width bar, which keeps the alternation
+unambiguous and keeps the invariant that the runs sum to the box's extent.
+A 1-D symbol also needs a bar height that does not come from its box,
+since a band of barcodes sizes to them: fifteen per cent of the symbol length,
+or a quarter of an inch, whichever is greater.
+
+**Not built at this stage.** Subreports are staged last and the engine refuses
+a template containing one, naming the node. The measurement cache the layout
+document describes is not implemented: it is a cost optimisation rather than
+a behaviour, and a correct cache key has to capture every name a band's
+expressions read, which is more machinery than the current throughput asks for.

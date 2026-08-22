@@ -27,7 +27,7 @@ A template has a declaration part and a layout part.
 ```
 report
 ├── parameter*        values supplied by the caller
-├── records?          declared types of the input record fields
+├── records?          declared types of the input record members
 ├── variable*         accumulators evaluated as data is consumed
 ├── font*             named font definitions
 ├── data*             named literal blobs (images, font files)
@@ -216,6 +216,14 @@ of the two-of-three count:
 field left=10 right=10 maxwidth=50
 ```
 
+`maxheight` clamps a declared height and a height derived from the band alike.
+On a `field` it clamps a stretched one too, and the lines beyond the clamped box
+are dropped at a line boundary, exactly as they are for a field without
+`stretch`. It does not clamp a `barcode`, whose box extent along the coding
+direction is fixed by its stripe count and module, nor a `grow` image, which is
+drawn at natural size: shrinking either box would describe a mark that is not
+what gets drawn.
+
 ### Section height
 
 A section's `height` is a **minimum**. The band is as tall as the greater of that
@@ -241,9 +249,24 @@ bottom edge.
 once the content's natural size is known. They do not move the box.
 The defaults are `halign="left"` and `valign="top"`.
 
-For a `field`, content is the wrapped text; for an `image`, the bitmap;
-for a `barcode`, the symbol. `align` on a `field` is separate: it aligns
-each line of text within the field, and adds `justified`.
+For an `image` the content is the bitmap and for a `barcode` the symbol,
+so `halign` and `valign` position it inside the resolved box.
+
+A `field` is the case where the two properties meet. Its text mark carries
+the **resolved box**, not a box shrunk to the widest line — that is what
+lets `align="right"` right-align a number in a column, and it is the form
+[printout.md](printout.md#text) shows. `align` positions each line within
+that box, and adds `justified`. `halign` then has nothing else to act on
+horizontally, so it **supplies the alignment when `align` was not written**:
+
+```kdl
+field halign="center" text="Sakila payment list"   // centred
+field align="right" expr="amount" format="%.2f"    // right-aligned
+field halign="center" align="left" text="…"        // left: align wins
+```
+
+`valign` is unaffected: it positions the wrapped text's height,
+which is content-sized, within the box's height.
 
 ### Floating elements
 
@@ -366,41 +389,41 @@ declared `type`; a mismatch is an error naming the parameter.
 
 ### `records`
 
-Declares the fields of the input records and their types.
+Declares the members of the input records and their types.
 
 ```kdl
 records {
-  column "customer_id"  type="int"
-  column "amount"       type="decimal"
-  column "rental_date"  type="datetime"
-  column "return_date"  type="datetime" nullable=#true
-  column "customer"     type="object"
-  column "film"         type="object"
+  member "customer_id"  type="int"
+  member "amount"       type="decimal"
+  member "rental_date"  type="datetime"
+  member "return_date"  type="datetime" nullable=#true
+  member "customer"     type="object"
+  member "film"         type="object"
 }
 ```
 
-Each `column` node:
+Each `member` node:
 
 | | Type | Default |
 |---|---|---|
-| *(arg 1)* | string, the field name | required |
+| *(arg 1)* | string, the member name | required |
 | `type` | `string` `int` `decimal` `float` `bool` `datetime` `date` `object` `list` | `string` |
 | `nullable` | boolean | `#false` |
 | `format` | string, for parsing `datetime` / `date` | RFC 3339 |
 
-Declared fields are coerced once, at load, and are the names expressions may
+Declared members are coerced once, at load, and are the names expressions may
 reference as bare identifiers.
 
-A field present in the data but not declared is not an error — data often carries
-columns a report does not use. It is not reachable as a bare name, but remains
+A member present in the data but not declared is not an error — data often carries
+members a report does not use. It is not reachable as a bare name, but remains
 reachable as `THIS["name"]`.
 
-A JSON `null` in a column that is not `nullable` is an error naming the column
-and the record index. In a `nullable` column it becomes `None`, which is
+A JSON `null` in a member that is not `nullable` is an error naming the member
+and the record index. In a `nullable` member it becomes `None`, which is
 [false](expressions.md#truth-values).
 
 `type="object"` and `type="list"` pass nested JSON through; their contents are
-not declared and are reached by attribute or subscript. A `list` column is what
+not declared and are reached by attribute or subscript. A `list` member is what
 a [`subreport`](#subreport) runs over, and the subreport's own `records` is what
 declares and coerces the elements — a raw JSON string `"4.25"` inside the list
 becomes an exact decimal there, exactly as at report level. Without that
@@ -471,7 +494,16 @@ name a font resource directly; `typeface` goes through
 [font resolution](#font-resolution).
 
 `bold` and `italic` select a face when resolving by `typeface`.
-With `file` or `data` they are an error — pass the bold face's own file.
+ With `file` or `data` there is nothing to select, since the named file
+*is* the face. They are still accepted there, and are descriptive:
+they travel to the printout's [font entry](printout.md#fonts) and record
+what the template says the face is.
+
+Because that entry is read as a description of the face, declaring a style
+the file does not carry is reported: resolution reads the face's own
+[style bits](#host-enumeration) and warns. The reverse is not reported:
+naming `Go-Bold.ttf` without `bold=#true` is ordinary use, since the flag
+would only repeat what the file already says.
 
 `underline` is drawn by the renderer and does not affect metrics.
 
@@ -860,9 +892,11 @@ as [`crop`](printout.md#image).
 `embed=#true`, the default, copies the image bytes into the printout, so the
 printout is self-contained. `embed=#false` records a file reference instead:
 the path is resolved against `basedir` when the template is read, and written
-into the printout relative to the printout itself, so the two travel together —
+into the printout relative to the printout itself, so the two travel together --
 see [printout.md](printout.md#image). The cost is that rendering then depends
 on the image still being where the printout expects it.
+`embed=#false` needs `file=`, since a reference is all it writes and only
+`file` supplies a path; `data` and a `content` child are always embedded.
 
 `type` is optional and sniffed from the content; give it to override.
 
@@ -1044,7 +1078,7 @@ and `data` definitions.
 Its `records` declares the fields of the sequence the subreport runs over, which
 is a different shape from the parent's records — an invoice report's records are
 invoices, its subreport's are line items. It also **coerces** those elements:
-a `list` column arrives from JSON untyped, and the subreport's `records` is what
+a `list` member arrives from JSON untyped, and the subreport's `records` is what
 turns each element's fields into ints, decimals, and times. Without the declaration
 the subreport's expressions have no names to compile against, and no types to
 compute with, exactly as at report level.
@@ -1237,7 +1271,7 @@ Validation runs once, at load, before any data is read. It checks:
   one of `expr` / `content`.
 - At most one of `default` / `defaultexpr` on a `parameter`, and any `default`
   parses as its declared `type`.
-- `format` on a `parameter` or a `column` — where it is a date parsing layout —
+- `format` on a `parameter` or a `member` — where it is a date parsing layout —
   appears only when that node's type is `date` or `datetime`. `format` on a `field`
   or a `barcode` is a different property, a `%` format specification, and carries
   no such restriction; see [Formatting](expressions.md#formatting).
@@ -1246,7 +1280,7 @@ Validation runs once, at load, before any data is read. It checks:
 - `subreport` has exactly one of `template` / `embedded`, is not inside `columns`,
   and does not combine `inline` with `ownpageno`.
 - An `inline` subreport's layout defines no `header` and no `footer`.
-- `font` does not combine `file` or `data` with `bold` or `italic`.
+- `image` does not combine `embed=#false` with `data` or a `content` child.
 - `columns count` does not make the column width non-positive.
 - Expressions parse. Name resolution is not checked at load, since undeclared
   record fields are reached dynamically.
