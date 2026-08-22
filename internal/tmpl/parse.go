@@ -807,6 +807,12 @@ func (psr *parser) parseImage(node *kdl.Node) *Image {
 	if sources != 1 {
 		psr.errf(node, "", "exactly one of file, data and a content child is required")
 	}
+	if !image.Embed && image.File == "" {
+		// embed=#false writes a path into the printout instead of the bytes,
+		// and only `file` supplies one.
+		psr.errf(node, "embed",
+			"embed=#false records a reference to the image file, so it needs file=; data and a content child are always embedded")
+	}
 	switch image.Type {
 	case "", "png", "jpeg", "gif":
 	default:

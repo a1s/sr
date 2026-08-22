@@ -216,6 +216,14 @@ of the two-of-three count:
 field left=10 right=10 maxwidth=50
 ```
 
+`maxheight` clamps a declared height and a height derived from the band alike.
+On a `field` it clamps a stretched one too, and the lines beyond the clamped box
+are dropped at a line boundary, exactly as they are for a field without
+`stretch`. It does not clamp a `barcode`, whose box extent along the coding
+direction is fixed by its stripe count and module, nor a `grow` image, which is
+drawn at natural size: shrinking either box would describe a mark that is not
+what gets drawn.
+
 ### Section height
 
 A section's `height` is a **minimum**. The band is as tall as the greater of that
@@ -884,9 +892,11 @@ as [`crop`](printout.md#image).
 `embed=#true`, the default, copies the image bytes into the printout, so the
 printout is self-contained. `embed=#false` records a file reference instead:
 the path is resolved against `basedir` when the template is read, and written
-into the printout relative to the printout itself, so the two travel together —
+into the printout relative to the printout itself, so the two travel together --
 see [printout.md](printout.md#image). The cost is that rendering then depends
 on the image still being where the printout expects it.
+`embed=#false` needs `file=`, since a reference is all it writes and only
+`file` supplies a path; `data` and a `content` child are always embedded.
 
 `type` is optional and sniffed from the content; give it to override.
 
@@ -1270,6 +1280,7 @@ Validation runs once, at load, before any data is read. It checks:
 - `subreport` has exactly one of `template` / `embedded`, is not inside `columns`,
   and does not combine `inline` with `ownpageno`.
 - An `inline` subreport's layout defines no `header` and no `footer`.
+- `image` does not combine `embed=#false` with `data` or a `content` child.
 - `columns count` does not make the column width non-positive.
 - Expressions parse. Name resolution is not checked at load, since undeclared
   record fields are reached dynamically.

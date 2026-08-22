@@ -284,6 +284,11 @@ func (eng *engine) measureElement(
 	if base.Vert.Size.Set {
 		slot.ownHeight, slot.hasOwn = base.Vert.Size.Value, true
 	}
+	// maxheight clamps a declared height here, at step 4.3 of doc/layout.md,
+	// the same way Horiz.Resolve above has already clamped maxwidth.
+	if base.Vert.Max.Set && slot.ownHeight > base.Vert.Max.Value {
+		slot.ownHeight = geom.Round(base.Vert.Max.Value)
+	}
 
 	// 4.4 content. An element with a content height of its own
 	// stops being anchored: a stretch field has its wrapped text,
@@ -297,8 +302,28 @@ func (eng *engine) measureElement(
 	if !slot.anchored {
 		slot.top = slot.declaredTop
 		slot.height = slot.ownHeight
+		clampOwnHeight(slot, base)
 	}
 	return slot, nil
+}
+
+// clampOwnHeight applies maxheight to a height that came from content.
+//
+// Only a field is clamped. A barcode's box extent along the coding direction
+// is its stripe count times its module, which printout invariant 9 checks,
+// so shrinking the box would produce a printout that fails its own validation;
+// a grow image is drawn at natural size with no crop, so a smaller box would only
+// make it spill. A field has no such tie: emitField trims its lines to the box.
+func clampOwnHeight(slot *elementSlot, base *tmpl.Common) {
+	if !base.Vert.Max.Set {
+		return
+	}
+	if _, ok := slot.el.(*tmpl.Field); !ok {
+		return
+	}
+	if slot.height > base.Vert.Max.Value {
+		slot.height = geom.Round(base.Vert.Max.Value)
+	}
 }
 
 // contentHeight gives an element the height it brings itself, where it has one.
@@ -307,6 +332,13 @@ func (eng *engine) contentHeight(slot *elementSlot) error {
 	case *tmpl.Field:
 		if !el.Stretch {
 			return nil
+		}
+		if slot.face == nil {
+			// The same condition emitField reports, reached earlier:
+			// measuring wrapped text needs a face, and a nil one
+			// panicked here before emit could give the diagnostic.
+			return fmt.Errorf("%s: no font is in scope; give the layout a style with a font",
+				el.Node.Path())
 		}
 		text, err := eng.fieldText(el, slot)
 		if err != nil {

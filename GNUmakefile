@@ -1,5 +1,5 @@
 REPO      := github.com/a1s/sr
-MAME      := sr
+NAME      := sr
 VERSION   ?= $(shell grep -E '^## \[' CHANGELOG.md | head -1 | sed -e 's/^## \[//' -e 's/\].*$$//')
 SHA       ?= $(shell git rev-parse --short HEAD)
 DATE      ?= $(shell date -u '+%Y-%m-%dT%H:%M:%SZ')
@@ -32,8 +32,6 @@ all: build
 
 build-dir:
 	test -d $(BUILD_DIR) || mkdir -p $(BUILD_DIR)
-
-backend: server $(PROTOCOLS)
 
 build:
 

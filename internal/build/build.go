@@ -11,6 +11,7 @@
 package build
 
 import (
+	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
 	"os"
@@ -363,10 +364,12 @@ func (eng *engine) publishBlob(name string) error {
 // addBlob puts an embedded image's bytes into the data table
 // under a generated name, stable for a given source and distinct
 // from every declared name. Two images from one source share one entry.
+//
+// An image with no file of its own is keyed by a digest of its bytes.
 func (eng *engine) addBlob(img *decodedImage) string {
 	key := img.file
 	if key == "" {
-		key = fmt.Sprintf("%x", len(img.data))
+		key = fmt.Sprintf("%x", sha256.Sum256(img.data))
 	}
 	if name, ok := eng.blobNames[key]; ok {
 		return name

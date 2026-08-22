@@ -84,7 +84,9 @@ func (eng *engine) emitField(field *tmpl.Field, slot *elementSlot, measured *mea
 	}
 	lines := fontres.Wrap(slot.face, text, slot.width)
 	leading := slot.face.Leading()
-	if !field.Stretch {
+	// A stretch field grows to its text unless maxheight capped that growth --
+	// then the box is the limit again.
+	if !field.Stretch || field.Vert.Max.Set {
 		lines = trimToBox(lines, leading, slot.height)
 	}
 	box, _ := alignedText(slot, lines, slot.el.Base().VAlign)

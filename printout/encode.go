@@ -256,6 +256,11 @@ func ReadCBOR(reader io.Reader, dir string) (*Printout, error) {
 			if err := json.Unmarshal(asJSON, &out.Header); err != nil {
 				return nil, err
 			}
+			if out.Header.SR != Version {
+				return nil, fmt.Errorf(
+					"printout format version %d; this reader understands %d",
+					out.Header.SR, Version)
+			}
 		case "page":
 			page, err := decodePage(asJSON, dir)
 			if err != nil {

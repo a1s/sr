@@ -753,6 +753,7 @@ Each of these names the template node, the record index, and the measured values
 | Header and footer reservations together exceed the frame | error |
 | Barcode content not encodable in the selected type | error |
 | Expression type mismatch, missing field, or a `null` in a member that is not `nullable` | error |
+| A value a `calc="sum"` accumulator cannot add to its running total | error |
 | `FINAL` without `evaltime`, or `evaltime` without `FINAL` | error, at template validation |
 | Column count so high that column width is non-positive | error, at template validation |
 

@@ -231,7 +231,7 @@ func add(acc, value starlark.Value) (starlark.Value, error) {
 			num, _ := starlark.AsFloat(total)
 			return starlark.Float(num) + addend, nil
 		case expr.Decimal:
-			return addend.Binary(syntax.PLUS, total, starlark.Right)
+			return decimalSum(addend, total, starlark.Right, acc, value)
 		}
 	case starlark.Float:
 		num, err := asFloat(value)
@@ -240,16 +240,39 @@ func add(acc, value starlark.Value) (starlark.Value, error) {
 		}
 		return total + starlark.Float(num), nil
 	case expr.Decimal:
-		return total.Binary(syntax.PLUS, value, starlark.Left)
+		return decimalSum(total, value, starlark.Left, acc, value)
 	}
-	return nil, fmt.Errorf("cannot sum %s and %s", acc.Type(), value.Type())
+	return nil, cannotSum(acc, value)
+}
+
+// decimalSum adds through Decimal.Binary and refuses what it will not handle.
+//
+// Binary is a Starlark operator hook, so it answers an operand it does not
+// know with (nil, nil): "not mine, try the other side". There is no other
+// side here. Taking that nil as the new total would silently restart the sum.
+// An int or float accumulator errors on the same input, and so must this one.
+func decimalSum(dec expr.Decimal, operand starlark.Value, side starlark.Side,
+	acc, value starlark.Value) (starlark.Value, error) {
+
+	sum, err := dec.Binary(syntax.PLUS, operand, side)
+	if err != nil {
+		return nil, err
+	}
+	if sum == nil {
+		return nil, cannotSum(acc, value)
+	}
+	return sum, nil
+}
+
+func cannotSum(acc, value starlark.Value) error {
+	return fmt.Errorf("cannot sum %s and %s", acc.Type(), value.Type())
 }
 
 // average divides a sum by a count, keeping a decimal exact.
 func average(sum starlark.Value, count int) starlark.Value {
 	if exact, ok := sum.(expr.Decimal); ok {
 		out, err := exact.Binary(syntax.SLASH, starlark.MakeInt(count), starlark.Left)
-		if err == nil {
+		if err == nil && out != nil {
 			return out
 		}
 	}

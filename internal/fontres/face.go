@@ -3,6 +3,7 @@ package fontres
 import (
 	"bytes"
 	"fmt"
+	"sort"
 
 	"github.com/a1s/sr/internal/geom"
 	gofont "github.com/go-text/typesetting/font"
@@ -125,11 +126,14 @@ func (face *Face) Width(text string) float64 {
 func (face *Face) Leading() float64 { return geom.Round(LeadingRatio * float64(face.Size)) }
 
 // MissingRunes lists the characters this face was asked for and does not have.
+// The order is by code point rather than the map's, so that a font missing
+// more than one glyph produces the same warning sequence on every run.
 func (face *Face) MissingRunes() []rune {
 	out := make([]rune, 0, len(face.missing))
 	for char := range face.missing {
 		out = append(out, char)
 	}
+	sort.Slice(out, func(one, two int) bool { return out[one] < out[two] })
 	return out
 }
 

@@ -60,6 +60,11 @@ func blocked(measured *measurement, cut float64) bool {
 		if !ok {
 			return true
 		}
+		// A deferred value is written into one mark when its scope ends,
+		// so a field carrying one cannot be divided between two marks.
+		if len(defersOf(measured, dft)) > 0 {
+			return true
+		}
 	}
 	return false
 }
@@ -178,7 +183,7 @@ func splitAt(measured *measurement, cut float64) (head, tail *measurement) {
 		case dft.top >= cut-geom.Tolerance:
 			shifted := shiftDraft(dft, -cut)
 			tail.drafts = append(tail.drafts, shifted)
-			tail.defers = append(tail.defers, defersOf(measured, dft)...)
+			tail.defers = append(tail.defers, shiftDefers(measured, dft, shifted)...)
 			if shifted.bottom > tailBottom {
 				tailBottom = shifted.bottom
 			}
@@ -235,6 +240,32 @@ func defersOf(measured *measurement, dft *draft) []*deferral {
 		if def.draft == dft {
 			out = append(out, def)
 		}
+	}
+	return out
+}
+
+// shiftDefers re-points a draft's deferrals at the copy that moved into the tail.
+//
+// A deferral holds the mark it will patch. shiftDraft clones the mark, so the
+// tail commits the clone while the original is discarded -- and a deferral
+// left pointing at the original would write the resolved value into a mark
+// the printout no longer carries, leaving the placeholder on the page forever.
+func shiftDefers(measured *measurement, dft, shifted *draft) []*deferral {
+	var out []*deferral
+	for _, def := range defersOf(measured, dft) {
+		moved := *def
+		moved.draft = shifted
+		if moved.text != nil {
+			if text, ok := shifted.mark.(*printout.Text); ok {
+				moved.text = text
+			}
+		}
+		if moved.barcode != nil {
+			if barcode, ok := shifted.mark.(*printout.Barcode); ok {
+				moved.barcode = barcode
+			}
+		}
+		out = append(out, &moved)
 	}
 	return out
 }

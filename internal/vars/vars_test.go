@@ -286,3 +286,27 @@ func TestOnlyThreeModesRetainValues(test *testing.T) {
 		}
 	}
 }
+
+// calc="sum" over decimals refuses a value it cannot add, same as int and float.
+//
+// Decimal.Binary answers an operand it does not handle with (nil, nil),
+// the Starlark hook protocol for "not mine". Storing that as the new total
+// threw the running sum away: rows 1.00, None, 2.00 totalled 2.00
+// and averaged 0.666667, with no error anywhere.
+func TestDecimalSumRefusesAnUnaddableValue(test *testing.T) {
+	acc := New(tmpl.CalcSum)
+	fold(test, acc, dec(test, "1.00"))
+	if err := acc.Fold(starlark.None); err == nil {
+		test.Fatal("want an error summing None into a decimal total")
+	}
+	if got := acc.Value().String(); got != "1.00" {
+		test.Errorf("total = %s, want the running sum 1.00 to survive the refusal", got)
+	}
+
+	// The same input against an int total, for the comparison the fix restores.
+	ints := New(tmpl.CalcSum)
+	fold(test, ints, starlark.MakeInt(1))
+	if err := ints.Fold(starlark.None); err == nil {
+		test.Fatal("an int total must refuse None too")
+	}
+}

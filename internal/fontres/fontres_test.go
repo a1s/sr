@@ -357,3 +357,25 @@ func TestEnumerationDiagnosticsAreNotWarnings(test *testing.T) {
 			resolver.Warnings)
 	}
 }
+
+// Missing glyphs come back in code-point order.
+//
+// They become printout warnings in the order they are read,
+// and a map's order varies per run, so a font lacking more than one glyph
+// would otherwise break the byte-identical guarantee that WithBuildTime
+// and StrictFonts are there to give.
+func TestMissingRunesAreOrdered(test *testing.T) {
+	face := regular(test, 10)
+	for _, char := range []rune{'\u2603', '\u00e6', '\u4e2d', '\u2014'} {
+		face.Advance(char)
+	}
+	got := face.MissingRunes()
+	if len(got) < 2 {
+		test.Skipf("the fixture face covers these; nothing to order: %q", got)
+	}
+	for index := 1; index < len(got); index++ {
+		if got[index-1] >= got[index] {
+			test.Fatalf("MissingRunes is not ordered: %q", got)
+		}
+	}
+}
