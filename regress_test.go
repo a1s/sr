@@ -241,3 +241,78 @@ func TestDeferredFieldSurvivesASplit(test *testing.T) {
 		test.Errorf("no page carries the resolved %q", want)
 	}
 }
+
+// The same, one level deeper: the deferred field sits inside an xref.
+//
+// emitXref lifts its children's deferrals into the parent slot but keeps
+// their marks nested inside the xref's own mark, so no deferral's draft
+// is ever one of the band's drafts. Matching deferrals to drafts by identity
+// therefore found none of them.
+func TestDeferredFieldInsideAnXrefSurvivesASplit(test *testing.T) {
+	const src = `report name="t" {
+  records { member "n" type="string" }
+  font "body" file="Go-Regular.ttf" size=8
+  layout width=200 height=80 leftmargin=10 rightmargin=10 topmargin=20 bottommargin=20 {
+    style font="body" color="black"
+    detail split=#true {
+      field expr="n" stretch=#true left=0 width=60 top=0
+      xref type="url" target="'https://example.invalid'" left=80 width=60 top=60 height=10 {
+        field expr="'of %d' % FINAL.PAGE_NUMBER" evaltime="report" left=0 width=60 height=10
+      }
+    }
+  }
+}`
+	long := strings.Repeat("alpha beta gamma delta ", 4)
+	out := buildString(test, src, []map[string]any{{"n": strings.TrimSpace(long)}})
+	if len(out.Pages) < 2 {
+		test.Fatalf("pages = %d, want the band to split", len(out.Pages))
+	}
+	want := "of " + string(rune('0'+len(out.Pages)))
+
+	var found bool
+	for index, page := range out.Pages {
+		for _, mark := range texts(page) {
+			line := strings.Join(mark.Lines, "")
+			if line == "" {
+				test.Errorf("page %d carries an unresolved placeholder", index+1)
+				continue
+			}
+			if line == want {
+				found = true
+			}
+		}
+	}
+	if !found {
+		test.Errorf("no page carries the resolved %q", want)
+	}
+}
+
+// Above the cut, the deferral needs no re-pointing -- only finding.
+//
+// Matching by draft identity lost it here too: it never reached head.defers,
+// so commit never registered it and nothing resolved it. Keeping the right
+// marks is not enough if the deferral that patches them is dropped.
+func TestDeferredFieldInsideAnXrefAboveTheCut(test *testing.T) {
+	const src = `report name="t" {
+  records { member "n" type="string" }
+  font "body" file="Go-Regular.ttf" size=8
+  layout width=200 height=80 leftmargin=10 rightmargin=10 topmargin=20 bottommargin=20 {
+    style font="body" color="black"
+    detail split=#true {
+      xref type="url" target="'https://example.invalid'" left=80 width=60 top=0 height=10 {
+        field expr="'of %d' % FINAL.PAGE_NUMBER" evaltime="report" left=0 width=60 height=10
+      }
+      field expr="n" stretch=#true left=0 width=60 top=12
+    }
+  }
+}`
+	long := strings.Repeat("alpha beta gamma delta ", 4)
+	out := buildString(test, src, []map[string]any{{"n": strings.TrimSpace(long)}})
+	if len(out.Pages) < 2 {
+		test.Fatalf("pages = %d, want the band to split", len(out.Pages))
+	}
+	want := "of " + string(rune('0'+len(out.Pages)))
+	if got := strings.Join(texts(out.Pages[0])[0].Lines, ""); got != want {
+		test.Errorf("page 1 xref field = %q, want the resolved %q", got, want)
+	}
+}

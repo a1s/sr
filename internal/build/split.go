@@ -181,9 +181,9 @@ func splitAt(measured *measurement, cut float64) (head, tail *measurement) {
 			head.drafts = append(head.drafts, dft)
 			head.defers = append(head.defers, defersOf(measured, dft)...)
 		case dft.top >= cut-geom.Tolerance:
-			shifted := shiftDraft(dft, -cut)
+			shifted, clones := shiftDraft(dft, -cut)
 			tail.drafts = append(tail.drafts, shifted)
-			tail.defers = append(tail.defers, shiftDefers(measured, dft, shifted)...)
+			tail.defers = append(tail.defers, shiftDefers(measured, dft, shifted, clones)...)
 			if shifted.bottom > tailBottom {
 				tailBottom = shifted.bottom
 			}
@@ -233,15 +233,47 @@ func splitAt(measured *measurement, cut float64) (head, tail *measurement) {
 	return head, tail
 }
 
-// defersOf returns the deferrals belonging to a draft.
+// defersOf lists the deferrals that patch a mark this draft carries.
+//
+// Membership is by mark, not by draft identity. An element inside an xref
+// has its deferrals lifted into the parent slot while its mark stays nested
+// in the xref's, so its draft is never one of the band's -- matching on the
+// draft found nothing, and the deferral was dropped from whichever side
+// of the cut it belonged to, head as well as tail.
 func defersOf(measured *measurement, dft *draft) []*deferral {
+	carried := map[printout.Mark]bool{}
+	for _, mark := range marksOf(dft.mark) {
+		carried[mark] = true
+	}
 	var out []*deferral
 	for _, def := range measured.defers {
-		if def.draft == dft {
+		if target := def.patches(); target != nil && carried[target] {
 			out = append(out, def)
 		}
 	}
 	return out
+}
+
+// marksOf lists a mark and everything nested inside it.
+func marksOf(mark printout.Mark) []printout.Mark {
+	out := []printout.Mark{mark}
+	if xref, ok := mark.(*printout.Xref); ok {
+		for _, inner := range xref.Marks {
+			out = append(out, marksOf(inner)...)
+		}
+	}
+	return out
+}
+
+// patches is the mark this deferral writes its resolved value into.
+func (def *deferral) patches() printout.Mark {
+	switch {
+	case def.text != nil:
+		return def.text
+	case def.barcode != nil:
+		return def.barcode
+	}
+	return nil
 }
 
 // shiftDefers re-points a draft's deferrals at the copy that moved into the tail.
@@ -250,18 +282,22 @@ func defersOf(measured *measurement, dft *draft) []*deferral {
 // tail commits the clone while the original is discarded -- and a deferral
 // left pointing at the original would write the resolved value into a mark
 // the printout no longer carries, leaving the placeholder on the page forever.
-func shiftDefers(measured *measurement, dft, shifted *draft) []*deferral {
+func shiftDefers(
+	measured *measurement,
+	dft, shifted *draft,
+	clones map[printout.Mark]printout.Mark,
+) []*deferral {
 	var out []*deferral
 	for _, def := range defersOf(measured, dft) {
 		moved := *def
 		moved.draft = shifted
 		if moved.text != nil {
-			if text, ok := shifted.mark.(*printout.Text); ok {
+			if text, ok := clones[moved.text].(*printout.Text); ok {
 				moved.text = text
 			}
 		}
 		if moved.barcode != nil {
-			if barcode, ok := shifted.mark.(*printout.Barcode); ok {
+			if barcode, ok := clones[moved.barcode].(*printout.Barcode); ok {
 				moved.barcode = barcode
 			}
 		}
@@ -270,7 +306,9 @@ func shiftDefers(measured *measurement, dft, shifted *draft) []*deferral {
 	return out
 }
 
-func shiftDraft(dft *draft, dy float64) *draft {
+// shiftDraft copies a draft down by dy, and reports which clone replaced which
+// original so that a deferral can be re-pointed at the copy the tail commits.
+func shiftDraft(dft *draft, dy float64) (*draft, map[printout.Mark]printout.Mark) {
 	out := *dft
 	out.top = geom.Round(dft.top + dy)
 	out.bottom = geom.Round(dft.bottom + dy)
@@ -278,42 +316,53 @@ func shiftDraft(dft *draft, dy float64) *draft {
 	for _, line := range dft.lineTops {
 		out.lineTops = append(out.lineTops, geom.Round(line+dy))
 	}
-	out.mark = cloneShifted(dft.mark, dy)
+	clones := map[printout.Mark]printout.Mark{}
+	out.mark = cloneShifted(dft.mark, dy, clones)
 	if text, ok := out.mark.(*printout.Text); ok {
 		out.text = text
 	}
-	return &out
+	return &out, clones
 }
 
-func cloneShifted(mark printout.Mark, dy float64) printout.Mark {
+func cloneShifted(
+	mark printout.Mark,
+	dy float64,
+	clones map[printout.Mark]printout.Mark,
+) printout.Mark {
 	switch typed := mark.(type) {
 	case *printout.Text:
 		text := *typed
 		text.Box.Top = geom.Round(text.Box.Top + dy)
+		clones[mark] = &text
 		return &text
 	case *printout.Line:
 		line := *typed
 		line.Box.Top = geom.Round(line.Box.Top + dy)
+		clones[mark] = &line
 		return &line
 	case *printout.Rectangle:
 		rect := *typed
 		rect.Box.Top = geom.Round(rect.Box.Top + dy)
+		clones[mark] = &rect
 		return &rect
 	case *printout.Image:
 		image := *typed
 		image.Box.Top = geom.Round(image.Box.Top + dy)
+		clones[mark] = &image
 		return &image
 	case *printout.Barcode:
 		barcode := *typed
 		barcode.Box.Top = geom.Round(barcode.Box.Top + dy)
+		clones[mark] = &barcode
 		return &barcode
 	case *printout.Xref:
 		xref := *typed
 		xref.Box.Top = geom.Round(xref.Box.Top + dy)
 		xref.Marks = nil
 		for _, inner := range typed.Marks {
-			xref.Marks = append(xref.Marks, cloneShifted(inner, dy))
+			xref.Marks = append(xref.Marks, cloneShifted(inner, dy, clones))
 		}
+		clones[mark] = &xref
 		return &xref
 	}
 	return mark
