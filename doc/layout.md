@@ -6,6 +6,7 @@ a [printout](printout.md).
 ## Contents
 
 - [Coordinates and rounding](#coordinates-and-rounding)
+- [Text metrics](#text-metrics)
 - [Measure, decide, commit](#measure-decide-commit)
 - [Frames](#frames)
 - [Building a band](#building-a-band)
@@ -30,6 +31,27 @@ a band fits, so rounding only at output time gives different page breaks.
 
 Comparisons against frame boundaries use a tolerance of 0.001 pt, so a band
 whose height matches the remaining space exactly fits rather than ejecting.
+
+## Text metrics
+
+One measurement rule governs every band's height, so both halves of it are
+normative.
+
+**Advance means `hmtx`.** The engine sums per-glyph advances from the font's own
+table and does not shape, so it does not kern. A renderer must be told the same,
+rather than left on its default: kerning is sparse and content-dependent — a
+kerning-heavy line measures several points narrower under shaping than the
+printout says, while an ordinary sentence measures identically — so a renderer
+that kerns disagrees with the document exactly where it is hardest to notice.
+
+**Leading is 1.2 times the font size.** A constant multiplier is predictable and
+font-independent, which is what a paginating engine needs: line spacing must not
+change when a typeface is substituted, because that changes how many lines fit
+and therefore where every page after it breaks.
+
+A character the resolved font lacks is measured and drawn as `.notdef`, which is
+a visible empty box, and recorded as a
+[warning](template.md#missing-glyphs). Metrics are unaffected, so nothing shifts.
 
 ## Measure, decide, commit
 
@@ -205,9 +227,9 @@ Given a band template and a context, measurement proceeds:
 
    An element whose vertical extent is **container-dependent** takes no part in
    that maximum. It is resolved afterwards, against the height the other elements
-   produced. Container-dependent means the element's height comes from the band's
-   bottom edge rather than from the element itself: its `bottom` was derived, and
-   it has no height of its own to contribute.
+   produced. Container-dependent means the element is anchored to the band's
+   bottom edge: either its `bottom` was derived and it has no height of its own,
+   or it declared a `bottom` outright.
 
    An element has a height of its own — a **content height** — when it is
 
@@ -730,7 +752,7 @@ Each of these names the template node, the record index, and the measured values
 | Deferred value taller than its placeholder | error |
 | Header and footer reservations together exceed the frame | error |
 | Barcode content not encodable in the selected type | error |
-| Expression type mismatch, missing field, or a `null` in a column that is not `nullable` | error |
+| Expression type mismatch, missing field, or a `null` in a member that is not `nullable` | error |
 | `FINAL` without `evaltime`, or `evaltime` without `FINAL` | error, at template validation |
 | Column count so high that column width is non-positive | error, at template validation |
 

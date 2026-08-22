@@ -366,14 +366,23 @@ The template's `scale` and `proportional` do not appear — both are resolved aw
 
 `stripes` is the encoded geometry, in modules:
 
-- **1-D types**: a flat array of alternating bar and space widths, starting with a
-  bar. Quiet zones are included as leading and trailing spaces.
-- **2-D types**: an array of rows, each an array of alternating dark and light run
-  lengths, starting with dark.
+- **1-D types**: a flat array of alternating bar and space widths, starting with
+  a bar. Quiet zones are included as leading and trailing spaces, ten modules at
+  each end, so the array opens with a **zero-width bar** followed by the leading
+  quiet zone — that is how a run starting with a space is expressed without
+  breaking the alternation.
+- **2-D types**: an array of rows, each an array of alternating dark and light
+  run lengths, starting with dark, and opening with a zero-length dark run where
+  the row starts light. A 2-D symbol carries whatever quiet zone its own encoding
+  requires and none is added.
+
+A 1-D symbol's extent across the coding direction — its bar height — is fifteen
+per cent of the symbol's length or a quarter of an inch, whichever is greater,
+unless `grow` expands it to the box.
 
 `module` is the narrow-element width in points, after any `grow` adjustment.
-`value` is the encoded string, recorded so a reader can verify the encoding without
-re-deriving it. A renderer draws filled rectangles and does no encoding.
+`value` is the encoded string, recorded so a reader can verify the encoding
+without re-deriving it. A renderer draws filled rectangles and does no encoding.
 
 ### `outline`
 

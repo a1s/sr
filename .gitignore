@@ -1,0 +1,16 @@
+*.bak
+*.exe
+*.tmp
+
+# Work directories
+dist/
+out/
+tmp/
+.claude/
+
+# Go workspace file
+go.work
+go.work.sum
+
+# env file
+env.mk
