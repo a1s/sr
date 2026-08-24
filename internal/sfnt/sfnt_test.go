@@ -366,3 +366,63 @@ func TestSubsetGlyphOutOfRange(test *testing.T) {
 		test.Error("a glyph past the end of the face subsetted")
 	}
 }
+
+// hhea's signs are normalised, because a face may not use them.
+//
+// The ascender and descender go straight into the PDF font descriptor's
+// /Ascent and /Descent, which are defined relative to the baseline:
+// above it positive, below it negative. A face that stores its descender
+// as a magnitude -- the wrong convention, and not a rare one -- would
+// otherwise state a descent above its own baseline.
+func TestHheaSignsAreNormalised(test *testing.T) {
+	want := load(test)
+	if want.Ascender <= 0 || want.Descender >= 0 {
+		test.Fatalf("the fixture itself is signed oddly: %d %d",
+			want.Ascender, want.Descender)
+	}
+
+	raw, err := os.ReadFile(goRegular)
+	if err != nil {
+		test.Fatal(err)
+	}
+	// Both metrics written as magnitudes, which is what the
+	// descender convention this guards against looks like.
+	patched := append([]byte(nil), raw...)
+	at := tableOffset(test, patched, "hhea")
+	binary.BigEndian.PutUint16(patched[at+4:at+6], uint16(abs16(test, want.Ascender)))
+	binary.BigEndian.PutUint16(patched[at+6:at+8], uint16(abs16(test, want.Descender)))
+
+	font, err := Parse(patched, 0)
+	if err != nil {
+		test.Fatal(err)
+	}
+	if font.Ascender != want.Ascender {
+		test.Errorf("ascender = %d, want %d", font.Ascender, want.Ascender)
+	}
+	if font.Descender != want.Descender {
+		test.Errorf("descender = %d, want %d, below the baseline",
+			font.Descender, want.Descender)
+	}
+}
+
+func abs16(test *testing.T, value int16) int16 {
+	test.Helper()
+	if value < 0 {
+		return -value
+	}
+	return value
+}
+
+// tableOffset finds where a table's bytes start in an sfnt file.
+func tableOffset(test *testing.T, raw []byte, want string) int {
+	test.Helper()
+	count := int(binary.BigEndian.Uint16(raw[4:6]))
+	for index := 0; index < count; index++ {
+		at := 12 + index*16
+		if string(raw[at:at+4]) == want {
+			return int(binary.BigEndian.Uint32(raw[at+8 : at+12]))
+		}
+	}
+	test.Fatalf("the fixture has no %s table", want)
+	return 0
+}

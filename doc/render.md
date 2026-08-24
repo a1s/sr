@@ -268,6 +268,13 @@ Nothing else -- a composite font addresses glyphs directly, so no table in
 the file maps characters. A composite glyph pulls its components into the
 subset and is rewritten to name their new positions.
 
+The font descriptor's `Ascent` and `Descent` are `hhea`'s -- the same pair
+the [baseline](#text) is measured from, so nothing in the file contradicts
+where the lines were put. They are signed as PDF defines them, the ascent above
+the baseline positive and the descent below it negative, whichever signs the
+face itself used: a face storing its descender as a magnitude is not rare,
+and copying that through would state a descent above the face's own baseline.
+
 The `BaseFont` name carries the six upper-case letters PDF requires in front of
 a subset, derived from the face and the glyphs it holds, so two subsets of one
 face differ and the same subset is stable across runs. The name after the tag

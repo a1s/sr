@@ -10,6 +10,7 @@ package sfnt
 import (
 	"encoding/binary"
 	"fmt"
+	"math"
 	"strings"
 )
 
@@ -28,11 +29,13 @@ type Font struct {
 	NumGlyphs int
 
 	XMin, YMin, XMax, YMax int16
-	Ascender, Descender    int16
-	CapHeight              int16
-	ItalicAngle            float64
-	FixedPitch             bool
-	WeightClass            uint16
+	// Ascender is positive and Descender negative,
+	// whichever way the face wrote them. See readHhea.
+	Ascender, Descender int16
+	CapHeight           int16
+	ItalicAngle         float64
+	FixedPitch          bool
+	WeightClass         uint16
 
 	// PostScriptName is name ID 6, which is the name a PDF
 	// font dictionary carries, falling back to the family
@@ -158,13 +161,34 @@ func (font *Font) readMaxp() error {
 	return nil
 }
 
+// readHhea reads the vertical extent, signed as PDF wants it: the
+// ascender above the baseline positive and the descender below it
+// negative, which is the descriptor's convention and the table's own.
+//
+// The signs are normalised rather than copied because files carry both
+// conventions -- a descender stored positive is not rare -- and this pair
+// goes straight into /Ascent and /Descent, where a positive descent puts
+// the bottom of the face above its baseline. The other reader of this
+// table normalises too, in fontres.hheaMetrics, to its own sign rule.
 func (font *Font) readHhea() {
 	hhea := font.Tables["hhea"]
 	if len(hhea) < 36 {
 		return
 	}
-	font.Ascender = int16(binary.BigEndian.Uint16(hhea[4:6]))
-	font.Descender = int16(binary.BigEndian.Uint16(hhea[6:8]))
+	font.Ascender = absInt16(int16(binary.BigEndian.Uint16(hhea[4:6])))
+	font.Descender = -absInt16(int16(binary.BigEndian.Uint16(hhea[6:8])))
+}
+
+// absInt16 is the magnitude of a metric, clamped where a face states the
+// one value a signed 16-bit magnitude cannot hold.
+func absInt16(value int16) int16 {
+	switch {
+	case value == math.MinInt16:
+		return math.MaxInt16
+	case value < 0:
+		return -value
+	}
+	return value
 }
 
 func (font *Font) readOS2() {

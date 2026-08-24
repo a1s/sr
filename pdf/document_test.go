@@ -3,6 +3,7 @@ package pdf
 import (
 	"bytes"
 	"encoding/base64"
+	"encoding/binary"
 	"image"
 	"image/color"
 	"image/png"
@@ -593,5 +594,65 @@ func TestWriteFileKeepsThePreviousFileOnFailure(test *testing.T) {
 	}
 	if !bytes.Equal(before, after) {
 		test.Errorf("the file changed: %d bytes before, %d after", len(before), len(after))
+	}
+}
+
+// The font descriptor states the face's extent the way PDF defines it:
+// /Ascent above the baseline, /Descent below it.
+//
+// The face here writes both of its hhea metrics as magnitudes,
+// which some do. Copying that into /Descent would put the bottom
+// of the face above its own baseline, and a reader substituting
+// the font would lay the text out from it.
+func TestDescriptorSignsTheExtent(test *testing.T) {
+	raw, err := os.ReadFile(goRegular)
+	if err != nil {
+		test.Fatal(err)
+	}
+	patched := append([]byte(nil), raw...)
+	count := int(binary.BigEndian.Uint16(patched[4:6]))
+	found := false
+	for index := 0; index < count; index++ {
+		at := 12 + index*16
+		if string(patched[at:at+4]) != "hhea" {
+			continue
+		}
+		hhea := int(binary.BigEndian.Uint32(patched[at+8 : at+12]))
+		descender := int16(binary.BigEndian.Uint16(patched[hhea+6 : hhea+8]))
+		if descender < 0 {
+			descender = -descender
+		}
+		binary.BigEndian.PutUint16(patched[hhea+6:hhea+8], uint16(descender))
+		found = true
+	}
+	if !found {
+		test.Fatal("the fixture has no hhea table")
+	}
+
+	path := filepath.Join(test.TempDir(), "Magnitudes.ttf")
+	if err := os.WriteFile(path, patched, 0o644); err != nil {
+		test.Fatal(err)
+	}
+	doc := document(text(printout.Box{Left: 10, Top: 10, Width: 200, Height: 12},
+		"left", "Descent"))
+	doc.Header.Fonts[0].ResolvedFile = path
+
+	_, file := render(test, doc)
+	fonts, err := file.Fonts(file.Pages()[0])
+	if err != nil {
+		test.Fatal(err)
+	}
+	if len(fonts) != 1 {
+		test.Fatalf("fonts = %d, want one", len(fonts))
+	}
+	for _, font := range fonts {
+		ascent, _ := file.Get(font.Descriptor, "Ascent").(float64)
+		descent, _ := file.Get(font.Descriptor, "Descent").(float64)
+		if ascent <= 0 {
+			test.Errorf("/Ascent = %v, want it above the baseline", ascent)
+		}
+		if descent >= 0 {
+			test.Errorf("/Descent = %v, want it below the baseline", descent)
+		}
 	}
 }
