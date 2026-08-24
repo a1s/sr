@@ -127,6 +127,7 @@ func (resolver *Resolver) resolve(req Request) (*Face, error) {
 		}
 		resolver.checkDeclaredStyle(req, info.Style, fmt.Sprintf("data blob %q", req.Data))
 		face := newFace(info.Font)
+		face.raw, face.index = raw, info.Index
 		face.ResolvedData, face.ResolvedFace, face.ResolvedBy =
 			req.Data, info.Family, ByExplicit
 		return face, nil
@@ -146,6 +147,7 @@ func (resolver *Resolver) resolve(req Request) (*Face, error) {
 		}
 		resolver.checkDeclaredStyle(req, info.Style, filepath.ToSlash(path))
 		face := newFace(info.Font)
+		face.raw, face.index = raw, info.Index
 		face.ResolvedFile, face.ResolvedFace, face.ResolvedBy =
 			filepath.ToSlash(path), info.Family, ByExplicit
 		return face, nil
@@ -161,6 +163,7 @@ func (resolver *Resolver) resolve(req Request) (*Face, error) {
 	// platform matcher that answers every query.
 	if info := resolver.lookupHost(req.Typeface, req.Bold, req.Italic); info != nil {
 		face := newFace(info.Font)
+		face.index = info.Index
 		face.Requested = req.Typeface
 		face.ResolvedFile, face.ResolvedFace, face.ResolvedBy =
 			filepath.ToSlash(info.File), info.Family, ByHost
@@ -171,6 +174,7 @@ func (resolver *Resolver) resolve(req Request) (*Face, error) {
 	for _, alias := range aliases[strings.ToLower(req.Typeface)] {
 		if info := resolver.lookupHost(alias, req.Bold, req.Italic); info != nil {
 			face := newFace(info.Font)
+			face.index = info.Index
 			face.Requested = req.Typeface
 			face.ResolvedFile, face.ResolvedFace, face.ResolvedBy =
 				filepath.ToSlash(info.File), info.Family, ByAlias
@@ -379,11 +383,12 @@ func (resolver *Resolver) substitute() (*Face, error) {
 			if err != nil {
 				continue
 			}
-			ft, family, err := resolver.pickRegularFace(raw)
+			ft, family, index, err := resolver.pickRegularFace(raw)
 			if err != nil {
 				continue
 			}
 			face := newFace(ft)
+			face.index = index
 			face.ResolvedFile, face.ResolvedFace, face.ResolvedBy =
 				filepath.ToSlash(path), family, BySubstitute
 			resolver.checkMonospaced(face)
@@ -396,14 +401,15 @@ func (resolver *Resolver) substitute() (*Face, error) {
 // pickRegularFace chooses the face in a collection whose style bits
 // say neither bold nor slanted -- not face 0, which is the same face
 // in Menlo.ttc but is not a rule collections keep.
-func (resolver *Resolver) pickRegularFace(raw []byte) (ft *gofont.Font, family string, err error) {
+func (resolver *Resolver) pickRegularFace(raw []byte) (
+	ft *gofont.Font, family string, index int, err error) {
 	loaders, err := ot.NewLoaders(bytes.NewReader(raw))
 	if err != nil {
-		return nil, "", err
+		return nil, "", 0, err
 	}
 	var first *FaceInfo
-	for index, ld := range loaders {
-		info, err := describe(ld, "", index)
+	for at, ld := range loaders {
+		info, err := describe(ld, "", at)
 		if err != nil {
 			continue
 		}
@@ -411,13 +417,13 @@ func (resolver *Resolver) pickRegularFace(raw []byte) (ft *gofont.Font, family s
 			first = info
 		}
 		if !info.Style.Bold && !info.Style.Italic {
-			return info.Font, info.Family, nil
+			return info.Font, info.Family, at, nil
 		}
 	}
 	if first == nil {
-		return nil, "", fmt.Errorf("no usable face")
+		return nil, "", 0, fmt.Errorf("no usable face")
 	}
-	return first.Font, first.Family, nil
+	return first.Font, first.Family, first.Index, nil
 }
 
 // checkMonospaced verifies the property the substitute is chosen for.

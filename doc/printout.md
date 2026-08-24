@@ -10,6 +10,11 @@ needs no data, no template, and no expression evaluator.
 
 Printouts are machine-generated and not intended for hand editing.
 
+What a printout leaves to a renderer -- baseline placement inside a line's
+leading, how a justified line spends its slack, what a dash pattern measures --
+is specified in [render.md](render.md), which is the contract on the other
+side of this one.
+
 ## Contents
 
 - [Encoding](#encoding)
@@ -166,6 +171,11 @@ of that name, and the alias table pointed at Arial. `requested` is present becau
 a `typeface` went through the resolution chain, and `resolvedFile` is the absolute
 path that was opened. Had the machine held a real Helvetica — macOS does —
 `resolvedBy` would be `host` and `resolvedFace` would say `Helvetica`.
+
+`resolvedIndex` is the face's position inside a font collection, absent for the
+ordinary single-face file. A `.ttc` holds several faces and the file name alone
+does not say which one was measured, so a renderer that assumed the first would
+set the text in a different typeface with nothing to show that it had.
 
 `resolvedFile` and `resolvedFace` are what was measured. `resolvedBy` is the step
 of the [resolution chain](template.md#font-resolution) that produced it:

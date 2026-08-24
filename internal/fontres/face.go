@@ -58,6 +58,13 @@ type Face struct {
 	upem    float64
 	widths  map[rune]float64
 	missing map[rune]bool
+
+	// raw is the file the face was parsed from, held only where the
+	// bytes were in hand, and index is the face's position inside it.
+	// The index is what reaches the printout, so that a renderer opens
+	// the same face out of a collection the engine measured.
+	raw   []byte
+	index int
 }
 
 // newFace wraps a parsed font at a size.
@@ -81,6 +88,30 @@ func parseFaceBytes(data []byte) (*FaceInfo, error) {
 		return nil, fmt.Errorf("no faces in font")
 	}
 	return describe(loaders[0], "", 0)
+}
+
+// Load parses a font file for measuring, outside the resolution chain.
+//
+// A renderer takes this path: the printout already names the file and the
+// face inside it, so there is nothing left to resolve, and measuring
+// through the same code as the engine is what keeps the two agreeing.
+func Load(raw []byte, index int, size int) (*Face, error) {
+	loaders, err := ot.NewLoaders(bytes.NewReader(raw))
+	if err != nil {
+		return nil, err
+	}
+	if index < 0 || index >= len(loaders) {
+		return nil, fmt.Errorf("face %d of a font holding %d", index, len(loaders))
+	}
+	info, err := describe(loaders[index], "", index)
+	if err != nil {
+		return nil, err
+	}
+	face := newFace(info.Font)
+	face.Size = size
+	face.ResolvedFace = info.Family
+	face.raw, face.index = raw, index
+	return face, nil
 }
 
 // Advance returns a rune's advance width in points at the face's size.
@@ -141,4 +172,60 @@ func (face *Face) MissingRunes() []rune {
 func (face *Face) Key() string {
 	return fmt.Sprintf("%s/%d/%t/%t/%t",
 		face.Name, face.Size, face.Bold, face.Italic, face.Underline)
+}
+
+// Program is the font file the face was parsed from, and the index of
+// the face inside it.
+//
+// The bytes are present for a face loaded from a file or a data blob
+// and absent for one found on the host, which was parsed from a file
+// the resolver did not keep. The index is always the face's own.
+func (face *Face) Program() (raw []byte, index int) { return face.raw, face.index }
+
+// Upem is the face's units per em, the denominator every font-unit
+// metric below is expressed in.
+func (face *Face) Upem() float64 { return face.upem }
+
+// Glyph maps a rune to a glyph index, reporting whether the font has it.
+//
+// The mapping comes from the same cmap the engine measured through,
+// which is what keeps a renderer's glyph choice and the printout's
+// metrics describing one font.
+func (face *Face) Glyph(char rune) (uint16, bool) {
+	gid, ok := face.face.NominalGlyph(char)
+	return uint16(gid), ok
+}
+
+// GlyphAdvance returns a glyph's advance in font units.
+func (face *Face) GlyphAdvance(gid uint16) float64 {
+	return float64(face.face.HorizontalAdvance(gofont.GID(gid)))
+}
+
+// VerticalMetrics returns the ascender and descender in font units,
+// the descender positive downward.
+//
+// They position the baseline inside the leading the printout carries;
+// they do not decide the leading, which is a constant multiple of the size.
+func (face *Face) VerticalMetrics() (ascender, descender float64) {
+	if extents, ok := face.face.FontHExtents(); ok {
+		return float64(extents.Ascender), -float64(extents.Descender)
+	}
+	// A face without horizontal extents is pathological; split the em
+	// the way the common Latin face does rather than pile everything
+	// above the baseline.
+	return 0.8 * face.upem, 0.2 * face.upem
+}
+
+// UnderlineMetrics returns the underline's offset below the baseline
+// and its thickness, in font units.
+func (face *Face) UnderlineMetrics() (offset, thickness float64) {
+	offset = -float64(face.face.LineMetric(gofont.UnderlinePosition))
+	thickness = float64(face.face.LineMetric(gofont.UnderlineThickness))
+	if thickness <= 0 {
+		thickness = face.upem / 20
+	}
+	if offset <= 0 {
+		offset = face.upem / 10
+	}
+	return offset, thickness
 }

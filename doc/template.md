@@ -771,7 +771,7 @@ Text.
 
 ```kdl
 field expr="amount" format="%.2f" align="right" width="15mm"
-field text=" Film title" width="35mm" valign="center"
+field text="Film title" left="3mm" width="32mm" valign="center"
 field expr="notes" stretch=#true left=0 right=0
 ```
 

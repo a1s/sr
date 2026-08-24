@@ -8,12 +8,11 @@ page count.
 A Go library with a CLI over it. Template plus JSON in, PDF out,
 one static binary.
 
-> **Status:** the engine is implemented and produces printouts. Two things named
-> below are not built yet: the **PDF renderer**, so `WritePDF` and `sr render`
-> do not exist, and **subreports**, which a build refuses with the offending
-> node named. There is no CLI binary yet either — the flags below describe the
-> shell that will sit over the library. Everything else in these documents is
-> implemented and tested.
+> **Status:** the engine and the PDF renderer are implemented. Two things named
+> below are not built yet: **subreports**, which a build refuses with the
+> offending node named, and the **CLI** — there is no binary yet, and the flags
+> below describe the shell that will sit over the library.
+> Everything else in these documents is implemented and tested.
 
 ## Documentation
 
@@ -23,13 +22,15 @@ one static binary.
 | [doc/expressions.md](doc/expressions.md) | Expression language, predefined names, formatting, variable semantics |
 | [doc/layout.md](doc/layout.md) | Layout and pagination |
 | [doc/printout.md](doc/printout.md) | The intermediate document a renderer consumes |
+| [doc/render.md](doc/render.md) | PDF rendering: what a renderer decides, and what it must not |
 | [doc/decisions.md](doc/decisions.md) | Why the design is what it is, and what it replaces |
 | [example/sakila/](example/sakila/) | Reference template and dataset |
 | [example/invoices/](example/invoices/) | Second example: subreports, region grouping, the remaining variable modes |
 | [example/fonts/](example/fonts/) | Fonts committed so examples resolve identically everywhere |
 
-The Go packages are `github.com/a1s/sr` for the library and
-`github.com/a1s/sr/printout` for the document a renderer reads.
+The Go packages are `github.com/a1s/sr` for the library,
+`github.com/a1s/sr/printout` for the document a renderer reads,
+and `github.com/a1s/sr/pdf` for the renderer.
 
 ## How it works
 
@@ -83,7 +84,6 @@ sr render report.srp.jsonl -o report.pdf
 package main
 
 import (
-    "os"
     "time"
 
     "github.com/a1s/sr"
@@ -105,7 +105,7 @@ func main() {
         },
     }
 
-    printout, err := tpl.Build(rows,
+    out, err := tpl.Build(rows,
         sr.WithParam("period_start", time.Date(2005, 1, 1, 0, 0, 0, 0, time.UTC)),
         sr.WithBuildTime(time.Date(2026, 8, 4, 9, 12, 44, 0, time.UTC)),
         sr.StrictFonts(),
@@ -114,14 +114,24 @@ func main() {
         panic(err)
     }
 
-    if err := printout.WriteFile("report.srp.jsonl"); err != nil {
+    if err := sr.WritePDF(out, "report.pdf"); err != nil {
         panic(err)
     }
 }
 ```
 
-`WritePDF` arrives with the renderer; until then a printout serializes to
-NDJSON or CBOR, which is the artifact a renderer consumes.
+`sr.WritePDF` is `pdf.WriteFile`, re-exported for the common case
+of building and rendering in one place. Use the `pdf` package directly
+to render to a writer, or to a printout read back from a file:
+
+```go
+out, err := printout.ReadFile("report.srp.jsonl")
+err = pdf.Write(out, os.Stdout)
+```
+
+A printout also serializes to NDJSON or CBOR with `out.WriteFile(path)`,
+which is the artifact worth archiving: rendering a printout read back
+gives the same PDF, byte for byte, as rendering the one it was built from.
 
 Records may be `map[string]any` or structs; struct fields map to declared members
 by name, or by an `sr:"..."` tag. The CLI is a thin shell over this API.
@@ -174,10 +184,12 @@ identically on any machine and work under `--strict-fonts`. Swap `file=` for
 
 ## Reproducible output
 
-The same template over the same data produces byte-identical printouts when
-`--build-time` is fixed and `--strict-fonts` is set — **on any machine**, not just
-across runs on one. Without the first, the run timestamp differs; without the second,
-output depends on which fonts are installed.
+The same template over the same data produces byte-identical printouts, and
+byte-identical PDFs, when `--build-time` is fixed and `--strict-fonts` is set --
+**on any machine**, not just across runs on one. Rendering adds no timestamp
+of its own: a PDF's creation date is the run's `BUILD_TIME`. Without the first,
+the run timestamp differs; without the second, output depends on which fonts
+are installed.
 
 Nothing machine-specific survives in a strict printout. Strict mode admits only fonts
 the template named by path, and every path the template named — fonts and

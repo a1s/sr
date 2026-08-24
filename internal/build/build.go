@@ -277,15 +277,17 @@ func (eng *engine) face(name string) (*fontres.Face, error) {
 	}
 	eng.faces[name] = face
 
+	_, index := face.Program()
 	entry := printout.FontEntry{
-		Name:         face.Name,
-		Size:         face.Size,
-		Bold:         face.Bold,
-		Italic:       face.Italic,
-		Underline:    face.Underline,
-		Requested:    face.Requested,
-		ResolvedFace: face.ResolvedFace,
-		ResolvedBy:   string(face.ResolvedBy),
+		Name:          face.Name,
+		Size:          face.Size,
+		Bold:          face.Bold,
+		Italic:        face.Italic,
+		Underline:     face.Underline,
+		Requested:     face.Requested,
+		ResolvedIndex: index,
+		ResolvedFace:  face.ResolvedFace,
+		ResolvedBy:    string(face.ResolvedBy),
 	}
 	if face.ResolvedData != "" {
 		entry.ResolvedData = face.ResolvedData
