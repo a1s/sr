@@ -1736,6 +1736,17 @@ silently wrong typeface, with no diagnostic anywhere. `resolvedIndex` is now
 written beside `resolvedFile`, absent for the ordinary single-face file.
 The engine knew the index all along; nothing carried it across.
 
+Writing it down exposed a second half of the same defect at the other end
+of the chain. A template naming a collection by `file=` could only ever be
+given its first face, because an explicit file was taken to *be* a face --
+so the index the printout had just gained was unreachable from a template,
+and a `.ttc` pinned with `bold=#true` produced the regular face and a warning
+that it was not bold. The declared style now chooses among a collection's faces:
+the first whose own style bits are exactly the ones declared, and the first face
+when none is. Style and not position, because face 0 of a collection is not
+reliably its regular one -- it is in `Menlo.ttc`, which is what makes the
+assumption tempting.
+
 ### One code per character, not per glyph
 
 The obvious subset is one entry per glyph, and it is wrong for text extraction.
@@ -1767,6 +1778,37 @@ line's slot while leaving a gap above it. Centring the face's em extent in the
 leading splits the overhang, so a substituted face does not collide on one side
 only. Neither choice can move a page break, which makes this the one place in
 the pipeline where a per-face value is safe.
+
+### Which ascender: `hhea`, and only `hhea`
+
+A face carries two vertical extents. `hhea` has one pair, OS/2 has
+`sTypoAscender` and `sTypoDescender`, and a face can set `USE_TYPO_METRICS`
+in `fsSelection` to ask readers to prefer the second. They are not the same
+numbers, and on a face that sets the bit the difference moves a baseline by
+about a point.
+
+Shaping libraries honour the request, which is right for their purpose and
+wrong here. The PDF font descriptor this renderer writes carries `hhea`'s ascent
+and descent -- a reader that re-measures the text has only those -- so if the
+baseline were placed from OS/2, the file would state one em extent and be laid
+out to another. One table has to answer both questions. `hhea` is the one the
+format [specifies](render.md#text), and it is read from the table directly rather
+than through the shaping library, which would have returned the other pair.
+
+How exposed is a report to this in practice? Less than the trap suggests, on the
+evidence to hand: of the 165 faces installed on the machine this was written on,
+17 set the bit -- the Cascadia and Sitka families, mostly -- and in every one of
+the 17 the two pairs are *identical*. The bit exists so that a face whose glyphs
+overflow the Latin line box can still state the line spacing its designer
+intended, so the faces where the pairs genuinely differ are the ones a report
+reaches for when it sets a script this machine has no font for.
+
+That is why the regression test patches the bit into a committed face rather than
+trusting a fixture to carry it: neither committed face sets it, and the faces
+that would diverge cannot be committed here. The reason for choosing `hhea` does
+not rest on how common the divergence is, though -- it is that the descriptor
+states `hhea`, so anything else deciding the baseline makes the file contradict
+itself.
 
 ### A justified line is drawn in pieces, and the pieces carry their spaces
 
@@ -1837,6 +1879,18 @@ Two things that oracle cannot establish, and one of them is not automatable:
 **Rendering costs about 0.6 ms per page.** A hundred thousand rows over 1,429
 pages render in 0.9 s, a thousand rows over 15 pages in 11 ms -- linear, with
 the font subset built once for the document rather than once per page.
+
+### The output file is not opened until the render succeeds
+
+`WriteFile` renders the whole document into memory and writes the file
+afterwards. The obvious order -- open the file, render into it -- truncates
+the previous report to nothing before it knows whether the render works, and
+the render can fail for a reason outside the document: it reads the font files
+the printout resolved, and those are not part of it and can have moved since it
+was written. Losing yesterday's report to a missing font is not an acceptable way
+to report a missing font. The render is buffered regardless, since a PDF's cross
+reference table cannot be written until the objects are, so the safe order costs
+nothing.
 
 ### Not built at this stage
 

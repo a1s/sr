@@ -2,6 +2,7 @@ package sr
 
 import (
 	"bytes"
+	"encoding/binary"
 	"math"
 	"os"
 	"path/filepath"
@@ -288,5 +289,103 @@ func TestWritePDF(test *testing.T) {
 	}
 	if !bytes.Equal(raw, direct.Bytes()) {
 		test.Errorf("WritePDF wrote %d bytes, Write %d", len(raw), direct.Len())
+	}
+}
+
+// collectionFile writes a two-face ttcf collection into dir.
+//
+// The faces are the two committed fonts, whole, with each
+// table directory's offsets shifted to where its face landed.
+// Building the fixture rather than committing one keeps a binary
+// out of the tree; the format is explained where the resolver's
+// own collection test builds the same thing.
+func collectionFile(test *testing.T, dir string) string {
+	test.Helper()
+	out := make([]byte, 20)
+	copy(out, "ttcf")
+	binary.BigEndian.PutUint32(out[4:8], 0x00010000)
+	binary.BigEndian.PutUint32(out[8:12], 2)
+
+	for index, name := range []string{"Go-Regular.ttf", "Go-Bold.ttf"} {
+		face, err := os.ReadFile(filepath.Join("example/fonts", name))
+		if err != nil {
+			test.Fatal(err)
+		}
+		for len(out)%4 != 0 {
+			out = append(out, 0)
+		}
+		base := len(out)
+		binary.BigEndian.PutUint32(out[12+4*index:16+4*index], uint32(base))
+		out = append(out, face...)
+		for entry := 0; entry < int(binary.BigEndian.Uint16(out[base+4:base+6])); entry++ {
+			at := base + 12 + entry*16
+			binary.BigEndian.PutUint32(out[at+8:at+12],
+				binary.BigEndian.Uint32(out[at+8:at+12])+uint32(base))
+		}
+	}
+
+	path := filepath.Join(dir, "Go.ttc")
+	if err := os.WriteFile(path, out, 0o644); err != nil {
+		test.Fatal(err)
+	}
+	return path
+}
+
+// A face inside a collection survives the whole way to the page.
+//
+// The engine chooses it, the printout records which one by index,
+// and the renderer opens that same one out of the file. Nothing else
+// in the suite carries a face index other than zero, and a collection
+// whose faces are silently interchanged is a report set in the wrong
+// weight with no diagnostic anywhere.
+func TestCollectionFaceReachesThePage(test *testing.T) {
+	dir := test.TempDir()
+	collectionFile(test, dir)
+	const source = `report name="Collection" {
+  records { member "n" type="int" }
+  font "bold" file="Go.ttc" size=12 bold=#true
+  layout pagesize="A6" leftmargin=20 rightmargin=20 topmargin=20 bottommargin=20 {
+    style font="bold" color="black"
+    detail height=16 {
+      field expr="n" format="row %d" left=0 width=120 height=14
+    }
+  }
+}`
+	tpl, err := ParseTemplate(filepath.Join(dir, "collection.kdl"), source)
+	if err != nil {
+		test.Fatalf("loading the template:\n%v", err)
+	}
+	doc, err := tpl.Build(rowsOf(1, 2), StrictFonts(), WithBuildTime(fixedTime))
+	if err != nil {
+		test.Fatalf("building:\n%v", err)
+	}
+	if err := doc.Validate(); err != nil {
+		test.Fatal(err)
+	}
+	if len(doc.Header.Warnings) != 0 {
+		test.Errorf("the collection holds the declared face,"+
+			" so there is nothing to warn about: %v", doc.Header.Warnings)
+	}
+	if got := doc.Header.Fonts[0].ResolvedIndex; got != 1 {
+		test.Fatalf("resolvedIndex = %d, want the bold face at 1", got)
+	}
+
+	pages, raw := renderScan(test, doc)
+	checkRendered(test, doc, pages)
+	file, err := pdfscan.Read(raw)
+	if err != nil {
+		test.Fatal(err)
+	}
+	fonts, err := file.Fonts(file.Pages()[0])
+	if err != nil {
+		test.Fatal(err)
+	}
+	if len(fonts) != 1 {
+		test.Fatalf("fonts on the page = %d, want one", len(fonts))
+	}
+	for _, font := range fonts {
+		if !strings.HasSuffix(font.BaseFont, "+Go-Bold") {
+			test.Errorf("BaseFont = %q, want the collection's bold face", font.BaseFont)
+		}
 	}
 }

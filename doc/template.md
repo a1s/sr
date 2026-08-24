@@ -494,10 +494,18 @@ name a font resource directly; `typeface` goes through
 [font resolution](#font-resolution).
 
 `bold` and `italic` select a face when resolving by `typeface`.
- With `file` or `data` there is nothing to select, since the named file
-*is* the face. They are still accepted there, and are descriptive:
-they travel to the printout's [font entry](printout.md#fonts) and record
-what the template says the face is.
+
+With `file` or `data` they usually select nothing, because a font file
+usually holds one face and that face is what was named. A **collection** --
+a `.ttc`, or an `.otc` -- holds several, and then they choose among them:
+the first face whose own [style bits](#host-enumeration) are exactly the
+ones declared, and the file's first face when none matches. Style, not
+position: face 0 of a collection is not reliably its regular one.
+
+Either way they are also descriptive: they travel to the printout's
+[font entry](printout.md#fonts) and record what the template says the face
+is, and the face that was chosen is recorded beside them as
+[`resolvedIndex`](printout.md#fonts).
 
 Because that entry is read as a description of the face, declaring a style
 the file does not carry is reported: resolution reads the face's own

@@ -175,7 +175,9 @@ path that was opened. Had the machine held a real Helvetica — macOS does —
 `resolvedIndex` is the face's position inside a font collection, absent for the
 ordinary single-face file. A `.ttc` holds several faces and the file name alone
 does not say which one was measured, so a renderer that assumed the first would
-set the text in a different typeface with nothing to show that it had.
+set the text in a different typeface with nothing to show that it had. It can be
+non-zero however the font was resolved: a template naming a collection by `file`
+[chooses a face inside it](template.md#font) as much as host resolution does.
 
 `resolvedFile` and `resolvedFace` are what was measured. `resolvedBy` is the step
 of the [resolution chain](template.md#font-resolution) that produced it:

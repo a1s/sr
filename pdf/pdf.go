@@ -15,6 +15,7 @@
 package pdf
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"os"
@@ -69,17 +70,17 @@ func Write(doc *printout.Printout, writer io.Writer, options ...Option) error {
 }
 
 // WriteFile renders a printout to a file.
+//
+// The whole document is rendered before the file is touched.
+// A render that fails -- a font file that has moved since the printout
+// was written is the ordinary way -- leaves the previous report where
+// it was rather than truncating it to nothing.
 func WriteFile(doc *printout.Printout, path string, options ...Option) error {
-	file, err := os.Create(path)
-	if err != nil {
+	var raw bytes.Buffer
+	if err := Write(doc, &raw, options...); err != nil {
 		return err
 	}
-	err = Write(doc, file, options...)
-	closeErr := file.Close()
-	if err != nil {
-		return err
-	}
-	return closeErr
+	return os.WriteFile(path, raw.Bytes(), 0o644)
 }
 
 // renderer holds one render's state: the resources gathered

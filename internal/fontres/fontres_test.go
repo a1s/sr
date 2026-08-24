@@ -1,7 +1,10 @@
 package fontres
 
 import (
+	"encoding/binary"
 	"math"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -37,9 +40,10 @@ func TestExplicitResolution(test *testing.T) {
 	}
 }
 
-// A font named by file selects its face outright, so bold and italic
-// decide nothing there. Declaring one the face does not carry is not an error,
-// but the printout would then describe the face wrongly, so resolution warns.
+// A single-face file selects its face outright, so bold and italic decide
+// nothing there -- unlike a collection, which has faces to choose between.
+// Declaring a style the face does not carry is not an error, but the printout
+// would then describe the face wrongly, so resolution warns.
 func TestDeclaredStyleAgainstTheFile(test *testing.T) {
 	resolver := NewResolver(fontDir, true)
 	_, err := resolver.Resolve(Request{Name: "body", File: "Go-Regular.ttf", Size: 9, Bold: true})
@@ -377,5 +381,193 @@ func TestMissingRunesAreOrdered(test *testing.T) {
 		if got[index-1] >= got[index] {
 			test.Fatalf("MissingRunes is not ordered: %q", got)
 		}
+	}
+}
+
+// tableRange finds a table in an sfnt file: where its bytes start,
+// and how many there are.
+func tableRange(test *testing.T, raw []byte, want string) (start, length int) {
+	test.Helper()
+	if len(raw) < 12 {
+		test.Fatal("not an sfnt")
+	}
+	count := int(binary.BigEndian.Uint16(raw[4:6]))
+	for index := 0; index < count; index++ {
+		at := 12 + index*16
+		if at+16 > len(raw) {
+			break
+		}
+		if string(raw[at:at+4]) != want {
+			continue
+		}
+		start = int(binary.BigEndian.Uint32(raw[at+8 : at+12]))
+		length = int(binary.BigEndian.Uint32(raw[at+12 : at+16]))
+		return start, length
+	}
+	test.Fatalf("the fixture has no %s table", want)
+	return 0, 0
+}
+
+// A face's vertical metrics are hhea's, and stay hhea's when the face
+// asks readers to prefer OS/2's typographic pair instead.
+//
+// The shaping library this package parses with honours that request, and
+// the two pairs differ by a point or so in the faces that set the bit.
+// The renderer places its baselines from these numbers and writes the
+// face's hhea values into the PDF font descriptor, so one table has to
+// answer both -- and doc/render.md names hhea.
+func TestVerticalMetricsComeFromHhea(test *testing.T) {
+	raw := mustReadFont(test)
+
+	hheaAt, _ := tableRange(test, raw, "hhea")
+	wantAscender := float64(int16(binary.BigEndian.Uint16(raw[hheaAt+4 : hheaAt+6])))
+	wantDescender := -float64(int16(binary.BigEndian.Uint16(raw[hheaAt+6 : hheaAt+8])))
+
+	// USE_TYPO_METRICS, fsSelection bit 7, with a typographic pair a
+	// point clear of hhea's so that reading the wrong one shows.
+	patched := append([]byte(nil), raw...)
+	os2At, os2Len := tableRange(test, patched, "OS/2")
+	if os2Len < 78 {
+		test.Fatalf("OS/2 is %d bytes, too short to carry the typographic metrics", os2Len)
+	}
+	selection := binary.BigEndian.Uint16(patched[os2At+62 : os2At+64])
+	binary.BigEndian.PutUint16(patched[os2At+62:os2At+64], selection|0x80)
+	typoAscender := int16(wantAscender) - 300
+	typoDescender := int16(-wantDescender) + 300
+	binary.BigEndian.PutUint16(patched[os2At+68:os2At+70], uint16(typoAscender))
+	binary.BigEndian.PutUint16(patched[os2At+70:os2At+72], uint16(typoDescender))
+	if float64(typoAscender) == wantAscender {
+		test.Fatal("the patched metrics match hhea, so this proves nothing")
+	}
+
+	// The renderer's path.
+	face, err := Load(patched, 0, 10)
+	if err != nil {
+		test.Fatal(err)
+	}
+	ascender, descender := face.VerticalMetrics()
+	if ascender != wantAscender || descender != wantDescender {
+		test.Errorf("Load: ascender, descender = %v, %v; want hhea's %v, %v",
+			ascender, descender, wantAscender, wantDescender)
+	}
+
+	// The engine's path, through the resolution chain.
+	dir := test.TempDir()
+	path := filepath.Join(dir, "Patched.ttf")
+	if err := os.WriteFile(path, patched, 0o644); err != nil {
+		test.Fatal(err)
+	}
+	resolved, err := NewResolver(dir, true).Resolve(
+		Request{Name: "body", File: "Patched.ttf", Size: 10})
+	if err != nil {
+		test.Fatal(err)
+	}
+	ascender, descender = resolved.VerticalMetrics()
+	if ascender != wantAscender || descender != wantDescender {
+		test.Errorf("resolved: ascender, descender = %v, %v; want hhea's %v, %v",
+			ascender, descender, wantAscender, wantDescender)
+	}
+}
+
+// buildCollection packs whole font files into one ttcf collection.
+//
+// A real collection shares tables between its faces. This one does not,
+// which the format allows: each face keeps its own table directory, with
+// every offset in it shifted to wherever the face landed in the file.
+func buildCollection(test *testing.T, names ...string) []byte {
+	test.Helper()
+	out := make([]byte, 12+4*len(names))
+	copy(out, "ttcf")
+	binary.BigEndian.PutUint32(out[4:8], 0x00010000)
+	binary.BigEndian.PutUint32(out[8:12], uint32(len(names)))
+
+	for index, name := range names {
+		face, err := readFile(filepath.Join(fontDir, name))
+		if err != nil {
+			test.Fatal(err)
+		}
+		for len(out)%4 != 0 {
+			out = append(out, 0)
+		}
+		base := len(out)
+		binary.BigEndian.PutUint32(out[12+4*index:16+4*index], uint32(base))
+		out = append(out, face...)
+
+		count := int(binary.BigEndian.Uint16(out[base+4 : base+6]))
+		for entry := 0; entry < count; entry++ {
+			at := base + 12 + entry*16
+			was := binary.BigEndian.Uint32(out[at+8 : at+12])
+			binary.BigEndian.PutUint32(out[at+8:at+12], was+uint32(base))
+		}
+	}
+	return out
+}
+
+// A collection holds several faces, so a template naming one by file has
+// something to choose after all, and the declared style is what chooses.
+//
+// The face index reaches the printout, and a renderer opens the file
+// by it, so picking the wrong one here sets the whole report in the
+// wrong weight.
+func TestCollectionFaceIsChosenByStyle(test *testing.T) {
+	dir := test.TempDir()
+	path := filepath.Join(dir, "Go.ttc")
+	err := os.WriteFile(path, buildCollection(test, "Go-Regular.ttf", "Go-Bold.ttf"), 0o644)
+	if err != nil {
+		test.Fatal(err)
+	}
+
+	for _, want := range []struct {
+		bold  bool
+		index int
+	}{{false, 0}, {true, 1}} {
+		resolver := NewResolver(dir, true)
+		face, err := resolver.Resolve(
+			Request{Name: "body", File: "Go.ttc", Size: 9, Bold: want.bold})
+		if err != nil {
+			test.Fatalf("bold=%t: %v", want.bold, err)
+		}
+		if face.FaceIndex() != want.index {
+			test.Errorf("bold=%t: face index %d, want %d",
+				want.bold, face.FaceIndex(), want.index)
+		}
+		if len(resolver.Warnings) != 0 {
+			test.Errorf("bold=%t: the chosen face carries the declared style,"+
+				" so there is nothing to warn about: %v", want.bold, resolver.Warnings)
+		}
+		// Bold is wider than regular in this family; measuring proves the
+		// index reached the face rather than only the printout.
+		width := face.Width("Payment")
+		other := 0.0
+		if want.bold {
+			other = regular(test, 9).Width("Payment")
+		}
+		if want.bold && width <= other {
+			test.Errorf("the bold face measures %v, no wider than regular's %v",
+				width, other)
+		}
+	}
+}
+
+// A collection asked for a style none of its faces has falls back to the
+// first face, and the mismatch is reported as it is for a single file.
+func TestCollectionWithoutTheDeclaredStyle(test *testing.T) {
+	dir := test.TempDir()
+	path := filepath.Join(dir, "Go.ttc")
+	err := os.WriteFile(path, buildCollection(test, "Go-Regular.ttf", "Go-Bold.ttf"), 0o644)
+	if err != nil {
+		test.Fatal(err)
+	}
+	resolver := NewResolver(dir, true)
+	face, err := resolver.Resolve(
+		Request{Name: "body", File: "Go.ttc", Size: 9, Italic: true})
+	if err != nil {
+		test.Fatal(err)
+	}
+	if face.FaceIndex() != 0 {
+		test.Errorf("face index %d, want the first face", face.FaceIndex())
+	}
+	if len(resolver.Warnings) != 1 {
+		test.Fatalf("want one warning about the declared style, got %v", resolver.Warnings)
 	}
 }

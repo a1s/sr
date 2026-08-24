@@ -72,6 +72,12 @@ baseline(n) = box.y + (leading − (ascender + descender)) / 2
 where `ascender` and `descender` come from the resolved face's `hhea` table,
 scaled to the font size, the descender counted positive downward.
 
+`hhea`, and not OS/2's `sTypoAscender` and `sTypoDescender`. A face may set
+`USE_TYPO_METRICS` to ask readers to prefer that second pair, and shaping
+libraries honour it, but the [font descriptor](#fonts-in-the-file) this renderer
+writes carries the `hhea` values — so a reader that reflows or re-measures the
+text has only those. One table answers both, and it is this one.
+
 That is: the face's own em extent is centred in the leading the printout
 reserved, and the baseline measured down from the top of it. Two properties
 follow, and both are the point of the rule.

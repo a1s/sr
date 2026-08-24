@@ -277,7 +277,7 @@ func (eng *engine) face(name string) (*fontres.Face, error) {
 	}
 	eng.faces[name] = face
 
-	_, index := face.Program()
+	index := face.FaceIndex()
 	entry := printout.FontEntry{
 		Name:          face.Name,
 		Size:          face.Size,

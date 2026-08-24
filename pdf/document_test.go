@@ -562,3 +562,36 @@ func TestNoPages(test *testing.T) {
 		test.Fatal("an empty printout rendered")
 	}
 }
+
+// A failed render leaves the file that was there alone.
+//
+// Rendering reads the font files the printout resolved, which are
+// not part of the document and can have moved since it was written.
+// Opening the output first would turn that into a lost report: the
+// previous PDF truncated to nothing, and an error explaining a font.
+func TestWriteFileKeepsThePreviousFileOnFailure(test *testing.T) {
+	path := filepath.Join(test.TempDir(), "report.pdf")
+	if err := WriteFile(document(), path); err != nil {
+		test.Fatal(err)
+	}
+	before, err := os.ReadFile(path)
+	if err != nil {
+		test.Fatal(err)
+	}
+	if len(before) == 0 {
+		test.Fatal("the first render wrote nothing")
+	}
+
+	broken := document()
+	broken.Header.Fonts[0].ResolvedFile = "no/such/font.ttf"
+	if err := WriteFile(broken, path); err == nil {
+		test.Fatal("a printout naming a font that is not there rendered")
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		test.Fatalf("the earlier report is gone: %v", err)
+	}
+	if !bytes.Equal(before, after) {
+		test.Errorf("the file changed: %d bytes before, %d after", len(before), len(after))
+	}
+}
