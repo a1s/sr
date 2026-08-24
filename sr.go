@@ -21,6 +21,7 @@ import (
 	"github.com/a1s/sr/internal/expr"
 	"github.com/a1s/sr/internal/tmpl"
 	"github.com/a1s/sr/meta"
+	"github.com/a1s/sr/pdf"
 	"github.com/a1s/sr/printout"
 	"github.com/shopspring/decimal"
 	startime "go.starlark.net/lib/time"
@@ -157,6 +158,18 @@ func (tpl *Template) BuildJSON(reader io.Reader, options ...Option) (*Printout, 
 		return nil, err
 	}
 	return tpl.Build(rows, options...)
+}
+
+// WritePDF renders a printout to a PDF file.
+//
+// It is package pdf's WriteFile, re-exported for the common case
+// where a caller builds and renders in one place.
+//
+// The renderer does no layout: everything it draws is already positioned
+// in the printout, so rendering a printout read back from a file
+// gives the same PDF as rendering the one that was just built.
+func WritePDF(doc *Printout, path string, options ...pdf.Option) error {
+	return pdf.WriteFile(doc, path, options...)
 }
 
 // Decimal builds an exact decimal value,

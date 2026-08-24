@@ -114,7 +114,8 @@ report name="DVD rental payments" \
 
     // -------------------------------------------------------------- summary
 
-    summary height="4.5cm" {
+    // The band is the picture's height.
+    summary height="4.265cm" {
       style bgcolor="#F3EDE7"
       rectangle width=1 dash="dashdot"
 
@@ -140,7 +141,7 @@ report name="DVD rental payments" \
     // ------------------------------------------------- page header / footer
 
     header height="2cm" {
-      rectangle width=1 radius="5mm" left="1mm" bottom="1mm"
+      rectangle width=1 radius="5mm" bottom="1mm"
       field halign="center" valign="center" text="Sakila payment list" {
         style font="pagetitle"
       }
@@ -148,10 +149,10 @@ report name="DVD rental payments" \
 
     footer height="1cm" {
       style font="pagetitle"
-      rectangle width=1 left="1mm" bottom="1mm"
+      rectangle width=1 bottom="1mm"
 
       field expr="PAGE_COUNT" align="left" format="Count: %i" \
-            left="3mm" width="3cm" bottom="3mm"
+            left="3mm" width="3cm"
 
       // Total number of pages is PAGE_NUMBER at the end of the report,
       // which is what FINAL says. The bare PAGE_NUMBER beside it still
@@ -159,16 +160,17 @@ report name="DVD rental payments" \
       // The box is fully determined, so no placeholder is needed.
       field expr="'Page %d of %d' % (PAGE_NUMBER, FINAL.PAGE_NUMBER)" \
             evaltime="report" align="center" \
-            left="5.5cm" width="6cm" bottom="3mm"
+            left="5.5cm" width="6cm"
 
       // A page footer is measured when the page begins, which on the first
       // page is before any record has been consumed. `sum` of nothing is None
       // rather than 0, so the guard is what makes the footer printable there.
-      field expr="page_amount or 0" align="right" format="Total: %.2f " \
-            left="12cm" width="5cm" bottom="3mm"
+      // `right` puts the amount where the payment column's amounts are.
+      field expr="page_amount or 0" align="right" format="Total: %.2f" \
+            left="12cm" right="2mm"
 
       field expr="strftime(as_of, '%Y-%m-%d %H:%M')" align="right" \
-            left="12cm" width="5cm" bottom="0.5mm" {
+            valign="bottom" left="12cm" right="2mm" bottom="1mm" {
         style font="body"
       }
     }
@@ -180,12 +182,15 @@ report name="DVD rental payments" \
         style font="bold" color="#F3EDE7" bgcolor="#000900"
         rectangle width=0 top=2 bottom=2
 
-        field top=4 bottom=4 width="35mm" valign="center" text=" Film title"
+        // 3mm in from the fill's edge, which is where the page footer's own
+        // count sits, so the two line up down the page.
+        field top=4 bottom=4 left="3mm" width="32mm" valign="center" \
+              text="Film title"
         field top=4 bottom=4 left="35mm" width="15mm" valign="center" \
               align="center" text="Rental"
         field top=4 bottom=4 left="50mm" width="15mm" valign="center" \
               align="center" text="Return"
-        field top=4 bottom=4 left="65mm" width="15mm" valign="center" \
+        field top=4 bottom=4 left="65mm" right="2mm" valign="center" \
               align="center" text="Payment"
       }
 
@@ -193,10 +198,10 @@ report name="DVD rental payments" \
         style font="bold" color="#F3EDE7" bgcolor="#000900"
         rectangle width=0 top=2 bottom=2
 
-        field expr="COLUMN_COUNT" format=" Count: %i" \
-              top=4 bottom=4 width="35mm" valign="center"
+        field expr="COLUMN_COUNT" format="Count: %i" \
+              top=4 bottom=4 left="3mm" width="32mm" valign="center"
         field expr="column_amount or 0" format="Total: %.2f" align="right" \
-              top=4 bottom=4 left="45mm" width="35mm" valign="center"
+              top=4 bottom=4 left="45mm" right="2mm" valign="center"
       }
     }
 
@@ -226,9 +231,9 @@ report name="DVD rental payments" \
 
         // The group's own row count, which the title cannot know yet: deferred
         // to the group scope, and stretchable, so it carries a placeholder.
-        field expr="FINAL.customer_COUNT" format="Count: %i " align="right" \
-              evaltime="customer" stretch=#true text="Count: 999 " \
-              left="60mm" width="20mm"
+        field expr="FINAL.customer_COUNT" format="Count: %i" align="right" \
+              evaltime="customer" stretch=#true text="Count: 999" \
+              left="60mm" right="2mm"
 
         line width=2 bottom=2 height=0
       }
@@ -237,7 +242,8 @@ report name="DVD rental payments" \
         style font="bold" color="#000900"
         line width=2 height=0
         field expr="(customer.last_name, customer.first_name, customer_amount)" \
-              format="Total for %s, %s: %.2f" align="right" stretch=#true top=4
+              format="Total for %s, %s: %.2f" align="right" stretch=#true \
+              top=4 right="2mm"
       }
 
       detail height=12 \
@@ -263,7 +269,7 @@ report name="DVD rental payments" \
               left="50mm" height=10 width="15mm"
 
         field expr="amount" format="%.2f" align="right" \
-              left="65mm" height=10 width="15mm"
+              left="65mm" height=10 right="2mm"
 
         line width=0 dash="dot" bottom=1 height=0
       }

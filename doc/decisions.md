@@ -1629,3 +1629,275 @@ a template containing one, naming the node. The measurement cache the layout
 document describes is not implemented: it is a cost optimisation rather than
 a behaviour, and a correct cache key has to capture every name a band's
 expressions read, which is more machinery than the current throughput asks for.
+
+## What building the renderer settled
+
+The [renderer specification](render.md) was written alongside the renderer
+rather than before it, because Stage 0 wrote the printout format as the
+renderer's contract and left the rest to whichever library was chosen. What
+follows is what that choice turned out to cost, and what replaced it.
+
+### The writer decision is reversed: the PDF is written here
+
+The [spike](#font-metrics-and-pdf) chose `go-pdf/fpdf`, against
+`signintech/gopdf` and `tdewolff/canvas`, on measured width accuracy
+and missing-glyph handling. Reading `fpdf` against the printout format,
+rather than against a sample paragraph, found five things the printout
+says that it cannot express -- and three of them are in exactly the
+features Stage 3 exists to deliver:
+
+| | |
+|---|---|
+| `outline closed` | `Bookmark` writes `/Count 0` on every entry, which a reader takes as *collapsed*. Every parent comes out closed regardless of what the template asked. |
+| `outline` and `xref` destination `x` | Both are written `/XYZ 0 y null`. The x the printout carries is discarded. |
+| A destination on a page of its own size | The y is turned around using the *document's* page height rather than the destination page's, so a mixed-size document scrolls to the wrong place. |
+| Coordinates finer than 0.01 pt | `Text` writes `Td` with two decimals. The printout's precision is three. |
+| The subset tag on `BaseFont` | Omitted, which a PDF/A validator flags, and the face is named from the family string the caller passed rather than from its PostScript name. |
+
+The last two were known at spike time and judged not to decide anything,
+which was right on the evidence then available: neither affects the round trip
+or reproducibility. The first three were not, and they are not cosmetic.
+This project exists to remove encoding traps rather than install new ones,
+and a renderer that silently drops a `closed` the author wrote is the same
+class of defect as a geometry model that silently discards a constraint.
+
+So the PDF is written directly: `internal/pdfw` for objects, streams, the
+cross reference table and the content stream operators, `internal/sfnt` for
+reading font tables and building subsets. Four consequences, all of them wanted:
+
+- **Kerning cannot creep back in.** The spike's largest finding was that a
+  renderer which shapes disagrees with the printout by several points on a
+  kerning-heavy line, that the two shaping paths disagree with each other,
+  and that no test using only the committed faces can catch it -- so a
+  `kern`-bearing fixture face was called for. It is not needed. PDF advances
+  the pen inside a shown string from the font dictionary's `/W` array; there is
+  no kerning for a reader to apply and none for a writer to be told to switch off.
+  Writing `/W` ourselves closes the hazard by construction rather than by
+  configuration.
+- **The width floor moves down by two orders of magnitude.** `/W` accepts real
+  numbers. Writing three decimals of a thousandth of an em, instead of rounding
+  to whole thousandths as all three candidate writers do, takes the worst
+  per-glyph error from 0.24/1000 em to under 0.001/1000 em, so the 0.012 pt
+  accumulation the spike measured across a line is gone. The spike called that
+  error "PDF's own, not the writer's". It is the writer's after all; the format
+  only invited it.
+- **Reproducibility is structural.** No timestamp of its own, no map
+  iteration in the output path: the same printout renders to the same bytes.
+  `fpdf` writes a creation date unless told otherwise, which is one more thing
+  to remember rather than a property of the design.
+- **The dependency tree stays flat.** `tdewolff/font` was pinned by the spike
+  for `SFNT.Subset`, with the note that the role might turn out to be empty.
+  It is not empty, but it is not affordable either: `go list -deps` on a
+  package importing it pulls in `net/http`, `github.com/andybalholm/brotli`,
+  `github.com/golang/freetype`, and `golang.org/x/image/font/sfnt` --
+  the third metrics implementation, the one the spike ruled out.
+  A report renderer that links an HTTP client is not a report renderer.
+  The subsetter replacing it is about 250 lines and adds nothing to `go.mod`.
+
+The rejection of the other two writers stands, and so does everything the spike
+measured about metrics: `go-text/typesetting` remains the only thing that maps
+a character to a glyph, in the renderer as in the engine, for the `cmap` reason
+the spike found. `tdewolff/font` is dropped entirely, which also removes the
+standing hazard that something in the codebase might one day ask it for a glyph.
+
+### Writing the subset is where the risk moved
+
+A subsetter is small, but it is bytes in and bytes out, and a wrong offset
+shows up as a glyph that is subtly the wrong shape rather than as an error.
+Three things follow, and they are in the test suite rather than in a comment:
+
+- **Composite glyphs are the failure mode the committed fonts cannot show.**
+  Go Regular and Go Bold contain no composite glyph, so a subsetter that
+  neglected to remap component indices would pass every test built on them --
+  and break the accented letters most European text is made of, because a
+  component index still pointing into the original face draws whatever glyph
+  now sits at that number. The test builds a three-glyph font with a composite
+  in it. This is the spike's "test a range, not a font" arriving from the other
+  direction.
+- **A component outside the face is an error.** Left alone it resolves to a
+  blank, so a corrupt font would quietly lose accents instead of being reported.
+- **Checksums are verified by recomputation**, both per table and the file-wide
+  `checkSumAdjustment`: nothing else in this pipeline reads them, so a wrong one
+  is invisible until some other tool looks.
+
+What cannot be tested is a full independent parse of the subset. It omits
+`cmap`, which an Identity-H composite font never reads, and every font library
+refuses a face without one -- `go-text` says `missing table cmap`, the same
+refusal the spike recorded for all three candidate writers' output. So the test
+validates the container through an independent loader, and the outlines through
+`loca` against the original face.
+
+### The printout gained a face index
+
+A `.ttc` holds several faces and `resolvedFile` alone does not say which one
+was measured. On macOS two thirds of installed faces live in collections, so
+a host-resolved font could be measured as face 3 and rendered as face 0 -- a
+silently wrong typeface, with no diagnostic anywhere. `resolvedIndex` is now
+written beside `resolvedFile`, absent for the ordinary single-face file.
+The engine knew the index all along; nothing carried it across.
+
+Writing it down exposed a second half of the same defect at the other end
+of the chain. A template naming a collection by `file=` could only ever be
+given its first face, because an explicit file was taken to *be* a face --
+so the index the printout had just gained was unreachable from a template,
+and a `.ttc` pinned with `bold=#true` produced the regular face and a warning
+that it was not bold. The declared style now chooses among a collection's faces:
+the first whose own style bits are exactly the ones declared, and the first face
+when none is. Style and not position, because face 0 of a collection is not
+reliably its regular one -- it is in `Menlo.ttc`, which is what makes the
+assumption tempting.
+
+### One code per character, not per glyph
+
+The obvious subset is one entry per glyph, and it is wrong for text extraction.
+Faces routinely map several characters to one glyph -- a non-breaking space and
+a space, a hyphen and a soft hyphen -- so a glyph-keyed `ToUnicode` has to pick
+one of them, and the text comes back out of the file as the wrong character.
+Keying codes by character costs a duplicated glyph outline in the rare colliding
+case and makes extraction exact.
+
+It also settles the missing-glyph case the format
+[already specified](template.md#missing-glyphs). A character the face lacks
+gets a code of its own that draws the empty glyph, so the box is visible *and*
+the character is still in the text. Keying by glyph would have collapsed every
+missing character onto code 0 and lost all of them from the extracted text --
+which is where `signintech/gopdf` was rejected for dropping the character
+outright.
+
+### Where the baseline sits had no answer, and needed one
+
+The printout fixes a text mark's box and its leading and says nothing about the
+baseline, which is correct: leading is normative because it decides pagination,
+and baseline placement inside it decides nothing else. But a renderer cannot
+decline to choose.
+
+Anchoring to the ascender is the usual choice, and it is wrong here for the same
+reason the leading is a constant. `ascender + descender` exceeds `1.2 × size` in
+many faces, so anchoring at the top pushes the whole overhang down into the next
+line's slot while leaving a gap above it. Centring the face's em extent in the
+leading splits the overhang, so a substituted face does not collide on one side
+only. Neither choice can move a page break, which makes this the one place in
+the pipeline where a per-face value is safe.
+
+### Which ascender: `hhea`, and only `hhea`
+
+A face carries two vertical extents. `hhea` has one pair, OS/2 has
+`sTypoAscender` and `sTypoDescender`, and a face can set `USE_TYPO_METRICS`
+in `fsSelection` to ask readers to prefer the second. They are not the same
+numbers, and on a face that sets the bit the difference moves a baseline by
+about a point.
+
+Shaping libraries honour the request, which is right for their purpose and
+wrong here. The PDF font descriptor this renderer writes carries `hhea`'s ascent
+and descent -- a reader that re-measures the text has only those -- so if the
+baseline were placed from OS/2, the file would state one em extent and be laid
+out to another. One table has to answer both questions. `hhea` is the one the
+format [specifies](render.md#text), and it is read from the table directly rather
+than through the shaping library, which would have returned the other pair.
+
+How exposed is a report to this in practice? Less than the trap suggests, on the
+evidence to hand: of the 165 faces installed on the machine this was written on,
+17 set the bit -- the Cascadia and Sitka families, mostly -- and in every one of
+the 17 the two pairs are *identical*. The bit exists so that a face whose glyphs
+overflow the Latin line box can still state the line spacing its designer
+intended, so the faces where the pairs genuinely differ are the ones a report
+reaches for when it sets a script this machine has no font for.
+
+That is why the regression test patches the bit into a committed face rather than
+trusting a fixture to carry it: neither committed face sets it, and the faces
+that would diverge cannot be committed here. The reason for choosing `hhea` does
+not rest on how common the divergence is, though -- it is that the descriptor
+states `hhea`, so anything else deciding the baseline makes the file contradict
+itself.
+
+### A justified line is drawn in pieces, and the pieces carry their spaces
+
+Two ways to justify: word spacing, or explicit positions. Word spacing is not
+available: PDF's `Tw` acts on the single-byte code 32, and an Identity-H
+composite font has no single-byte codes at all, so a file relying on it would be
+silently unjustified. Explicit positions are better anyway: each segment is
+placed by an exact displacement from the one before, so its position does not
+depend on the glyph advances before it, and the line lands on the box's far edge
+rather than near it.
+
+The segments have to carry their own whitespace rather than being words with
+gaps jumped between them. Drawing words alone looks identical and extracts as
+`onetwothree`. And the slack has to be measured against the sum of the segments
+rather than against the whole line: each is measured and rounded on its own, so
+their sum differs from the line's rounded width by a thousandth or two per join,
+and measuring against the line leaves the last word that far off the edge.
+
+### Bars are black, and the printout says nothing about it
+
+A `barcode` element takes `style` children like every other element, and the
+printout records no colour for it. That is not an omission -- a symbol that is
+not dark on light does not scan -- but it is worth stating, because the template
+accepts a `color` on a barcode and nothing comes of it.
+
+### A vertical matrix symbol is rotated, not transposed
+
+`vertical` swaps the coding direction, and for a 1-D symbol that is all
+it means. For a matrix symbol the obvious implementation -- rows along X,
+runs along Y -- is a transposition, which is a rotation *and* a mirror.
+A rotated QR code scans; a mirrored one is a different symbol. So the rows
+advance leftward from the box's right edge, which makes it a quarter turn
+clockwise.
+
+### How the renderer is verified, and what is left to a person
+
+A printout fixture can be read: it is a handful of marks, written by hand from
+the specification and compared against what the engine produced. A PDF cannot
+be read that way, so the renderer's oracle is a reader written for the purpose.
+`internal/pdfscan` parses the cross reference table, resolves objects, inflates
+and replays content streams, and recovers text through each font's own
+`ToUnicode` map. The [spike](#font-metrics-and-pdf) estimated 400 lines for it
+and that is roughly what it is.
+
+Everything the renderer decides is asserted against it: alignment against the
+face's own measurement, the baseline formula, justified slack landing on the
+box's far edge, dash patterns, stroke widths including the hairline, the
+rectangle that draws nothing, barcode bars against the stripe list, the
+rotation of a vertical matrix symbol, image placement and cropping, the
+outline tree's shape and counts, both kinds of link, per-page sizes, and the
+information dictionary. The two reference documents -- the sakila report, and
+a paged report with a header, footer, deferred page count and justified text --
+are compared line by line: 95 and 126 lines, each against the position
+computed from [render.md](render.md)'s rules rather than from the renderer.
+
+Two things that oracle cannot establish, and one of them is not automatable:
+
+- **That a third-party reader agrees.** Xpdf's `pdftotext` -- an implementation
+  sharing no code with this one -- reads the sakila PDF and recovers its text
+  in reading order, which exercises the cross reference table, the page tree,
+  the font dictionaries and the `ToUnicode` maps. That is as far as a
+  text-extraction tool reaches.
+- **That the glyphs look right.** Nothing available here rasterises a PDF,
+  and a subsetter's characteristic failure is a glyph of the wrong shape
+  rather than an error. Visual review is a human step, as the verification
+  plan already says of the reference report.
+
+**Rendering costs about 0.6 ms per page.** A hundred thousand rows over 1,429
+pages render in 0.9 s, a thousand rows over 15 pages in 11 ms -- linear, with
+the font subset built once for the document rather than once per page.
+
+### The output file is not opened until the render succeeds
+
+`WriteFile` renders the whole document into memory and writes the file
+afterwards. The obvious order -- open the file, render into it -- truncates
+the previous report to nothing before it knows whether the render works, and
+the render can fail for a reason outside the document: it reads the font files
+the printout resolved, and those are not part of it and can have moved since it
+was written. Losing yesterday's report to a missing font is not an acceptable way
+to report a missing font. The render is buffered regardless, since a PDF's cross
+reference table cannot be written until the objects are, so the safe order costs
+nothing.
+
+### Not built at this stage
+
+- **PostScript (CFF) outlines.** Refused, naming the font and the file.
+  An `.otf` needs a CIDFontType0 descendant and a CID-keyed CFF, and
+  a guess at it would produce files that fail on some readers only.
+- **The CLI.** `sr render` is Stage 4: the library renders, and nothing yet
+  reads a printout off the command line.
+- **Subreports**, still, so the second reference template renders no further
+  than it builds.

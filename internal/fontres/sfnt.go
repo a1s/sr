@@ -2,6 +2,7 @@ package fontres
 
 import (
 	"encoding/binary"
+	"math"
 	"strings"
 	"unicode/utf16"
 
@@ -25,6 +26,11 @@ type FaceInfo struct {
 	Subfamily string
 	Style     Style
 	Font      *gofont.Font
+
+	// Ascender and Descender are the face's hhea metrics in font units,
+	// the descender positive downward. Both are zero for a face without
+	// an hhea table.
+	Ascender, Descender float64
 }
 
 // tag builds a four-byte table tag.
@@ -42,6 +48,7 @@ func describe(ld *ot.Loader, file string, index int) (*FaceInfo, error) {
 		return nil, err
 	}
 	info := &FaceInfo{File: file, Index: index, Font: ft}
+	info.Ascender, info.Descender = hheaMetrics(ld)
 
 	nameTable, err := ld.RawTable(tag("name"))
 	if err == nil {
@@ -72,6 +79,27 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// hheaMetrics reads the horizontal ascender and descender, in font units,
+// the descender returned positive downward.
+//
+// hhea is read here rather than through the shaping library, which prefers
+// OS/2's typographic metrics whenever the face sets USE_TYPO_METRICS.
+// Those are a different pair of numbers, and a renderer places the baseline
+// from these while writing the face's hhea values into the font descriptor:
+// one table has to answer both, and the specification names this one.
+func hheaMetrics(ld *ot.Loader) (ascender, descender float64) {
+	raw, err := ld.RawTable(tag("hhea"))
+	if err != nil || len(raw) < 8 {
+		return 0, 0
+	}
+	ascender = float64(int16(binary.BigEndian.Uint16(raw[4:6])))
+	descender = float64(int16(binary.BigEndian.Uint16(raw[6:8])))
+	// Signs are as the table has them: an ascender above the baseline
+	// is positive and a descender below it negative, but files carry
+	// both conventions, so the magnitudes are what is kept.
+	return math.Abs(ascender), math.Abs(descender)
 }
 
 // hasStyleFromOS2 reads fsSelection: bit 0 ITALIC, bit 5 BOLD, bit 9 OBLIQUE.

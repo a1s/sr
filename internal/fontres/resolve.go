@@ -11,7 +11,6 @@ import (
 	"sort"
 	"strings"
 
-	gofont "github.com/go-text/typesetting/font"
 	ot "github.com/go-text/typesetting/font/opentype"
 )
 
@@ -121,12 +120,12 @@ func (resolver *Resolver) resolve(req Request) (*Face, error) {
 		if !ok {
 			return nil, fmt.Errorf("font %q: no data blob named %q", req.Name, req.Data)
 		}
-		info, err := parseFaceBytes(raw)
+		info, err := pickFace(raw, Style{Bold: req.Bold, Italic: req.Italic})
 		if err != nil {
 			return nil, fmt.Errorf("font %q: data blob %q: %w", req.Name, req.Data, err)
 		}
 		resolver.checkDeclaredStyle(req, info.Style, fmt.Sprintf("data blob %q", req.Data))
-		face := newFace(info.Font)
+		face := newFace(info)
 		face.ResolvedData, face.ResolvedFace, face.ResolvedBy =
 			req.Data, info.Family, ByExplicit
 		return face, nil
@@ -140,12 +139,12 @@ func (resolver *Resolver) resolve(req Request) (*Face, error) {
 		if err != nil {
 			return nil, fmt.Errorf("font %q: %w", req.Name, err)
 		}
-		info, err := parseFaceBytes(raw)
+		info, err := pickFace(raw, Style{Bold: req.Bold, Italic: req.Italic})
 		if err != nil {
 			return nil, fmt.Errorf("font %q: %s: %w", req.Name, path, err)
 		}
 		resolver.checkDeclaredStyle(req, info.Style, filepath.ToSlash(path))
-		face := newFace(info.Font)
+		face := newFace(info)
 		face.ResolvedFile, face.ResolvedFace, face.ResolvedBy =
 			filepath.ToSlash(path), info.Family, ByExplicit
 		return face, nil
@@ -160,7 +159,7 @@ func (resolver *Resolver) resolve(req Request) (*Face, error) {
 	// Step 2: the machine's own fonts, matched by family here rather than by a
 	// platform matcher that answers every query.
 	if info := resolver.lookupHost(req.Typeface, req.Bold, req.Italic); info != nil {
-		face := newFace(info.Font)
+		face := newFace(info)
 		face.Requested = req.Typeface
 		face.ResolvedFile, face.ResolvedFace, face.ResolvedBy =
 			filepath.ToSlash(info.File), info.Family, ByHost
@@ -170,7 +169,7 @@ func (resolver *Resolver) resolve(req Request) (*Face, error) {
 	// Step 3: the family-alias table, each alias then looked for on the host.
 	for _, alias := range aliases[strings.ToLower(req.Typeface)] {
 		if info := resolver.lookupHost(alias, req.Bold, req.Italic); info != nil {
-			face := newFace(info.Font)
+			face := newFace(info)
 			face.Requested = req.Typeface
 			face.ResolvedFile, face.ResolvedFace, face.ResolvedBy =
 				filepath.ToSlash(info.File), info.Family, ByAlias
@@ -214,7 +213,7 @@ func (resolver *Resolver) checkDeclaredStyle(req Request, actual Style, source s
 		return
 	}
 	resolver.Warnings = append(resolver.Warnings, fmt.Sprintf(
-		"font %q declares %s, and %s is not; the named file is the face, so no weight or slant is synthesized and the printout records the declaration as it stands",
+		"font %q declares %s, and the face taken from %s is not; no weight or slant is synthesized, and the printout records the declaration as it stands",
 		req.Name, strings.Join(wrong, " and "), source))
 }
 
@@ -379,45 +378,18 @@ func (resolver *Resolver) substitute() (*Face, error) {
 			if err != nil {
 				continue
 			}
-			ft, family, err := resolver.pickRegularFace(raw)
+			info, err := pickFace(raw, Style{})
 			if err != nil {
 				continue
 			}
-			face := newFace(ft)
+			face := newFace(info)
 			face.ResolvedFile, face.ResolvedFace, face.ResolvedBy =
-				filepath.ToSlash(path), family, BySubstitute
+				filepath.ToSlash(path), info.Family, BySubstitute
 			resolver.checkMonospaced(face)
 			return face, nil
 		}
 	}
 	return nil, fmt.Errorf("no substitute face was found; tried %s", strings.Join(tried, ", "))
-}
-
-// pickRegularFace chooses the face in a collection whose style bits
-// say neither bold nor slanted -- not face 0, which is the same face
-// in Menlo.ttc but is not a rule collections keep.
-func (resolver *Resolver) pickRegularFace(raw []byte) (ft *gofont.Font, family string, err error) {
-	loaders, err := ot.NewLoaders(bytes.NewReader(raw))
-	if err != nil {
-		return nil, "", err
-	}
-	var first *FaceInfo
-	for index, ld := range loaders {
-		info, err := describe(ld, "", index)
-		if err != nil {
-			continue
-		}
-		if first == nil {
-			first = info
-		}
-		if !info.Style.Bold && !info.Style.Italic {
-			return info.Font, info.Family, nil
-		}
-	}
-	if first == nil {
-		return nil, "", fmt.Errorf("no usable face")
-	}
-	return first.Font, first.Family, nil
 }
 
 // checkMonospaced verifies the property the substitute is chosen for.

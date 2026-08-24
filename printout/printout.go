@@ -71,8 +71,12 @@ type FontEntry struct {
 	ResolvedFile string `json:"resolvedFile,omitempty"`
 	// ResolvedData names a header data entry, for an embedded font.
 	ResolvedData string `json:"resolvedData,omitempty"`
-	ResolvedFace string `json:"resolvedFace"`
-	ResolvedBy   string `json:"resolvedBy"`
+	// ResolvedIndex is the face's position inside a font collection,
+	// absent for the ordinary single-face file. A .ttc holds several
+	// faces and the file name alone does not say which one was measured.
+	ResolvedIndex int    `json:"resolvedIndex,omitempty"`
+	ResolvedFace  string `json:"resolvedFace"`
+	ResolvedBy    string `json:"resolvedBy"`
 
 	// absFile is the path as the engine resolved it, kept so that
 	// serialization can rewrite it relative to wherever the printout
