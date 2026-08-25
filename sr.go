@@ -130,6 +130,127 @@ func WithDiagnostics(fn func(string)) Option {
 	return func(opts *build.Options) { opts.Diagnostics = fn }
 }
 
+// FontCheck is what checking a template's fonts found out. See CheckFonts.
+type FontCheck = build.FontCheck
+
+// CheckFonts resolves every font the template declares, without any data.
+//
+// Loading a template validates everything a document can settle on its own.
+// Font resolution is what it cannot: it reads the machine. So a check that
+// wants to say more than "this file parses" runs this, which is what
+// sr validate does.
+//
+// A font that does not resolve is reported in the result rather than as an
+// error, so that one missing typeface does not hide the next. Parameters are
+// not required here -- one with no value and no default is simply left unbound.
+func (tpl *Template) CheckFonts(options ...Option) (*FontCheck, error) {
+	opts := build.Options{Engine: "sr " + meta.Version}
+	for _, opt := range options {
+		opt(&opts)
+	}
+	return build.Fonts(tpl.report, opts)
+}
+
+// Info is what a template says about itself.
+//
+// It is what a front end needs to describe or check a template
+// without building anything: the report's identification, its page
+// geometry, and the names it declares. The engine reads none of it.
+type Info struct {
+	Name        string
+	Description string
+	Version     string
+	Author      string
+	// Page is the page size and margins, in points.
+	Page printout.PageGeometry
+	// Columns is the column count, 1 for a template with no columns node.
+	Columns int
+	// Names declared, in declaration order.
+	Parameters []Parameter
+	Variables  []string
+	Fonts      []string
+	Data       []string
+	Groups     []string
+	// Members are the record members the template declares,
+	// empty for a template that declares none.
+	Members []string
+	// Subreports names the subreport nodes, which this engine does not
+	// build yet. A template check reports them; a build refuses them.
+	Subreports []string
+}
+
+// Parameter is one declared parameter.
+type Parameter struct {
+	Name string
+	// Type is the declared type: "string", "int", "decimal",
+	// "float", "bool", "datetime", "date", "object" or "list".
+	Type string
+	// Default is the declared default text, absent for a parameter
+	// that has none or computes one.
+	Default string
+	// HasDefault distinguishes a declared empty default from none.
+	HasDefault bool
+	// HasDefaultExpr reports a computed default.
+	HasDefaultExpr bool
+	// Required reports that the caller must supply a value.
+	Required bool
+	// Prompt is the template's hint that an interactive front end
+	// should ask for this one. The engine ignores it.
+	Prompt bool
+}
+
+// Info describes the loaded template.
+func (tpl *Template) Info() Info {
+	report := tpl.report
+	layout := report.Layout
+	info := Info{
+		Name:        report.Name,
+		Description: report.Description,
+		Version:     report.Version,
+		Author:      report.Author,
+		Page: printout.PageGeometry{
+			Width:        layout.Page.Width,
+			Height:       layout.Page.Height,
+			LeftMargin:   layout.LeftMargin,
+			RightMargin:  layout.RightMargin,
+			TopMargin:    layout.TopMargin,
+			BottomMargin: layout.BottomMargin,
+		},
+		Columns: 1,
+		Groups:  report.GroupNames,
+	}
+	if layout.Body.Columns != nil {
+		info.Columns = layout.Body.Columns.Count
+	}
+	for _, param := range report.Params {
+		info.Parameters = append(info.Parameters, Parameter{
+			Name:           param.Name,
+			Type:           param.Type.String(),
+			Default:        param.Default,
+			HasDefault:     param.HasDefault,
+			HasDefaultExpr: param.DefaultExpr != nil,
+			Required:       param.Required(),
+			Prompt:         param.Prompt,
+		})
+	}
+	for _, variable := range report.Variables {
+		info.Variables = append(info.Variables, variable.Name)
+	}
+	for _, font := range report.Fonts {
+		info.Fonts = append(info.Fonts, font.Name)
+	}
+	for _, blob := range report.Data {
+		info.Data = append(info.Data, blob.Name)
+	}
+	info.Members = report.Records.Names()
+	tmpl.ForEachSection(report, func(section *tmpl.Section) {
+		for _, sub := range section.Subreports {
+			info.Subreports = append(info.Subreports, sub.Node.Path())
+		}
+	})
+	return info
+}
+
 // Build applies the template to records.
 //
 // records may be a []map[string]any or a slice of structs;

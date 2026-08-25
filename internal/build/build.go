@@ -17,6 +17,8 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
+	"strings"
 	gotime "time"
 
 	"github.com/a1s/sr/internal/data"
@@ -92,6 +94,40 @@ type engine struct {
 
 // Build applies a template to records and returns a printout.
 func Build(report *tmpl.Report, rows []map[string]any, opts Options) (*printout.Printout, error) {
+	eng := newEngine(report, opts)
+
+	if node := firstSubreport(report); node != "" {
+		return nil, fmt.Errorf(
+			"%s: subreports are not implemented yet; this engine builds everything else",
+			node)
+	}
+	if err := eng.bindParams(true); err != nil {
+		return nil, err
+	}
+	if err := eng.bindVariables(); err != nil {
+		return nil, err
+	}
+	records, err := data.Records(rows, report.Records)
+	if err != nil {
+		return nil, err
+	}
+	eng.records = records
+	eng.ctx.dataCount = len(records)
+
+	if err := eng.run(); err != nil {
+		return nil, err
+	}
+
+	eng.finish()
+	return eng.out, nil
+}
+
+// newEngine prepares a build: the printout header the template alone
+// determines, and the font resolver.
+//
+// It stops short of binding parameters and reading records, so that a check
+// that has no data -- see Fonts -- can share everything up to that point.
+func newEngine(report *tmpl.Report, opts Options) *engine {
 	if opts.Engine == "" {
 		opts.Engine = "sr"
 	}
@@ -149,29 +185,7 @@ func Build(report *tmpl.Report, rows []map[string]any, opts Options) (*printout.
 		return raw, true
 	}
 
-	if node := firstSubreport(report); node != "" {
-		return nil, fmt.Errorf(
-			"%s: subreports are not implemented yet; this engine builds everything else", node)
-	}
-	if err := eng.bindParams(); err != nil {
-		return nil, err
-	}
-	if err := eng.bindVariables(); err != nil {
-		return nil, err
-	}
-	records, err := data.Records(rows, report.Records)
-	if err != nil {
-		return nil, err
-	}
-	eng.records = records
-	eng.ctx.dataCount = len(records)
-
-	if err := eng.run(); err != nil {
-		return nil, err
-	}
-
-	eng.finish()
-	return eng.out, nil
+	return eng
 }
 
 // firstSubreport names the first subreport in the template, or "".
@@ -189,7 +203,60 @@ func firstSubreport(report *tmpl.Report) string {
 	return found
 }
 
-func (eng *engine) bindParams() error {
+// checkSupplied refuses a value supplied for a name the template does not declare.
+//
+// Nothing else in the run would mention it. The report builds, with the
+// default in place of what the caller meant, and says nothing -- which is
+// the worst way for a misspelled parameter name to behave, and the likelier
+// mistake in a generated command line than a name given twice.
+//
+// A check that binds leniently does not run this: there the caller has
+// supplied values for a template they may be checking rather than building,
+// and the CLI reports the same thing as a usage error before this could.
+func (eng *engine) checkSupplied() error {
+	var unknown []string
+	for name := range eng.opts.Values {
+		if _, ok := eng.report.ParamByName[name]; !ok {
+			unknown = append(unknown, name)
+		}
+	}
+	for name := range eng.opts.TextParams {
+		if _, ok := eng.report.ParamByName[name]; !ok {
+			unknown = append(unknown, name)
+		}
+	}
+	if len(unknown) == 0 {
+		return nil
+	}
+	sort.Strings(unknown)
+	quoted := make([]string, 0, len(unknown))
+	for _, name := range unknown {
+		quoted = append(quoted, strconv.Quote(name))
+	}
+	if len(eng.report.Params) == 0 {
+		return fmt.Errorf("no parameter named %s; the template declares none",
+			strings.Join(quoted, ", "))
+	}
+	declared := make([]string, 0, len(eng.report.Params))
+	for _, param := range eng.report.Params {
+		declared = append(declared, param.Name)
+	}
+	return fmt.Errorf("no parameter named %s; the template declares %s",
+		strings.Join(quoted, ", "), strings.Join(declared, ", "))
+}
+
+// bindParams binds each declared parameter to a value.
+//
+// required is false for a check that runs without a caller's values:
+// there a parameter with neither a value nor a default is left unbound
+// rather than refused, and an expression that reads it fails on its own terms.
+// A build passes true, because a report missing a parameter is not a report.
+func (eng *engine) bindParams(required bool) error {
+	if required {
+		if err := eng.checkSupplied(); err != nil {
+			return err
+		}
+	}
 	for _, param := range eng.report.Params {
 		if value, ok := eng.opts.Values[param.Name]; ok {
 			if !data.MatchesType(value, param.Type) {
@@ -220,6 +287,11 @@ func (eng *engine) bindParams() error {
 		case param.DefaultExpr != nil:
 			value, err := eng.ctx.eval(param.DefaultExpr)
 			if err != nil {
+				if !required {
+					// The expression may read a parameter that a check
+					// has no value for. Leave this one unbound too.
+					continue
+				}
 				return fmt.Errorf("parameter %q: %w", param.Name, err)
 			}
 			if !data.MatchesType(value, param.Type) {
@@ -228,6 +300,8 @@ func (eng *engine) bindParams() error {
 					param.Name, value.Type(), param.Type)
 			}
 			eng.ctx.params[param.Name] = value
+		case !required:
+			// Left unbound on purpose: see the doc comment.
 		default:
 			return fmt.Errorf(
 				"parameter %q is required: it has neither a default nor a defaultexpr, and no value was supplied",
@@ -292,7 +366,10 @@ func (eng *engine) face(name string) (*fontres.Face, error) {
 	if face.ResolvedData != "" {
 		entry.ResolvedData = face.ResolvedData
 		if err := eng.publishBlob(face.ResolvedData); err != nil {
-			return nil, err
+			// Named here so that every error out of this function names
+			// the font, which is what a caller collecting them relies on.
+			// The resolver's own messages already do.
+			return nil, fmt.Errorf("font %q: %w", name, err)
 		}
 	} else {
 		// A path the template named is a project asset

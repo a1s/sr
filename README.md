@@ -8,10 +8,9 @@ page count.
 A Go library with a CLI over it. Template plus JSON in, PDF out,
 one static binary.
 
-> **Status:** the engine and the PDF renderer are implemented. Two things named
-> below are not built yet: **subreports**, which a build refuses with the
-> offending node named, and the **CLI** — there is no binary yet, and the flags
-> below describe the shell that will sit over the library.
+> **Status:** the engine, the PDF renderer and the command line are implemented.
+> One thing named below is not built yet: **subreports**, which a build refuses
+> with the offending node named, and a template check reports as such.
 > Everything else in these documents is implemented and tested.
 
 ## Documentation
@@ -23,6 +22,7 @@ one static binary.
 | [doc/layout.md](doc/layout.md) | Layout and pagination |
 | [doc/printout.md](doc/printout.md) | The intermediate document a renderer consumes |
 | [doc/render.md](doc/render.md) | PDF rendering: what a renderer decides, and what it must not |
+| [doc/cli.md](doc/cli.md) | The command line: subcommands, flags, streams, exit codes |
 | [doc/decisions.md](doc/decisions.md) | Why the design is what it is, and what it replaces |
 | [example/sakila/](example/sakila/) | Reference template and dataset |
 | [example/invoices/](example/invoices/) | Second example: subreports, region grouping, the remaining variable modes |
@@ -54,29 +54,41 @@ widow control, and correct deferred page counts all follow from that.
 ## Command line
 
 ```bash
+make build      # or: go install github.com/a1s/sr/cmd/sr@latest
+```
+
+```bash
 sr build --template sakila.kdl --data payments.jsonl --out report.pdf
 ```
 
 | Flag | |
 |---|---|
 | `-t`, `--template` | Template file. Required. |
-| `-d`, `--data` | JSON array or NDJSON file. Omit for a template with no records. |
-| `-o`, `--out` | Output path. Extension selects the format: `.pdf`, `.srp.jsonl`, `.srp.cbor`. |
-| `--param NAME=VALUE` | Supply a report parameter. Repeatable. `VALUE` is text, parsed per the parameter's declared type. |
+| `-d`, `--data` | JSON array or NDJSON file, `-` for standard input. Omit for a template with no records. |
+| `-o`, `--out` | Output path, `-` for standard output. Extension selects the format: `.pdf`, `.srp.jsonl`, `.srp.cbor`. |
+| `--format` | `pdf`, `jsonl` or `cbor`, when the extension does not say. |
+| `--param NAME=VALUE` | Supply a report parameter. Repeatable. `VALUE` is text, parsed per the parameter's declared type. A name the template does not declare is an error, not a value that goes nowhere. |
 | `--build-time` | RFC 3339. Fixes `BUILD_TIME` for reproducible output. |
 | `--strict-fonts` | Resolve only explicitly named font files; fail otherwise. |
 | `--allow-overflow` | Downgrade oversized-band errors to warnings recorded in the printout. |
+| `--uncompressed` | Leave PDF streams uncompressed, to read the file in an editor. |
+| `-v`, `--verbose` | Report host font diagnostics. |
 
 Other subcommands:
 
 ```bash
-sr validate -t sakila.kdl          # check a template without data
+sr validate sakila.kdl             # check a template without data
 sr inspect report.srp.jsonl        # dump a printout as readable text
 sr render report.srp.jsonl -o report.pdf
 ```
 
 `build` writing a printout and `render` reading one back produce the same PDF as
 `build` writing PDF directly, which is what makes printouts worth archiving.
+
+The document goes to standard output and everything about the run to standard
+error, so `-o -` pipes. Exit 0 is success, 1 a run that failed, 2 a mistake in
+the command line; warnings never change it, because they travel in the printout
+header where archiving keeps them. Full reference: [doc/cli.md](doc/cli.md).
 
 ## Library
 
@@ -136,6 +148,20 @@ gives the same PDF, byte for byte, as rendering the one it was built from.
 Records may be `map[string]any` or structs; struct fields map to declared members
 by name, or by an `sr:"..."` tag. The CLI is a thin shell over this API.
 
+A loaded template also describes itself, which is what a front end needs
+before it has any data -- the parameters to ask for, the page geometry,
+the names declared:
+
+```go
+info := tpl.Info()                          // parameters, page, groups, fonts, …
+check, err := tpl.CheckFonts()              // what each typeface resolved to
+```
+
+`CheckFonts` is the one check that reads the machine rather than the document,
+and it is what `sr validate` reports. A font that does not resolve comes back
+in `check.Failures` rather than as an error, so one missing typeface does not
+hide the next.
+
 ## Running the examples
 
 ```bash
@@ -146,6 +172,12 @@ Narrowed to one month, using the template's `date` parameters:
 
 ```bash
 sr build -t example/sakila/sakila.kdl -d example/sakila/payments.jsonl -o june.pdf --param period_start=2005-06-01 --param period_end=2005-07-01
+```
+
+The second example uses a subreport, so it checks but does not yet build:
+
+```bash
+sr validate example/invoices/invoices.kdl
 ```
 
 ```bash
