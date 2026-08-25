@@ -283,7 +283,7 @@ printout out/sakila.srp.jsonl
 groups
   customer  4 runs  4 keys
 fonts
-  body       8pt  explicit  ../example/fonts/Go-Regular.ttf  "Go"
+  body       8pt   explicit  ../example/fonts/Go-Regular.ttf  "Go"
   title      14pt  explicit  ../example/fonts/Go-Bold.ttf  "Go"
 data
   swatch        base64  92 bytes
