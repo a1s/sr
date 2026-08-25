@@ -1,8 +1,6 @@
 package build
 
 import (
-	"fmt"
-
 	"github.com/a1s/sr/internal/tmpl"
 	"github.com/a1s/sr/printout"
 )
@@ -40,9 +38,9 @@ func Fonts(report *tmpl.Report, opts Options) (*FontCheck, error) {
 	}
 	check := &FontCheck{}
 	for _, def := range report.Fonts {
+		// Every error out of face already names the font, so this adds nothing.
 		if _, err := eng.face(def.Name); err != nil {
-			check.Failures = append(check.Failures,
-				fmt.Sprintf("font %q: %v", def.Name, err))
+			check.Failures = append(check.Failures, err.Error())
 		}
 	}
 	check.Fonts = eng.out.Header.Fonts

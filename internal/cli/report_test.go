@@ -108,6 +108,11 @@ func TestValidateUnresolvedFont(test *testing.T) {
 	if strings.Contains(got.out, "warnings") {
 		test.Errorf("nothing here is a warning; the report is:\n%s", got.out)
 	}
+	// The resolver's message already names the font, so nothing may name it
+	// again: no font resolved here, so this line is the only place it occurs.
+	if seen := strings.Count(got.out, `font "body"`); seen != 1 {
+		test.Errorf("the font is named %d times; the report is:\n%s", seen, got.out)
+	}
 	if !strings.Contains(got.err, "1 font did not resolve") {
 		test.Errorf("stderr = %q", got.err)
 	}

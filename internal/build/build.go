@@ -366,7 +366,10 @@ func (eng *engine) face(name string) (*fontres.Face, error) {
 	if face.ResolvedData != "" {
 		entry.ResolvedData = face.ResolvedData
 		if err := eng.publishBlob(face.ResolvedData); err != nil {
-			return nil, err
+			// Named here so that every error out of this function names
+			// the font, which is what a caller collecting them relies on.
+			// The resolver's own messages already do.
+			return nil, fmt.Errorf("font %q: %w", name, err)
 		}
 	} else {
 		// A path the template named is a project asset

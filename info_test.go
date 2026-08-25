@@ -155,6 +155,13 @@ func TestCheckFontsCollectsFailures(test *testing.T) {
 			test.Errorf("failure %d = %q, want it to name %q", index, check.Failures[index], want)
 		}
 	}
+	// Each failure names its font once: the resolver's messages carry the
+	// name already, so a collector that adds its own says it twice.
+	for _, failure := range check.Failures {
+		if seen := strings.Count(failure, `font "`); seen != 1 {
+			test.Errorf("failure %q names the font %d times, want 1", failure, seen)
+		}
+	}
 	// The one font that did resolve is still reported.
 	if len(check.Fonts) != 1 || check.Fonts[0].Name != "body" {
 		test.Errorf("fonts = %+v", check.Fonts)

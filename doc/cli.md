@@ -190,12 +190,12 @@ template example/sakila/sakila.kdl
   page 595.276 x 841.89 pt, margins left 70.866 right 42.52 top 42.52 bottom 42.52
   2 columns, 1 group, 6 members, 5 variables, 4 fonts, 1 data blob
 parameters
-  period_start  date  default "2005-01-01"  prompt
-  period_end    date  default "2006-01-01"  prompt
+  period_start  date      default "2005-01-01"  prompt
+  period_end    date      default "2006-01-01"  prompt
   as_of         datetime  defaultexpr
 fonts
-  body       8pt  explicit  example/fonts/Go-Regular.ttf  "Go"
-  bold       8pt  explicit  example/fonts/Go-Bold.ttf  "Go"
+  body       8pt   explicit  example/fonts/Go-Regular.ttf  "Go"
+  bold       8pt   explicit  example/fonts/Go-Bold.ttf  "Go"
   pagetitle  12pt  explicit  example/fonts/Go-Regular.ttf  "Go"
   title      14pt  explicit  example/fonts/Go-Bold.ttf  "Go"
 ok
@@ -243,7 +243,7 @@ One that has moved since the printout was written is an error naming it, and the
 previous output file is left where it was: the whole document is rendered before
 the file is opened.
 
-The printout's own warnings, recorded when it was built. are repeated on
+The printout's own warnings, recorded when it was built, are repeated on
 stderr, because this is the point at which somebody looks at the document,
 and an archived printout with a substituted font in it should not have to
 be inspected to find that out.
@@ -262,7 +262,7 @@ read and diffed.
 
 | Flag | |
 |---|---|
-| `--pages` | Page numbers to dump: `1`, `4-6`, `10-` and `-3` are all ranges, and they combine with commas. Default: all. |
+| `--pages` | Page numbers to dump: `1`, `4-6`, `10-` and `-3` are all ranges, and they combine with commas. An open end means the first or the last page, so a bare `-` is every page. Default: all. |
 | `--summary` | The header only, no pages. |
 
 Inspecting also checks the printout against its own
