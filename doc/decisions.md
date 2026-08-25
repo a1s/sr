@@ -24,6 +24,8 @@ can state what is true without also arguing for it.
 - [Enumeration and matching are one step](#enumeration-and-matching-are-one-step)
 - [Inherited defects, and what replaced them](#inherited-defects-and-what-replaced-them)
 - [What building the engine settled](#what-building-the-engine-settled)
+- [What building the renderer settled](#what-building-the-renderer-settled)
+- [What building the command line settled](#what-building-the-command-line-settled)
 
 ## Relationship to PythonReports
 
@@ -1897,7 +1899,127 @@ nothing.
 - **PostScript (CFF) outlines.** Refused, naming the font and the file.
   An `.otf` needs a CIDFontType0 descendant and a CID-keyed CFF, and
   a guess at it would produce files that fail on some readers only.
-- **The CLI.** `sr render` is Stage 4: the library renders, and nothing yet
-  reads a printout off the command line.
 - **Subreports**, still, so the second reference template renders no further
   than it builds.
+
+## What building the command line settled
+
+The [command line](cli.md) was specified before it was written, like the rest,
+and it is the one stage that is almost all interface and almost no algorithm.
+What follows is what writing it forced a decision on.
+
+### The exit code says whether the document exists, and nothing else
+
+Three codes: 0, 1 for a run that failed, 2 for a command line that was wrong.
+The distinction is worth the extra code because the two have different readers --
+a person retypes a flag, a scheduler retries a build -- and because a script that
+cannot tell them apart treats a typo as a broken report.
+
+**Warnings do not enter it.** A build that substituted a font, met a character
+its font lacks, or -- under `--allow-overflow` -- overran a band, still produced
+the document, and the document says so: the warnings are in the [printout
+header](printout.md#header-line). A caller who wants to fail on them tests that
+list, which is still there tomorrow when someone opens the archived printout. An
+exit code is gone the moment the process is.
+
+### The document goes to stdout, everything about the run to stderr
+
+Including the summary line, which is the one thing a person actually wants to
+see. It goes to stderr because `--out -` exists: a rule with an exception for
+"unless the output is a file" would mean the piped form works and the file form
+prints one extra line, from a different stream, on a different day. One rule,
+no exception.
+
+### An extension that names no format is an error
+
+`printout.WriteFile` falls back to NDJSON for anything that is not `.cbor`,
+which is right for a library call where the caller has already decided.
+On a command line it would write a printout to `report.txt` and report success,
+and the person who typed `-o report` wanted a PDF. So the CLI resolves the format
+itself, from `--format` or from `.pdf` / `.jsonl` / `.ndjson` / `.cbor`,
+and refuses the rest.
+
+That leaves `-o -`, which has no extension at all, and is why `--format` exists
+as a flag rather than only as an override.
+
+### A printout is read from a file, never from stdin
+
+Reading one is not symmetrical with writing one, and the asymmetry is in the
+format: a relative path inside a printout [resolves against the directory the
+printout was read from](printout.md#paths). Standard input has no directory. The
+alternative -- a `--base` flag for the case -- would add a way to get the base
+wrong in exchange for a pipe nobody needs, since the thing on the other end of
+that pipe is a file already.
+
+### Flags may follow positional arguments, which the flag package will not do
+
+`flag.Parse` stops at the first argument that is not a flag, so
+`sr render out.srp.jsonl -o out.pdf` -- the order everyone types -- leaves
+`-o` in the residue. The fix is six lines: parse, take one positional, parse
+again from the rest. Which is a fair price for not taking a dependency on a
+CLI framework to support four subcommands and eleven flags. The rest of that
+price is help text written by hand rather than generated, and a short and
+a long name registered as two flags writing one variable.
+
+### `sr validate` resolves the fonts, or it checks nothing new
+
+Template validation runs at load, so `sr validate` could have been
+`LoadTemplate` and an exit code. But everything load checks is in the
+document, and the interesting failure -- the one that differs between the
+machine that wrote the template and the machine that builds it -- is font
+resolution. And [enumeration diagnostics](template.md#host-enumeration)
+are deliberately kept out of the printout, which leaves them nowhere to
+be read at all if a check does not read them.
+
+So a check resolves every declared font and reports what each one resolved to,
+and by which step. Two consequences:
+
+- **A font that does not resolve is collected, not returned.** One missing
+  typeface must not hide the second one, because the person reading the report
+  is about to go and install fonts.
+- **A required parameter is not a failure.** A template whose values arrive at
+  build time is a normal template, so the check binds what it can and leaves the
+  rest unbound; a `defaultexpr` that reads an unbound parameter is left unbound
+  in turn rather than reported. This is the one change the command line made
+  inside the engine: parameter binding grew a strict flag, true for a build
+  and false for a check.
+
+### The library grew introspection rather than the CLI growing reach
+
+`sr validate` prints the parameters, the page geometry, and the names
+a template declares. All of it was reachable through `internal/tmpl`,
+which the CLI can import, being in the same module -- and that would have
+made the CLI the one front end able to see a template.
+
+Instead `Info` and `CheckFonts` are public. The evidence that this is
+the right side of the line is a property that was already in the format:
+`parameter prompt=#true` means "an interactive front end should ask for this",
+and until now nothing could read it. A format with a hint for front ends and
+no way for a front end to read it was incomplete, not minimal.
+
+### `sr inspect` checks the printout it dumps
+
+It reads a printout and prints it, so it is the tool a person reaches for
+when something looks wrong. Running the format's own
+[invariants](printout.md#invariants) over what it just read costs nothing
+next to the reading, and an inspector that displays a mark sitting outside
+its page without remarking on it is worse than no inspector. The dump still
+goes to stdout; the violation goes to stderr, and the exit code is 1.
+
+### Smaller ones
+
+- **`--param` twice is an error.** Last-wins is the convention, and it is wrong
+  here: these command lines are generated, and a name appearing twice means
+  two places both think they own that parameter.
+- **Everything is buffered before the output is opened**, for printouts as well
+  as PDFs, which the [renderer already argued
+  for](#the-output-file-is-not-opened-until-the-render-succeeds). Serializing
+  a printout can fail on a path it cannot make relative, and losing yesterday's
+  report to that is no better than losing it to a missing font.
+- **No configuration file and no environment variable.** Every input is an
+  argument, so a run is reproducible from the command line that produced it,
+  and a report that came out wrong cannot be blamed on a file in someone's
+  home directory.
+- **A template naming a subreport passes the check, with a warning.**
+  It is a valid template that this engine cannot build yet, and those are
+  two different statements. `sr build` still refuses it with the node named.

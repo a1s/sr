@@ -8,6 +8,12 @@ BUILD_DIR ?= out
 DIST_DIR  ?= dist
 TARBALL   := $(DIST_DIR)/$(NAME)-$(VERSION).tar.gz
 
+# Windows needs the extension to run the file at all.
+ifeq ($(OS),Windows_NT)
+	EXE := .exe
+endif
+BINARY    := $(BUILD_DIR)/$(NAME)$(EXE)
+
 ifeq ($(RELEASE),)
 	DEV_VERSION = -dev-$(SHA)
 endif
@@ -26,14 +32,20 @@ LDFLAGS := -w -s -extldflags='-static' \
   -X '$(REPO)/meta.Version=$(VERSION)$(DEV_VERSION)' \
   -X '$(REPO)/meta.Date=$(DATE)'
 
-.PHONY: test vet fmt lint
+.PHONY: all build build-dir install test vet fmt lint clean
 
 all: build
 
 build-dir:
 	test -d $(BUILD_DIR) || mkdir -p $(BUILD_DIR)
 
-build:
+# -trimpath keeps build paths out of the binary, so two machines
+# building one commit produce the same file.
+build: build-dir
+	$(GO) build -trimpath -ldflags="$(LDFLAGS)" -o $(BINARY) ./cmd/$(NAME)
+
+install:
+	$(GO) install -trimpath -ldflags="$(LDFLAGS)" ./cmd/$(NAME)
 
 # -------- dev hygiene --------
 
