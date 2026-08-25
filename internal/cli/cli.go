@@ -91,9 +91,7 @@ func dispatch(env Env) error {
 	case "inspect":
 		return cmdInspect(env, args)
 	case "version", "--version", "-V":
-		out := newStream(env.Out)
-		out.line("%s %s", meta.App, meta.Version)
-		return out.err
+		return version(env, args)
 	case "help", "--help", "-h":
 		return help(env, args)
 	}
@@ -101,6 +99,29 @@ func dispatch(env Env) error {
 		return usagef("", "unknown flag %q; flags come after the command", name)
 	}
 	return usagef("", "unknown command %q", name)
+}
+
+// version prints the version.
+//
+// It takes no arguments and says so rather than ignoring them, which is what
+// every other command does: an argument a caller expected to matter, dropped
+// in silence, is how a wrong document gets built.
+func version(env Env, args []string) error {
+	out := newStream(env.Out)
+	for _, arg := range args {
+		if arg == "-h" || arg == "--help" {
+			out.printf("%s", usageVersion)
+			if out.err != nil {
+				return out.err
+			}
+			return errHelp
+		}
+	}
+	if len(args) > 0 {
+		return usagef("version", "version takes no arguments, and got %q", args[0])
+	}
+	out.line("%s %s", meta.App, meta.Version)
+	return out.err
 }
 
 // help prints the general usage, or one command's.

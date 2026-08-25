@@ -2,7 +2,6 @@ package cli
 
 import (
 	"bytes"
-	"os"
 
 	"github.com/a1s/sr/pdf"
 	"github.com/a1s/sr/printout"
@@ -50,23 +49,17 @@ func cmdRender(env Env, args []string) error {
 	if err := pdf.Write(doc, &body, options...); err != nil {
 		return err
 	}
-	if out == "-" {
-		document := newStream(env.Out)
-		document.write(body.Bytes())
-		if document.err != nil {
-			return document.err
-		}
-	} else if err := os.WriteFile(out, body.Bytes(), 0o644); err != nil {
+	if err := deliver(env, out, body.Bytes()); err != nil {
 		return err
 	}
+	// The warnings are the printout's own, recorded when it was built.
+	// They are repeated because this is the point at which somebody
+	// looks at the document, and an archived printout with a substituted font
+	// in it should not have to be inspected to find that out.
 	notes := newStream(env.Err)
 	for _, warning := range doc.Header.Warnings {
 		notes.line("warning: %s", describeWarning(warning))
 	}
-	where := out
-	if out == "-" {
-		where = "standard output"
-	}
-	notes.line("%s: %s", where, count(len(doc.Pages), "page"))
+	notes.line("%s: %s", destination(out), count(len(doc.Pages), "page"))
 	return nil
 }

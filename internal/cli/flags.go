@@ -6,6 +6,8 @@ import (
 	"io"
 	"sort"
 	"strings"
+
+	"github.com/a1s/sr"
 )
 
 // newFlags builds a flag set that reports errors instead of exiting,
@@ -25,6 +27,12 @@ func newFlags(name string) *flag.FlagSet {
 // Each round takes one positional and parses on from there.
 //
 // A -h or --help anywhere prints the command's help and returns errHelp.
+//
+// Because parsing resumes after each positional, "--" ends flag parsing only
+// as far as the next argument: in "sr validate -- a.kdl -t b.kdl" the -t is
+// still read as a flag. No command here takes an argument that could start
+// with a dash -- a path that does is the one case, and it is spelled ./-x --
+// so the general end-of-flags marker is not worth a second parser.
 func parse(env Env, set *flag.FlagSet, args []string) ([]string, error) {
 	var rest []string
 	for {
@@ -125,4 +133,36 @@ func (list *paramList) names() []string {
 // paramFlag registers the repeatable --param flag.
 func paramFlag(set *flag.FlagSet, list *paramList) {
 	set.Var(list, "param", "a report parameter, NAME=VALUE")
+}
+
+// checkParams refuses a --param that names nothing the template declares.
+//
+// A misspelled name is the mistake a generated command line actually makes,
+// and it is the one that would otherwise pass: the value goes nowhere, the
+// report builds with the default in its place, and nothing says so. The
+// engine refuses it too; what this adds is the exit code, since a name that
+// does not exist is a mistake in the command line rather than in the work --
+// and a check, which binds leniently, would not reach the engine's refusal.
+func checkParams(command string, list *paramList, info sr.Info) error {
+	declared := make(map[string]bool, len(info.Parameters))
+	names := make([]string, 0, len(info.Parameters))
+	for _, param := range info.Parameters {
+		declared[param.Name] = true
+		names = append(names, param.Name)
+	}
+	var unknown []string
+	for _, name := range list.names() {
+		if !declared[name] {
+			unknown = append(unknown, "--param "+name)
+		}
+	}
+	if len(unknown) == 0 {
+		return nil
+	}
+	if len(names) == 0 {
+		return usagef(command, "%s names no parameter, and the template declares none",
+			strings.Join(unknown, ", "))
+	}
+	return usagef(command, "%s names no parameter; the template declares %s",
+		strings.Join(unknown, ", "), strings.Join(names, ", "))
 }

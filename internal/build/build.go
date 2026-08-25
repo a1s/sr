@@ -17,6 +17,8 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
+	"strings"
 	gotime "time"
 
 	"github.com/a1s/sr/internal/data"
@@ -201,6 +203,48 @@ func firstSubreport(report *tmpl.Report) string {
 	return found
 }
 
+// checkSupplied refuses a value supplied for a name the template does not declare.
+//
+// Nothing else in the run would mention it. The report builds, with the
+// default in place of what the caller meant, and says nothing -- which is
+// the worst way for a misspelled parameter name to behave, and the likelier
+// mistake in a generated command line than a name given twice.
+//
+// A check that binds leniently does not run this: there the caller has
+// supplied values for a template they may be checking rather than building,
+// and the CLI reports the same thing as a usage error before this could.
+func (eng *engine) checkSupplied() error {
+	var unknown []string
+	for name := range eng.opts.Values {
+		if _, ok := eng.report.ParamByName[name]; !ok {
+			unknown = append(unknown, name)
+		}
+	}
+	for name := range eng.opts.TextParams {
+		if _, ok := eng.report.ParamByName[name]; !ok {
+			unknown = append(unknown, name)
+		}
+	}
+	if len(unknown) == 0 {
+		return nil
+	}
+	sort.Strings(unknown)
+	quoted := make([]string, 0, len(unknown))
+	for _, name := range unknown {
+		quoted = append(quoted, strconv.Quote(name))
+	}
+	if len(eng.report.Params) == 0 {
+		return fmt.Errorf("no parameter named %s; the template declares none",
+			strings.Join(quoted, ", "))
+	}
+	declared := make([]string, 0, len(eng.report.Params))
+	for _, param := range eng.report.Params {
+		declared = append(declared, param.Name)
+	}
+	return fmt.Errorf("no parameter named %s; the template declares %s",
+		strings.Join(quoted, ", "), strings.Join(declared, ", "))
+}
+
 // bindParams binds each declared parameter to a value.
 //
 // required is false for a check that runs without a caller's values:
@@ -208,6 +252,11 @@ func firstSubreport(report *tmpl.Report) string {
 // rather than refused, and an expression that reads it fails on its own terms.
 // A build passes true, because a report missing a parameter is not a report.
 func (eng *engine) bindParams(required bool) error {
+	if required {
+		if err := eng.checkSupplied(); err != nil {
+			return err
+		}
+	}
 	for _, param := range eng.report.Params {
 		if value, ok := eng.opts.Values[param.Name]; ok {
 			if !data.MatchesType(value, param.Type) {

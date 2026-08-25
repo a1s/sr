@@ -160,3 +160,67 @@ func TestCheckFontsCollectsFailures(test *testing.T) {
 		test.Errorf("fonts = %+v", check.Fonts)
 	}
 }
+
+// A value supplied for a name the template does not declare is refused.
+//
+// It is the mistake with the worst failure mode: the report builds with
+// the default in place of what the caller meant, and nothing mentions it.
+// The CLI catches it first, as a usage error; this is the library saying so.
+func TestUndeclaredParameter(test *testing.T) {
+	source := `report name="One parameter" {
+  parameter "period_start" type="date" default="2005-01-01"
+  font "body" file="Go-Regular.ttf" size=10
+  layout pagesize="A5" {
+    style font="body"
+    detail height=12 { field expr="period_start" }
+  }
+}`
+	tpl, err := ParseTemplate("example/fonts/test.kdl", source)
+	if err != nil {
+		test.Fatalf("%v", err)
+	}
+	for _, option := range []Option{
+		WithTextParam("perod_start", "2005-06-01"),
+		WithParam("perod_start", "2005-06-01"),
+	} {
+		_, err := tpl.Build(nil, StrictFonts(), WithBuildTime(fixedTime), option)
+		if err == nil {
+			test.Fatal("a misspelled parameter name built without complaint")
+		}
+		for _, want := range []string{"perod_start", "period_start"} {
+			if !strings.Contains(err.Error(), want) {
+				test.Errorf("error = %q, want it to name %q", err, want)
+			}
+		}
+	}
+	// The declared spelling still works, which is the point of the check
+	// being about names rather than about values.
+	if _, err := tpl.Build(nil, StrictFonts(), WithBuildTime(fixedTime),
+		WithTextParam("period_start", "2005-06-01")); err != nil {
+		test.Errorf("%v", err)
+	}
+}
+
+// A check does not refuse it: there the caller may be checking a template
+// rather than building it. The command line reports it instead.
+func TestCheckIgnoresUndeclaredParameter(test *testing.T) {
+	source := `report name="None" {
+  font "body" file="Go-Regular.ttf" size=10
+  layout pagesize="A5" {
+    style font="body"
+    detail height=12 { field text="x" }
+  }
+}`
+	tpl, err := ParseTemplate("example/fonts/test.kdl", source)
+	if err != nil {
+		test.Fatalf("%v", err)
+	}
+	if _, err := tpl.CheckFonts(StrictFonts(), WithTextParam("nonesuch", "1")); err != nil {
+		test.Errorf("%v", err)
+	}
+	if _, err := tpl.Build(nil, StrictFonts(), WithTextParam("nonesuch", "1")); err == nil {
+		test.Error("a build must refuse it")
+	} else if !strings.Contains(err.Error(), "declares none") {
+		test.Errorf("error = %q, want it to say the template declares none", err)
+	}
+}

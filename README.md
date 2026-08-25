@@ -67,7 +67,7 @@ sr build --template sakila.kdl --data payments.jsonl --out report.pdf
 | `-d`, `--data` | JSON array or NDJSON file, `-` for standard input. Omit for a template with no records. |
 | `-o`, `--out` | Output path, `-` for standard output. Extension selects the format: `.pdf`, `.srp.jsonl`, `.srp.cbor`. |
 | `--format` | `pdf`, `jsonl` or `cbor`, when the extension does not say. |
-| `--param NAME=VALUE` | Supply a report parameter. Repeatable. `VALUE` is text, parsed per the parameter's declared type. |
+| `--param NAME=VALUE` | Supply a report parameter. Repeatable. `VALUE` is text, parsed per the parameter's declared type. A name the template does not declare is an error, not a value that goes nowhere. |
 | `--build-time` | RFC 3339. Fixes `BUILD_TIME` for reproducible output. |
 | `--strict-fonts` | Resolve only explicitly named font files; fail otherwise. |
 | `--allow-overflow` | Downgrade oversized-band errors to warnings recorded in the printout. |

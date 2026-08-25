@@ -197,7 +197,8 @@ func TestBuildFormats(test *testing.T) {
 	})
 
 	// --format overrides the extension, which is what makes an unusual
-	// name usable rather than a reason to rename the file.
+	// name usable rather than a reason to rename the file. Overriding a
+	// recognized one writes a file nothing will read back, so it warns.
 	test.Run("format overrides the extension", func(test *testing.T) {
 		path := filepath.Join(dir, "out.pdf")
 		got := run(test, "", append(append([]string{}, common...),
@@ -207,6 +208,36 @@ func TestBuildFormats(test *testing.T) {
 		}
 		if body := read(test, path); !bytes.HasPrefix(body, []byte(`{"sr":1`)) {
 			test.Errorf("body starts %q", body[:8])
+		}
+		if !strings.Contains(got.err, "warning: --format jsonl writes JSONL to") {
+			test.Errorf("stderr = %q, want the contradiction warned about", got.err)
+		}
+	})
+
+	// An extension that names no format is the reason --format exists,
+	// so agreeing with nothing is not a contradiction.
+	test.Run("format over an extension that names none", func(test *testing.T) {
+		path := filepath.Join(dir, "out.bin")
+		got := run(test, "", append(append([]string{}, common...),
+			"-o", path, "--format", "cbor")...)
+		if got.code != ExitOK {
+			test.Fatalf("exit = %d, stderr %q", got.code, got.err)
+		}
+		if strings.Contains(got.err, "warning") {
+			test.Errorf("stderr = %q, want no warning", got.err)
+		}
+	})
+
+	// Nor is agreeing with the extension.
+	test.Run("format agreeing with the extension", func(test *testing.T) {
+		path := filepath.Join(dir, "agreed.srp.jsonl")
+		got := run(test, "", append(append([]string{}, common...),
+			"-o", path, "--format", "jsonl")...)
+		if got.code != ExitOK {
+			test.Fatalf("exit = %d, stderr %q", got.code, got.err)
+		}
+		if strings.Contains(got.err, "warning") {
+			test.Errorf("stderr = %q, want no warning", got.err)
 		}
 	})
 }
@@ -245,6 +276,18 @@ func TestBuildUsage(test *testing.T) {
 			args: []string{"build", "-t", template, "-o", "x.pdf",
 				"-d", data, "--build-time", "yesterday"},
 			want: "not an RFC 3339 time"},
+		// The command line is checked before the template is read, so this
+		// reports the flag rather than the file that is also missing.
+		{name: "a build time checked before the template is loaded",
+			args: []string{"build", "-t", filepath.Join(dir, "nope.kdl"),
+				"-o", "x.pdf", "--build-time", "yesterday"},
+			want: "not an RFC 3339 time"},
+		{name: "a parameter the template does not declare",
+			args: []string{"build", "-t", template, "-o", "x.pdf", "-d", data,
+				"--param", "not=1"},
+			want: "--param not names no parameter; the template declares note, wanted"},
+		{name: "version with an argument", args: []string{"version", "frobnicate"},
+			want: "version takes no arguments"},
 	}
 	for _, item := range cases {
 		test.Run(item.name, func(test *testing.T) {

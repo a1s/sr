@@ -35,8 +35,10 @@ sr version   print the version
 sr help      print usage, for one command or for all of them
 ```
 
-`sr` with no arguments prints usage and exits 2. `sr help build`, `sr build -h`
-and `sr build --help` all print the same thing and exit 0.
+`sr` with no arguments says that a command is required, points at `sr help`,
+and exits 2. `sr help build`, `sr build -h` and `sr build --help` all print
+the same thing and exit 0. Every command rejects an argument it has no use
+for, `version` included.
 
 ### Flags
 
@@ -46,7 +48,15 @@ Flags may follow positional arguments, so `sr render out.srp.jsonl -o out.pdf`
 works.
 
 `--param` is the one repeatable flag. Values accumulate in the order given,
-and a name given twice is an error naming it rather than a silent last-wins.
+and two mistakes in it are refused rather than absorbed:
+
+- **A name the template does not declare.** The value would go nowhere,
+  the report would build with the default in its place, and nothing would
+  say so. A misspelling is the likelier mistake in a generated command line,
+  and it is the one with the worse failure mode. The message names the
+  declared parameters. The library refuses it too, at build time.
+- **A name given twice.** Last-wins is the convention, and it is wrong here:
+  two places both think they own that parameter.
 
 ### Streams
 
@@ -116,6 +126,17 @@ The output format comes from `--format`, or from what `--out` ends in:
 Any other extension is a usage error naming the three. Guessing would write
 a printout to a file called `report.txt` and call it done, and these are the
 extensions the [printout format](printout.md#encoding) itself names.
+
+`--format` **over a recognized extension warns**, on stderr, and proceeds:
+`--format cbor -o report.jsonl` writes a file that `render` and `inspect`
+will try to read as NDJSON, because they take the encoding from the extension.
+Over an unrecognized extension -- or no extension, as for `-`, or one that
+agrees -- it is silent, since overriding is what the flag is for.
+
+Every check on the command line runs **before** the template is read, so a
+mistyped flag is reported as itself rather than after a missing file or a
+template's load warnings. The exceptions are the two that need the template:
+`--param` against the declared names, and the build itself.
 
 `--param` and `--build-time` are the only two ways a build depends on anything
 but the template and the data, and both are recorded: parameters through
@@ -187,10 +208,17 @@ A font line is the name the template gave it, its size and style, the
 [step](template.md#font-resolution) that resolved it, the file, and the face
 inside that file.
 
-`ok` is the last line, so a `tail -1` reads the verdict. A `warnings` section
-appears before it when the load or the font resolution produced any, and a
-`diagnostics` section under `--verbose`. Exit 1 means the template did not load,
-or a font it declares did not resolve.
+`ok` is the last line, so a `tail -1` reads the verdict; a check that failed
+does not print it. Three sections may appear before it, each only when it
+holds something:
+
+| | |
+|---|---|
+| `warnings` | Load diagnostics, a substituted typeface, a subreport this engine cannot build yet. The check still passes. |
+| `failures` | Fonts that did not resolve. These are why the exit code is 1, so they are not filed as warnings. |
+| `diagnostics` | Under `--verbose`: what the [host font enumeration](template.md#host-enumeration) had to say. About the machine, not the template. |
+
+Exit 1 means the template did not load, or a font it declares did not resolve.
 
 ## `sr render`
 
@@ -214,6 +242,11 @@ A render reads the font files the printout resolved, and those are not part of i
 One that has moved since the printout was written is an error naming it, and the
 previous output file is left where it was: the whole document is rendered before
 the file is opened.
+
+The printout's own warnings, recorded when it was built. are repeated on
+stderr, because this is the point at which somebody looks at the document,
+and an archived printout with a substituted font in it should not have to
+be inspected to find that out.
 
 ## `sr inspect`
 

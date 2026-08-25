@@ -101,6 +101,13 @@ func TestValidateUnresolvedFont(test *testing.T) {
 	if !strings.Contains(got.out, "No Such Typeface At All") {
 		test.Errorf("the report does not name the typeface; it is:\n%s", got.out)
 	}
+	// Under failures, not warnings: this is why the check failed.
+	if !strings.Contains(got.out, "failures\n  font \"body\"") {
+		test.Errorf("the failure is not filed as one; the report is:\n%s", got.out)
+	}
+	if strings.Contains(got.out, "warnings") {
+		test.Errorf("nothing here is a warning; the report is:\n%s", got.out)
+	}
 	if !strings.Contains(got.err, "1 font did not resolve") {
 		test.Errorf("stderr = %q", got.err)
 	}
@@ -118,6 +125,9 @@ func TestValidateUsage(test *testing.T) {
 			want: "one template at a time"},
 		{name: "both spellings at once",
 			args: []string{"validate", template, "-t", template}, want: "given twice"},
+		{name: "a parameter the template does not declare",
+			args: []string{"validate", template, "--param", "not=1"},
+			want: "--param not names no parameter"},
 	}
 	for _, item := range cases {
 		test.Run(item.name, func(test *testing.T) {

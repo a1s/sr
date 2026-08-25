@@ -45,6 +45,9 @@ func cmdValidate(env Env, args []string) error {
 	if err != nil {
 		return err
 	}
+	if err := checkParams("validate", &params, tpl.Info()); err != nil {
+		return err
+	}
 	options := []sr.Option{}
 	for _, name := range params.names() {
 		options = append(options, sr.WithTextParam(name, params.values[name]))
@@ -133,17 +136,24 @@ func writeCheck(
 		}
 		writeRows(out, items)
 	}
-	problems := append([]string{}, loaded...)
-	problems = append(problems, fonts.Warnings...)
+	warnings := append([]string{}, loaded...)
+	warnings = append(warnings, fonts.Warnings...)
 	for _, node := range info.Subreports {
-		problems = append(problems, node+
+		warnings = append(warnings, node+
 			": subreports are not implemented yet, so this template validates but will not build")
 	}
-	problems = append(problems, fonts.Failures...)
-	if len(problems) > 0 {
+	if len(warnings) > 0 {
 		out.line("warnings")
-		for _, problem := range problems {
-			out.line("  %s", problem)
+		for _, warning := range warnings {
+			out.line("  %s", warning)
+		}
+	}
+	// Under their own heading, because they are why the check failed and the
+	// exit code is 1. Filing them as warnings would say the opposite.
+	if len(fonts.Failures) > 0 {
+		out.line("failures")
+		for _, failure := range fonts.Failures {
+			out.line("  %s", failure)
 		}
 	}
 	if verbose && len(fonts.Diagnostics) > 0 {
@@ -163,12 +173,12 @@ func writeCheck(
 func paramFields(param sr.Parameter) []string {
 	parts := []string{param.Name, param.Type}
 	switch {
+	case param.Required:
+		parts = append(parts, "required")
 	case param.HasDefault:
 		parts = append(parts, "default "+strconv.Quote(param.Default))
-	case param.HasDefaultExpr:
-		parts = append(parts, "defaultexpr")
 	default:
-		parts = append(parts, "required")
+		parts = append(parts, "defaultexpr")
 	}
 	if param.Prompt {
 		parts = append(parts, "prompt")

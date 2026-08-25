@@ -2008,11 +2008,17 @@ goes to stdout; the violation goes to stderr, and the exit code is 1.
 
 ### Smaller ones
 
-- **`--param` twice is an error.** Last-wins is the convention, and it is wrong
-  here: these command lines are generated, and a name appearing twice means
-  two places both think they own that parameter.
-- **Everything is buffered before the output is opened**, for printouts as well
-  as PDFs, which the [renderer already argued
+- **A `--param` naming nothing is an error, and so is one given twice.**
+  The engine refuses it, so a library caller is covered too;
+  the CLI refuses it first, so the exit code says the command line was wrong.
+- **A `--format` that contradicts a recognized extension warns.**
+  Not an error, because overriding is what the flag is for; not silent,
+  because it produces a file nothing will read back.
+- **Unresolved fonts are reported under their own heading**, not among
+  the check's warnings. They are why the exit code is 1, and a heading
+  that says otherwise contradicts the code that follows it.
+- **Everything is buffered before the output is opened**, for printouts
+  as well as PDFs, which the [renderer already argued
   for](#the-output-file-is-not-opened-until-the-render-succeeds). Serializing
   a printout can fail on a path it cannot make relative, and losing yesterday's
   report to that is no better than losing it to a missing font.
