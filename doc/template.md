@@ -1047,11 +1047,19 @@ the section's box and takes nothing from its height — see
 
 `inline=#true` places the subreport's bands into the current frame instead of
 starting fresh pages; an inline subreport must match the parent's page size,
-inherits its margins, and defines no `header` or `footer` of its own.
-`ownpageno=#true` restarts page numbering inside the subreport, and is
-incompatible with `inline`.
+inherits its margins, and defines no `header`, `footer`, `columns`, `swapheader`
+title or `swapfooter` summary of its own. `ownpageno=#true` restarts page
+numbering inside the subreport, and is incompatible with `inline`.
 
-A `subreport` may not appear inside a `columns` block.
+A `subreport` may not appear inside a `columns` block, nor on a `header`, a
+`footer`, a `swapheader` title or a `swapfooter` summary -- see
+[where a subreport's bands go](layout.md#where-a-subreports-bands-go).
+
+A host band suppressed by `printwhen` runs none of its subreports.
+
+`template=` is read when this template is read, so one `sr validate` checks the
+whole tree and one load error names whichever file it came from. A template that
+reaches itself, directly or through another, is refused at load.
 
 Children: `arg*`.
 
@@ -1065,7 +1073,12 @@ Supplies a value for a subreport `parameter`.
 | `value` | expression | required |
 
 `value` is an expression, not text, so it is not parsed per the parameter's `type`.
-Its result must already match that type.
+Its result must already match that type. It is evaluated in the **host's**
+context, at the point the subreport runs.
+
+A subreport has no command line, so a parameter of the layout it names that has
+neither an `arg` here nor a `default` or `defaultexpr` of its own is a load-time
+error.
 
 ### `embedded`
 
@@ -1081,7 +1094,18 @@ and nested `embedded*`.
 
 An `embedded` layout is its own namespace for its `parameter`, `records`,
 `variable`, and `group` names, but shares the enclosing report's `font`
-and `data` definitions.
+and `data` definitions, its `basedir`, and its page size and margins.
+
+Its style search continues outward into the enclosing `layout`, per the
+[ordering rules](#ordering-rules): the walk is the band's own styles, then
+the `embedded` node's, then the `layout` the `embedded` node is written in.
+A layout named by `template=` is a separate document and its walk ends at
+its own `layout`, which is the same rule read against a different tree.
+
+A `subreport` inside an `embedded` layout may name one defined beside it, one
+nested in it, or one defined further out, including the layout it is itself in
+-- which is how a template walks a tree. See
+[the nesting bound](layout.md#subreports).
 
 Its `records` declares the fields of the sequence the subreport runs over, which
 is a different shape from the parent's records — an invoice report's records are
@@ -1097,7 +1121,10 @@ that paginates itself. An `embedded` layout used by an
 use `title` and `summary` for content that prints once per invocation.
 
 A subreport given by `template=` is an ordinary `report` document and carries
-its own `records`.
+its own `records`, `font` and `data` definitions, `basedir`, and page geometry.
+It validates on its own, so a layout meant only ever to be run as a subreport
+still passes `sr validate` -- its parameters are simply ones a caller has to
+supply.
 
 ## Font resolution
 
@@ -1283,11 +1310,16 @@ Validation runs once, at load, before any data is read. It checks:
   appears only when that node's type is `date` or `datetime`. `format` on a `field`
   or a `barcode` is a different property, a `%` format specification, and carries
   no such restriction; see [Formatting](expressions.md#formatting).
-- Every `arg` names a `parameter` of the subreport it belongs to.
+- Every `arg` names a `parameter` of the subreport it belongs to, once.
 - Every deferred `stretch` field and every deferred `barcode` has a placeholder.
+- Every `parameter` a subreport's layout requires has an `arg` or a default.
 - `subreport` has exactly one of `template` / `embedded`, is not inside `columns`,
-  and does not combine `inline` with `ownpageno`.
-- An `inline` subreport's layout defines no `header` and no `footer`.
+  is not on a `header`, a `footer`, a `swapheader` title or a `swapfooter`
+  summary, and does not combine `inline` with `ownpageno`.
+- An `inline` subreport's layout defines no `header`, no `footer`, no `columns`,
+  no `swapheader` title and no `swapfooter` summary, and runs at the page size
+  of the report that invokes it.
+- No `subreport template=` chain reaches the template it started from.
 - `image` does not combine `embed=#false` with `data` or a `content` child.
 - `columns count` does not make the column width non-positive.
 - Expressions parse. Name resolution is not checked at load, since undeclared

@@ -1,7 +1,11 @@
 package tmpl
 
 import (
+	"path/filepath"
+	"strconv"
+
 	"github.com/a1s/sr/internal/expr"
+	"github.com/a1s/sr/internal/geom"
 	"github.com/a1s/sr/internal/kdl"
 	"go.starlark.net/starlark"
 )
@@ -260,6 +264,23 @@ func (psr *parser) validateSection(section *Section, ns *namespace, shared *shar
 		if inColumns {
 			psr.errf(sub.Node, "", "a subreport may not appear inside a columns block")
 		}
+		if section.Kind == BandHeader || section.Kind == BandFooter {
+			psr.errf(sub.Node, "",
+				"a subreport emits bands of its own, and a %s band is measured and reserved before the page it belongs to is filled; put it on a title, summary or detail band",
+				section.Kind)
+		}
+		// swapheader and swapfooter place a band outside the frame's ordinary
+		// fill -- above the page header, below the page footer -- and a
+		// subreport takes frame space, which there is none of on either side.
+		if section.SwapHeader || section.SwapFooter {
+			swap := "swapheader"
+			if section.SwapFooter {
+				swap = "swapfooter"
+			}
+			psr.errf(sub.Node, "",
+				"%s places this band outside the frame's own fill, and a subreport takes frame space of its own, so the two cannot be combined",
+				swap)
+		}
 	}
 	for _, el := range section.Elements {
 		psr.validateElement(el, ns, shared)
@@ -422,6 +443,18 @@ func (psr *parser) validateOutlineTargets(report *Report) {
 	})
 }
 
+// subTarget is the layout a subreport runs, whichever way it was named.
+type subTarget struct {
+	// what names it in a diagnostic: the embedded layout's name, or the file.
+	what   string
+	params []*Parameter
+	byName map[string]*Parameter
+	body   *Body
+	// page is the child's own page size, nil for an embedded layout,
+	// which has none of its own and takes the enclosing report's.
+	page *geom.PageSize
+}
+
 func (psr *parser) validateSubreports(report *Report) {
 	embedded := map[string]*Embedded{}
 	if report.Layout != nil {
@@ -436,24 +469,116 @@ func (psr *parser) validateSubreports(report *Report) {
 	}
 	forEachSection(report, func(section *Section) {
 		for _, sub := range section.Subreports {
-			if sub.Embedded == "" {
+			target := psr.subreportTarget(sub, embedded)
+			if target == nil {
 				continue
 			}
-			target, ok := embedded[sub.Embedded]
-			if !ok {
-				psr.errf(sub.Node, "embedded", "no embedded layout named %q", sub.Embedded)
-				continue
-			}
-			if sub.Inline && (target.Body.Header != nil || target.Body.Footer != nil) {
-				psr.errf(sub.Node, "inline", "an inline subreport shares the parent's pages, whose header and footer are already reserved; %q must not define them", sub.Embedded)
-			}
-			for _, arg := range sub.Args {
-				if _, ok := target.ParamByName[arg.Name]; !ok {
-					psr.errf(arg.Node, "", "%q has no parameter named %q", sub.Embedded, arg.Name)
-				}
-			}
+			psr.checkSubreportTarget(sub, target, report)
 		}
 	})
+}
+
+// subreportTarget resolves a subreport to the layout it runs,
+// or nil when the reference is broken and has already been reported.
+func (psr *parser) subreportTarget(sub *Subreport, embedded map[string]*Embedded) *subTarget {
+	if sub.Embedded != "" {
+		found, ok := embedded[sub.Embedded]
+		if !ok {
+			psr.errf(sub.Node, "embedded", "no embedded layout named %q", sub.Embedded)
+			return nil
+		}
+		return &subTarget{
+			what:   strconv.Quote(sub.Embedded),
+			params: found.Params,
+			byName: found.ParamByName,
+			body:   &found.Body,
+		}
+	}
+	if sub.Report == nil {
+		// The template did not load, and that was reported where it failed.
+		return nil
+	}
+	page := sub.Report.Layout.Page
+	return &subTarget{
+		what:   strconv.Quote(filepath.Base(sub.Template)),
+		params: sub.Report.Params,
+		byName: sub.Report.ParamByName,
+		body:   &sub.Report.Layout.Body,
+		page:   &page,
+	}
+}
+
+// checkSubreportTarget applies the rules that need both sides:
+// what inline forbids, and that the arguments and the parameters agree.
+func (psr *parser) checkSubreportTarget(sub *Subreport, target *subTarget, report *Report) {
+	if sub.Inline {
+		body := target.body
+		if body.Header != nil || body.Footer != nil {
+			psr.errf(sub.Node, "inline",
+				"an inline subreport shares the parent's pages, whose header and footer are already reserved; %s must not define them",
+				target.what)
+		}
+		// A columns block reserves a frame across the pages it spans, and an
+		// inline subreport does not own the pages it prints on -- the same
+		// reason its header and footer are refused.
+		if body.Columns != nil || hasGroupColumns(body) {
+			psr.errf(sub.Node, "inline",
+				"an inline subreport prints in the host's frame, and a columns block reserves a frame of its own across the pages it spans; %s must not open one",
+				target.what)
+		}
+		// swapheader places a band outside the page header and swapfooter
+		// below the page footer, and an inline subreport has neither.
+		if body.Title != nil && body.Title.SwapHeader {
+			psr.errf(sub.Node, "inline",
+				"swapheader places a title above the page header, and an inline subreport prints on a page whose header is the host's; %s must not use it",
+				target.what)
+		}
+		if body.Summary != nil && body.Summary.SwapFooter {
+			psr.errf(sub.Node, "inline",
+				"swapfooter places a summary below the page footer, and an inline subreport prints on a page whose footer is the host's; %s must not use it",
+				target.what)
+		}
+		if target.page != nil && report.Layout != nil {
+			mine := report.Layout.Page
+			if target.page.Width != mine.Width || target.page.Height != mine.Height {
+				psr.errf(sub.Node, "inline",
+					"an inline subreport shares the parent's pages; %s is %g by %g pt and this report is %g by %g pt",
+					target.what, target.page.Width, target.page.Height,
+					mine.Width, mine.Height)
+			}
+		}
+	}
+	supplied := map[string]bool{}
+	for _, arg := range sub.Args {
+		if _, ok := target.byName[arg.Name]; !ok {
+			psr.errf(arg.Node, "", "%s has no parameter named %q", target.what, arg.Name)
+			continue
+		}
+		if supplied[arg.Name] {
+			psr.errf(arg.Node, "", "duplicate arg %q", arg.Name)
+		}
+		supplied[arg.Name] = true
+	}
+	// A subreport has no command line to fall back on, so a parameter
+	// with neither an arg nor a default has nothing left to be bound from.
+	for _, param := range target.params {
+		if supplied[param.Name] || !param.Required() {
+			continue
+		}
+		psr.errf(sub.Node, "",
+			"%s requires the parameter %q, which has no default and no arg here",
+			target.what, param.Name)
+	}
+}
+
+// hasGroupColumns reports whether any group in the body opens a columns block.
+func hasGroupColumns(body *Body) bool {
+	for group := body.Group; group != nil; group = group.Group {
+		if group.Columns != nil {
+			return true
+		}
+	}
+	return false
 }
 
 // warnCollapsingBand reports a band that declares no height and holds only

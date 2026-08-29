@@ -1,6 +1,7 @@
 package tmpl
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"sort"
@@ -10,12 +11,22 @@ import (
 )
 
 // Load reads and validates a template file.
+//
+// A `subreport template=` names another template, which is read here too:
+// one call loads the whole tree, so a build never touches the filesystem
+// for a document it has not already validated.
 func Load(file string) (*Report, error) {
+	return loadFile(file, nil)
+}
+
+// loadFile reads one template, with the paths already being loaded,
+// outermost first, so that a cycle is reported rather than followed.
+func loadFile(file string, stack []string) (*Report, error) {
 	nodes, err := kdl.ParseFile(file)
 	if err != nil {
 		return nil, err
 	}
-	return build(file, nodes)
+	return build(file, nodes, stack)
 }
 
 // LoadString reads and validates a template from a string.
@@ -25,17 +36,18 @@ func LoadString(src, name string) (*Report, error) {
 	if err != nil {
 		return nil, err
 	}
-	return build(name, nodes)
+	return build(name, nodes, nil)
 }
 
-func build(file string, nodes []*kdl.Node) (*Report, error) {
-	psr := &parser{file: file}
+func build(file string, nodes []*kdl.Node, stack []string) (*Report, error) {
+	psr := &parser{file: file, stack: stack}
 	if len(nodes) != 1 || nodes[0].Name != "report" {
 		psr.errf(nil, "", "a template's root node is a single `report`")
 		return nil, psr.diags
 	}
 	report := psr.parseReport(nodes[0])
 	if report != nil {
+		psr.loadSubreports(report)
 		psr.validate(report)
 		report.Warnings = psr.warns
 	}
@@ -43,6 +55,72 @@ func build(file string, nodes []*kdl.Node) (*Report, error) {
 		return nil, psr.diags
 	}
 	return report, nil
+}
+
+// loadSubreports reads every template a subreport names.
+func (psr *parser) loadSubreports(report *Report) {
+	here := cleanPath(psr.file)
+	forEachSection(report, func(section *Section) {
+		for _, sub := range section.Subreports {
+			psr.loadSubreport(sub, report.BaseDir, here)
+		}
+	})
+}
+
+// loadSubreport reads the template one subreport names, if it names one.
+//
+// The referenced document is an ordinary report, loaded and validated
+// on its own terms, so a fault in it is reported against its own file
+// and line. Its warnings join this report's, because a build of this
+// report will emit them.
+//
+// here is this template's own path, and psr.stack the ones it was reached
+// through, so a reference back to any of them is a cycle rather than a hang.
+func (psr *parser) loadSubreport(sub *Subreport, baseDir, here string) {
+	if sub.Template == "" {
+		return
+	}
+	path := sub.Template
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(baseDir, path)
+	}
+	path = cleanPath(path)
+	if path == here || contains(psr.stack, path) {
+		psr.errf(sub.Node, "template",
+			"%s includes itself, directly or through another subreport",
+			filepath.Base(path))
+		return
+	}
+	child, err := loadFile(path, append(append([]string{}, psr.stack...), here))
+	if err != nil {
+		var diags DiagnosticList
+		if errors.As(err, &diags) {
+			psr.diags = append(psr.diags, diags...)
+			return
+		}
+		psr.errf(sub.Node, "template", "%v", err)
+		return
+	}
+	sub.Report = child
+	psr.warns = append(psr.warns, child.Warnings...)
+}
+
+// cleanPath makes a path comparable: absolute where it can be,
+// and with the separators and any `..` resolved.
+func cleanPath(path string) string {
+	if abs, err := filepath.Abs(path); err == nil {
+		return filepath.Clean(abs)
+	}
+	return filepath.Clean(path)
+}
+
+func contains(list []string, want string) bool {
+	for _, item := range list {
+		if item == want {
+			return true
+		}
+	}
+	return false
 }
 
 func (psr *parser) parseReport(node *kdl.Node) *Report {

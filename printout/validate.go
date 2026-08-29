@@ -210,13 +210,7 @@ func (chk *checker) walkXrefs(page *Page, marks []Mark) {
 
 // outsidePrintable reports how a box leaves the page's printable area, or "".
 func (doc *Printout) outsidePrintable(page *Page, box Box) string {
-	geom := doc.Header.Page
-	if page.Width != 0 {
-		geom.Width = page.Width
-	}
-	if page.Height != 0 {
-		geom.Height = page.Height
-	}
+	geom := page.Geometry(doc.Header.Page)
 	if geom.Width == 0 || geom.Height == 0 {
 		return ""
 	}

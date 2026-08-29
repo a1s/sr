@@ -9,6 +9,13 @@ import (
 	"go.starlark.net/starlark"
 )
 
+// pageCounters is PAGE_NUMBER and COLUMN_NUMBER, held apart from the rest
+// of the context so that engines sharing one page share them.
+type pageCounters struct {
+	number int
+	column int
+}
+
 // varState is one variable's definition and its accumulator.
 type varState struct {
 	def *tmpl.Variable
@@ -39,8 +46,10 @@ type scopeContext struct {
 	columnCount int
 	groupCount  map[string]int
 
-	pageNumber      int
-	columnNumber    int
+	// pages is the document's position. An inline subreport
+	// shares the host's, because it prints on the host's pages;
+	// one that paginates itself gets a set of its own.
+	pages           *pageCounters
 	groupPageNumber map[string]int
 
 	verticalPosition float64
@@ -59,8 +68,7 @@ func newScopeContext(buildTime starlark.Value) *scopeContext {
 		varByName:       map[string]*varState{},
 		groupCount:      map[string]int{},
 		groupPageNumber: map[string]int{},
-		pageNumber:      1,
-		columnNumber:    1,
+		pages:           &pageCounters{number: 1, column: 1},
 		buildTime:       buildTime,
 	}
 }
@@ -84,9 +92,9 @@ func (ctx *scopeContext) lookup(name string) (starlark.Value, error) {
 	case "COLUMN_COUNT":
 		return starlark.MakeInt(ctx.columnCount), nil
 	case "PAGE_NUMBER":
-		return starlark.MakeInt(ctx.pageNumber), nil
+		return starlark.MakeInt(ctx.pages.number), nil
 	case "COLUMN_NUMBER":
-		return starlark.MakeInt(ctx.columnNumber), nil
+		return starlark.MakeInt(ctx.pages.column), nil
 	case "VERTICAL_POSITION":
 		return starlark.Float(ctx.verticalPosition), nil
 	case "VERTICAL_SPACE":

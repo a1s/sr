@@ -30,21 +30,68 @@ type FontCheck struct {
 // so that one missing typeface does not hide the next.
 func Fonts(report *tmpl.Report, opts Options) (*FontCheck, error) {
 	eng := newEngine(report, opts)
-	if err := eng.bindParams(false); err != nil {
+	check := &FontCheck{}
+	if err := eng.checkFonts(check); err != nil {
 		return nil, err
+	}
+
+	// A subreport in a file of its own declares its own fonts,
+	// against its own base directory, and a build will need them.
+	// Checking only the host would say a template resolves
+	// when half of what it prints does not.
+	for _, child := range externalTemplates(report) {
+		sub := newEngine(child, opts)
+		sub.adopt(eng.doc)
+		sub.attach(newUnit(child, opts, eng.doc))
+		sub.out = eng.out
+		if err := sub.checkFonts(check); err != nil {
+			return nil, err
+		}
+	}
+
+	check.Fonts = eng.out.Header.Fonts
+	for _, resolver := range eng.doc.resolvers {
+		check.Warnings = append(check.Warnings, resolver.Warnings...)
+		check.Diagnostics = append(check.Diagnostics, resolver.Diagnostics...)
+	}
+	return check, nil
+}
+
+// checkFonts resolves one template's fonts into the shared table.
+func (eng *engine) checkFonts(check *FontCheck) error {
+	if err := eng.bindParams(false); err != nil {
+		return err
 	}
 	if err := eng.bindVariables(); err != nil {
-		return nil, err
+		return err
 	}
-	check := &FontCheck{}
-	for _, def := range report.Fonts {
+	for _, def := range eng.report.Fonts {
 		// Every error out of face already names the font, so this adds nothing.
 		if _, err := eng.face(def.Name); err != nil {
 			check.Failures = append(check.Failures, err.Error())
 		}
 	}
-	check.Fonts = eng.out.Header.Fonts
-	check.Warnings = eng.resolver.Warnings
-	check.Diagnostics = eng.resolver.Diagnostics
-	return check, nil
+	return nil
+}
+
+// externalTemplates is every template a subreport names by file,
+// reachable from this one, each once and outermost first.
+func externalTemplates(report *tmpl.Report) []*tmpl.Report {
+	var out []*tmpl.Report
+	seen := map[*tmpl.Report]bool{report: true}
+	var walk func(*tmpl.Report)
+	walk = func(host *tmpl.Report) {
+		tmpl.ForEachSection(host, func(section *tmpl.Section) {
+			for _, sub := range section.Subreports {
+				if sub.Report == nil || seen[sub.Report] {
+					continue
+				}
+				seen[sub.Report] = true
+				out = append(out, sub.Report)
+				walk(sub.Report)
+			}
+		})
+	}
+	walk(report)
+	return out
 }

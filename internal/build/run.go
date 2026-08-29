@@ -14,7 +14,9 @@ import (
 // and the closing footers.
 func (eng *engine) run() error {
 	layout := eng.report.Layout
-	eng.frames = buildFrames(layout)
+	if eng.frames == nil {
+		eng.frames = buildFrames(layout)
+	}
 
 	for group := layout.Body.Group; group != nil; group = group.Group {
 		eng.groups = append(eng.groups, group)
@@ -33,11 +35,15 @@ func (eng *engine) run() error {
 
 	// A swapheader title is placed above the page header,
 	// so the page has to know about it before its frames are opened.
-	if title := layout.Body.Title; title != nil && title.SwapHeader {
-		eng.swapTitle = title
-	}
-	if err := eng.startPage(); err != nil {
-		return err
+	// An inline subreport prints on a page that is already open,
+	// with a header that is already reserved, so it has neither to do.
+	if !eng.inline {
+		if title := layout.Body.Title; title != nil && title.SwapHeader {
+			eng.swapTitle = title
+		}
+		if err := eng.startPage(); err != nil {
+			return err
+		}
 	}
 	if title := layout.Body.Title; title != nil {
 		if err := eng.placeReportTitle(title); err != nil {
@@ -65,12 +71,19 @@ func (eng *engine) run() error {
 	// The closing footers are placed before anything is resolved,
 	// because a footer registers deferrals of its own --
 	// the page count in a page footer is one.
-	if err := eng.closePage(); err != nil {
-		return err
+	if !eng.inline {
+		if err := eng.closePage(); err != nil {
+			return err
+		}
 	}
 
 	// The last page, column and group end without an eject,
-	// so their deferrals resolve here.
+	// so their deferrals resolve here. For an inline subreport that is every
+	// deferral it still holds: its report scope ends with the invocation, and
+	// its page and column scopes belong to a host it cannot see the end of --
+	// once the invocation is over it has no band left to contribute, so
+	// nothing it registered is still outstanding. A deferred value that
+	// has to read the host's final page state belongs on a host band.
 	if err := eng.resolveScope("column"); err != nil {
 		return err
 	}
@@ -95,8 +108,10 @@ func (eng *engine) run() error {
 // Reserve the header and footer of every frame,
 // and place the headers outermost first.
 func (eng *engine) startPage() error {
-	eng.page = &printout.Page{Kind: "page", Number: eng.ctx.pageNumber}
-	eng.out.Pages = append(eng.out.Pages, eng.page)
+	sheet := &printout.Page{Kind: "page", Number: eng.ctx.pages.number}
+	sheet.SetGeometry(eng.pageGeometry(), eng.out.Header.Page)
+	eng.doc.page = sheet
+	eng.out.Pages = append(eng.out.Pages, sheet)
 
 	page := eng.frames.page
 	page.outerTop = eng.report.Layout.TopMargin
@@ -340,11 +355,21 @@ func (eng *engine) closeGroups(level int) error {
 // A group's title is not the exception.
 func (eng *engine) placeReportTitle(sec *tmpl.Section) error {
 	fr := eng.frames.frameOf[sec]
+	gate, err := eng.subreportGate(sec)
+	if err != nil {
+		return err
+	}
+	if err := eng.runSubreports(sec, true, gate); err != nil {
+		return err
+	}
 	// A swapheader title was already placed when the page opened.
 	if !sec.SwapHeader {
 		if err := eng.placeMeasured(sec, fr, eng.frames.scopesOf[sec], nil); err != nil {
 			return err
 		}
+	}
+	if err := eng.runSubreports(sec, false, gate); err != nil {
+		return err
 	}
 	kind, want, err := eng.selectEject(sec, fr)
 	if err != nil {
@@ -362,6 +387,8 @@ func (eng *engine) placeReportTitle(sec *tmpl.Section) error {
 func (eng *engine) placeSummary(sec *tmpl.Section) error {
 	fr := eng.frames.frameOf[sec]
 	if sec.SwapFooter {
+		// No subreport hooks here: a swapfooter band is placed outside the
+		// frame's own fill, and validation refuses a subreport on one.
 		// The summary goes into the page frame's reserved bottom band,
 		// and that page's footer is placed immediately above it.
 		// The last page's content space is that much shorter,
@@ -444,7 +471,17 @@ func (eng *engine) placeGroupTitle(group *tmpl.Group, level, record int) error {
 	}
 	// The eject decision has been made here, so the band goes straight
 	// to placement rather than having its eject nodes tested a second time.
-	return eng.placeMeasured(group.Title, fr, scopes, nil)
+	gate, err := eng.subreportGate(group.Title)
+	if err != nil {
+		return err
+	}
+	if err := eng.runSubreports(group.Title, true, gate); err != nil {
+		return err
+	}
+	if err := eng.placeMeasured(group.Title, fr, scopes, nil); err != nil {
+		return err
+	}
+	return eng.runSubreports(group.Title, false, gate)
 }
 
 // lookahead measures a group's extent, or its title plus minrows detail rows.
@@ -559,6 +596,17 @@ func (eng *engine) placeDetail(sec *tmpl.Section, record int) error {
 		return err
 	}
 
+	// A negative seq puts the subreport's bands in the frame ahead of this
+	// one, which then follows them. It runs after the fold, so both sides of
+	// the band read the same variables.
+	gate, err := eng.subreportGate(sec)
+	if err != nil {
+		return err
+	}
+	if err := eng.runSubreports(sec, true, gate); err != nil {
+		return err
+	}
+
 	measured, merr := eng.measureSection(sec, scopes, fr, fr.available())
 	if merr != nil {
 		return merr
@@ -573,14 +621,17 @@ func (eng *engine) placeDetail(sec *tmpl.Section, record int) error {
 	if geom.Fits(measured.height, fr.available()) {
 		eng.commit(measured, fr, fr.fillY)
 		eng.afterDetail()
-		return nil
+		return eng.runSubreports(sec, false, gate)
 	}
 
 	// The band splits where it can, and the fold stands:
 	// part of the row is committed here.
 	if sec.Split {
 		if _, ok := legalSplit(measured, sec, fr.available()); ok {
-			return eng.placeMeasured(sec, fr, scopes, measured)
+			if err := eng.placeMeasured(sec, fr, scopes, measured); err != nil {
+				return err
+			}
+			return eng.runSubreports(sec, false, gate)
 		}
 	}
 
@@ -593,7 +644,12 @@ func (eng *engine) placeDetail(sec *tmpl.Section, record int) error {
 	if err := eng.ctx.iterate(tmpl.ScopeDetail, ""); err != nil {
 		return err
 	}
-	return eng.placeMeasured(sec, fr, scopes, nil)
+	if err := eng.placeMeasured(sec, fr, scopes, nil); err != nil {
+		return err
+	}
+	// After the whole band, split or not: a subreport goes outside the split,
+	// not between its fragments.
+	return eng.runSubreports(sec, false, gate)
 }
 
 func (eng *engine) afterDetail() {
@@ -616,7 +672,17 @@ func (eng *engine) place(sec *tmpl.Section, fr *frame, scopes styleScopes) error
 			return err
 		}
 	}
-	return eng.placeMeasured(sec, fr, scopes, nil)
+	gate, err := eng.subreportGate(sec)
+	if err != nil {
+		return err
+	}
+	if err := eng.runSubreports(sec, true, gate); err != nil {
+		return err
+	}
+	if err := eng.placeMeasured(sec, fr, scopes, nil); err != nil {
+		return err
+	}
+	return eng.runSubreports(sec, false, gate)
 }
 
 // placeMeasured runs the four branches of doc/layout.md#placing-a-band.
@@ -720,10 +786,12 @@ func (eng *engine) selectEject(sec *tmpl.Section, fr *frame) (tmpl.EjectType, bo
 
 // eject ends the current page or column and starts the next.
 func (eng *engine) eject(from *frame, kind tmpl.EjectType) error {
+	owner := eng.owner()
+
 	// Which frames participate: for a column eject, the frame and
 	// its ancestors, stopping at the first that still has an unused column.
 	// If none does, the walk reaches the page frame and it becomes a page eject.
-	target := eng.frames.page
+	target := owner.frames.page
 	if kind == tmpl.EjectColumn {
 		found := false
 		for fr := from; fr != nil; fr = fr.parent {
@@ -737,53 +805,81 @@ func (eng *engine) eject(from *frame, kind tmpl.EjectType) error {
 		}
 	}
 
-	// 1. Footers, innermost first.
-	if err := eng.closeFrameFooters(target, kind); err != nil {
-		return err
-	}
-
-	// 2. Deferred values for the scopes that just ended.
-	if err := eng.resolveScope("column"); err != nil {
-		return err
-	}
-	if kind == tmpl.EjectPage {
-		if err := eng.resolveScope("page"); err != nil {
-			return err
-		}
-	}
-
-	// 3. Advance.
-	eng.ctx.columnCount = 0
-	if err := eng.ctx.reset(tmpl.ScopeColumn, ""); err != nil {
-		return err
-	}
-	if err := eng.ctx.iterate(tmpl.ScopeColumn, ""); err != nil {
+	if err := eng.endPage(target, kind); err != nil {
 		return err
 	}
 
 	if kind == tmpl.EjectColumn {
-		eng.ctx.columnNumber++
+		owner.ctx.pages.column++
 		target.setColumn(target.column + 1)
 		// Re-opening the frame re-places its own header in the new column
 		// and re-reserves its footer.
-		return eng.openFrames(target)
+		return owner.openFrames(target)
 	}
+	return eng.beginPage()
+}
 
-	eng.ctx.pageNumber++
-	eng.ctx.pageCount = 0
-	eng.ctx.columnNumber = 1
-	if err := eng.ctx.reset(tmpl.ScopePage, ""); err != nil {
+// endPage is the closing half of a break: footers, then the deferrals
+// and the column-scoped variables of every engine printing on the page.
+//
+// An inline subreport is one of those engines. The break is the host's --
+// the pages are the host's -- but the child's page-scoped variables reset
+// with it and its deferrals for the ending scope resolve with it,
+// because the scope that ended is the one both are printing in.
+func (eng *engine) endPage(target *frame, kind tmpl.EjectType) error {
+	owner, chain := eng.owner(), eng.chain()
+
+	// 1. Footers, innermost first.
+	if err := owner.closeFrameFooters(target, kind); err != nil {
 		return err
 	}
-	if err := eng.ctx.iterate(tmpl.ScopePage, ""); err != nil {
-		return err
+
+	// 2. Deferred values for the scopes that just ended.
+	for _, part := range chain {
+		if err := part.resolveScope("column"); err != nil {
+			return err
+		}
 	}
-	for _, group := range eng.groups {
-		eng.ctx.groupPageNumber[group.Name]++
+	if kind == tmpl.EjectPage {
+		for _, part := range chain {
+			if err := part.resolveScope("page"); err != nil {
+				return err
+			}
+		}
 	}
 
-	// 4. Headers, outermost first, which openFrames does on the new page.
-	return eng.startPage()
+	// 3. The column scope restarts whichever kind of break this is.
+	for _, part := range chain {
+		part.ctx.columnCount = 0
+		if err := part.ctx.reset(tmpl.ScopeColumn, ""); err != nil {
+			return err
+		}
+		if err := part.ctx.iterate(tmpl.ScopeColumn, ""); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// beginPage is the opening half: the page scope restarts for every engine
+// printing on it, and then the headers are placed, outermost first.
+func (eng *engine) beginPage() error {
+	owner, chain := eng.owner(), eng.chain()
+	owner.ctx.pages.number++
+	owner.ctx.pages.column = 1
+	for _, part := range chain {
+		part.ctx.pageCount = 0
+		if err := part.ctx.reset(tmpl.ScopePage, ""); err != nil {
+			return err
+		}
+		if err := part.ctx.iterate(tmpl.ScopePage, ""); err != nil {
+			return err
+		}
+		for _, group := range part.groups {
+			part.ctx.groupPageNumber[group.Name]++
+		}
+	}
+	return owner.startPage()
 }
 
 // closeFrameFooters places the footer of the ejecting frame and its ancestors,
@@ -833,11 +929,11 @@ func (eng *engine) commit(measured *measurement, fr *frame, top float64) {
 	}
 	for _, dft := range measured.drafts {
 		translate(dft.mark, top)
-		eng.page.Marks = append(eng.page.Marks, dft.mark)
+		eng.doc.page.Marks = append(eng.doc.page.Marks, dft.mark)
 	}
 	if measured.outline != nil {
 		measured.outline.Top = geom.Round(measured.outline.Top + top)
-		eng.page.Marks = append(eng.page.Marks, measured.outline)
+		eng.doc.page.Marks = append(eng.doc.page.Marks, measured.outline)
 	}
 	for _, deferred := range measured.defers {
 		eng.pending[deferred.scope] = append(eng.pending[deferred.scope], deferred)

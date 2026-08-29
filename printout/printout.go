@@ -119,12 +119,73 @@ const (
 )
 
 // Page is one page of marks.
+//
+// The size and the margins are the header's, except where this page
+// overrides them: a subreport that paginates itself may run at a page
+// size and inset of its own, and its pages carry the difference.
 type Page struct {
 	Kind   string  `json:"kind"`
 	Number int     `json:"number"`
 	Width  float64 `json:"width,omitempty"`
 	Height float64 `json:"height,omitempty"`
-	Marks  []Mark  `json:"marks"`
+	// The margins are pointers because zero is a real margin:
+	// a page flush to the paper edge under a header that insets
+	// is an override, and an omitted number could not say so.
+	LeftMargin   *float64 `json:"leftMargin,omitempty"`
+	RightMargin  *float64 `json:"rightMargin,omitempty"`
+	TopMargin    *float64 `json:"topMargin,omitempty"`
+	BottomMargin *float64 `json:"bottomMargin,omitempty"`
+	Marks        []Mark   `json:"marks"`
+}
+
+// Geometry is the page's size and margins: the header's,
+// with whatever the page overrides applied.
+func (page *Page) Geometry(header PageGeometry) PageGeometry {
+	out := header
+	if page.Width != 0 {
+		out.Width = page.Width
+	}
+	if page.Height != 0 {
+		out.Height = page.Height
+	}
+	if page.LeftMargin != nil {
+		out.LeftMargin = *page.LeftMargin
+	}
+	if page.RightMargin != nil {
+		out.RightMargin = *page.RightMargin
+	}
+	if page.TopMargin != nil {
+		out.TopMargin = *page.TopMargin
+	}
+	if page.BottomMargin != nil {
+		out.BottomMargin = *page.BottomMargin
+	}
+	return out
+}
+
+// SetGeometry records what this page runs at,
+// writing only the parts that differ from the document default.
+func (page *Page) SetGeometry(want, header PageGeometry) {
+	page.Width, page.Height = 0, 0
+	page.LeftMargin, page.RightMargin = nil, nil
+	page.TopMargin, page.BottomMargin = nil, nil
+	if want.Width != header.Width {
+		page.Width = want.Width
+	}
+	if want.Height != header.Height {
+		page.Height = want.Height
+	}
+	override := func(mine, theirs float64) *float64 {
+		if mine == theirs {
+			return nil
+		}
+		value := mine
+		return &value
+	}
+	page.LeftMargin = override(want.LeftMargin, header.LeftMargin)
+	page.RightMargin = override(want.RightMargin, header.RightMargin)
+	page.TopMargin = override(want.TopMargin, header.TopMargin)
+	page.BottomMargin = override(want.BottomMargin, header.BottomMargin)
 }
 
 // Box is an absolute rectangle, with the top-left corner at x, y

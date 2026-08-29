@@ -107,12 +107,29 @@ type frameTree struct {
 	nonColumn *frame
 	frameOf   map[*tmpl.Section]*frame
 	scopesOf  map[*tmpl.Section]styleScopes
+	// release detaches a grafted tree from the host frame it was built on,
+	// and is nil for a tree with a page frame of its own.
+	release func()
 }
 
-// buildFrames constructs the frame tree.
+// buildFrames constructs the frame tree for a layout of its own pages.
 //
 // This happens once, before any data is read.
 func buildFrames(layout *tmpl.Layout) *frameTree {
+	return buildFramesIn(layout, nil)
+}
+
+// buildFramesIn constructs the frame tree, optionally grafted
+// onto a frame that already exists.
+//
+// An inline subreport prints in the host's frame rather than on pages
+// of its own, so its bands attach there: root is that frame, and it
+// stands in for the page frame the layout would otherwise get.
+// An inline layout defines no header and no footer -- validation refuses
+// them -- so the grafted root reserves nothing, and the frames a `columns`
+// inside it adds are the host's for as long as the invocation lasts.
+// release removes them again.
+func buildFramesIn(layout *tmpl.Layout, root *frame) *frameTree {
 	tree := &frameTree{
 		frameOf:  map[*tmpl.Section]*frame{},
 		scopesOf: map[*tmpl.Section]styleScopes{},
@@ -120,16 +137,22 @@ func buildFrames(layout *tmpl.Layout) *frameTree {
 	layoutScopes := styleScopes{layout.Styles}
 
 	// 1. The page frame: the page box inset by the four margins.
-	page := &frame{
-		left:         layout.LeftMargin,
-		width:        geom.Round(layout.Page.Width - layout.LeftMargin - layout.RightMargin),
-		outerTop:     layout.TopMargin,
-		outerBottom:  geom.Round(layout.Page.Height - layout.BottomMargin),
-		columnCount:  1,
-		header:       layout.Body.Header,
-		footer:       layout.Body.Footer,
-		headerScopes: layoutScopes,
-		footerScopes: layoutScopes,
+	page := root
+	if page == nil {
+		page = &frame{
+			left:         layout.LeftMargin,
+			width:        geom.Round(layout.Page.Width - layout.LeftMargin - layout.RightMargin),
+			outerTop:     layout.TopMargin,
+			outerBottom:  geom.Round(layout.Page.Height - layout.BottomMargin),
+			columnCount:  1,
+			header:       layout.Body.Header,
+			footer:       layout.Body.Footer,
+			headerScopes: layoutScopes,
+			footerScopes: layoutScopes,
+		}
+	} else {
+		grafted := len(page.children)
+		tree.release = func() { page.children = page.children[:grafted] }
 	}
 	tree.page = page
 	cur := page
@@ -219,13 +242,15 @@ func buildFrames(layout *tmpl.Layout) *frameTree {
 			styleScopes{layout.Body.Detail.Styles}, layoutScopes...)
 	}
 
-	// The page header and footer belong to the page frame.
-	if layout.Body.Header != nil {
+	// The page header and footer belong to the page frame. A grafted
+	// root is the host's frame, whose header and footer are the host's; an
+	// inline layout has none of its own, so there is nothing to attach here.
+	if root == nil && layout.Body.Header != nil {
 		tree.frameOf[layout.Body.Header] = page
 		tree.scopesOf[layout.Body.Header] = append(
 			styleScopes{layout.Body.Header.Styles}, layoutScopes...)
 	}
-	if layout.Body.Footer != nil {
+	if root == nil && layout.Body.Footer != nil {
 		tree.frameOf[layout.Body.Footer] = page
 		tree.scopesOf[layout.Body.Footer] = append(
 			styleScopes{layout.Body.Footer.Styles}, layoutScopes...)

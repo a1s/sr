@@ -240,12 +240,20 @@ Two images from the same file share one entry.
 |---|---|
 | `kind` | Always `"page"`. |
 | `number` | 1-based page number as printed. Not necessarily the line's ordinal — a subreport with `ownpageno` restarts numbering. |
-| `width`, `height`, `*Margin` | Optional. Present only when they differ from the header's `page` defaults. |
+| `width`, `height` | Optional. Present only when they differ from the header's `page` defaults. |
+| `leftMargin`, `rightMargin`, `topMargin`, `bottomMargin` | Optional, and independently so. Present only where they differ from the header's, which is why zero is written rather than omitted: a page flush to the paper edge under a header that insets is an override. |
 | `marks` | Array of [marks](#marks) in paint order. |
 
 Pages appear in output order. Sections are flattened: a detail band's rectangle,
 four fields, and rule become five entries in `marks`, with no record of which band
 produced them.
+
+The overrides exist for a [subreport that paginates
+itself](layout.md#pages): it may run at a page size and inset of its own, and
+its pages sit in the middle of the host's. Everything else about the document
+stays single: one font table, one data table, one sequence of pages. A mark
+carries no record of which template produced it, exactly as it carries no record
+of which band did.
 
 ## Marks
 

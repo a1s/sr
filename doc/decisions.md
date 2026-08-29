@@ -26,6 +26,7 @@ can state what is true without also arguing for it.
 - [What building the engine settled](#what-building-the-engine-settled)
 - [What building the renderer settled](#what-building-the-renderer-settled)
 - [What building the command line settled](#what-building-the-command-line-settled)
+- [What building subreports settled](#what-building-subreports-settled)
 
 ## Relationship to PythonReports
 
@@ -1627,10 +1628,12 @@ since a band of barcodes sizes to them: fifteen per cent of the symbol length,
 or a quarter of an inch, whichever is greater.
 
 **Not built at this stage.** Subreports are staged last and the engine refuses
-a template containing one, naming the node. The measurement cache the layout
-document describes is not implemented: it is a cost optimisation rather than
-a behaviour, and a correct cache key has to capture every name a band's
-expressions read, which is more machinery than the current throughput asks for.
+a template containing one, naming the node. (They are built now -- see
+[what building them settled](#what-building-subreports-settled).) The measurement
+cache the layout document describes is not implemented: it is a cost optimisation
+rather than a behaviour, and a correct cache key has to capture every name a
+band's expressions read, which is more machinery than the current throughput asks
+for.
 
 ## What building the renderer settled
 
@@ -1900,7 +1903,9 @@ nothing.
   An `.otf` needs a CIDFontType0 descendant and a CID-keyed CFF, and
   a guess at it would produce files that fail on some readers only.
 - **Subreports**, still, so the second reference template renders no further
-  than it builds.
+  than it builds. (Built since; the renderer needed no change for them,
+  because by the time it sees the document a subreport's bands are ordinary
+  marks on ordinary pages.)
 
 ## What building the command line settled
 
@@ -2026,6 +2031,138 @@ goes to stdout; the violation goes to stderr, and the exit code is 1.
   argument, so a run is reproducible from the command line that produced it,
   and a report that came out wrong cannot be blamed on a file in someone's
   home directory.
-- **A template naming a subreport passes the check, with a warning.**
-  It is a valid template that this engine cannot build yet, and those are
-  two different statements. `sr build` still refuses it with the node named.
+- **A template naming a subreport passes the check, and the check lists the
+  nodes.** They were a warning while the engine could not build them; now they
+  are a fact about the template, under a heading of their own beside the fonts.
+
+## What building subreports settled
+
+Subreports were staged last because they are the most entangled part of the
+design: a nested builder that has to be separate enough to have its own records,
+variables and page numbering, and joined enough to write into the same printout
+and, under `inline`, onto the same page. What follows is where that line ended
+up being drawn.
+
+### A subreport is a second engine, not a second mode
+
+The engine already had everything a subreport needs -- a record loop, a frame
+tree, a deferral table, a variable context. So a subreport is another instance
+of it, with a host pointer, rather than a set of flags threaded through the one
+instance. The state divides in three:
+
+- **Per invocation**: the context, the records, the frames, the pending
+  deferrals. A fresh engine each time the subreport runs.
+- **Per template**: the resolved faces, the decoded images, the decoded blobs,
+  and the map from a template's names to the printout's. These are keyed by names
+  that belong to a template, and a subreport on a detail band runs once per
+  record, so putting them here is what stops a font being read and parsed
+  thousands of times.
+- **Per document**: the printout, the page being filled, the font and data
+  tables, the glyph warnings, the group statistics.
+
+An `embedded` layout shares its host's per-template state, because it shares its
+host's fonts and data by definition. A `template=` layout gets its own, because
+it is a separate document with a base directory of its own.
+
+### The child's names, the host's names, and one place they meet
+
+The `arg` nodes. They are evaluated in the host's context and bound in the
+child's, and nothing else crosses: the host's variables and record fields are
+not visible inside the subreport, and the subreport's are not visible outside it.
+That was already the format's design; building it confirmed there is no second
+channel that wants to exist. A subreport parameter with neither an `arg` nor a
+default became a load-time error at the same time, because unlike a report
+parameter there is no command line for it to fall back on.
+
+### One document, so one font table -- and names can collide
+
+Two templates in one document can both define `font "body"`, meaning different
+faces, and a mark refers to a font by name. So the name a template writes and the
+name the printout publishes are two things, and the engine keeps a map between
+them. Identical faces share one entry however many templates asked for them, and
+a clash takes a suffix. Data blobs work the same way.
+
+The face identity is canonicalised before comparison, because the two routes a
+file is reached by differ in spelling: a host named relatively on the command
+line resolves `../fonts/Go-Regular.ttf` relative to that, while a subreport is
+loaded through the host's base directory and so resolves it absolutely. Compared
+as written, one file looked like two faces and the reference example embedded
+every font twice.
+
+### An inline subreport is refused a frame of its own
+
+The specification already refused it a `header` and a `footer`, on the grounds
+that it does not own the pages it prints on. Building it found three more of the
+same thing, and they are the same rule:
+
+- **`columns`.** A columns block reserves a frame that spans page breaks, with
+  its own header and footer re-placed on each. An inline subreport's frames are
+  grafted onto the host's for the length of one invocation, and a frame that
+  outlives the invocation has nobody left to measure its bands in the right
+  context. Refused.
+- **`swapheader` and `swapfooter`.** Both place a band outside the frame's
+  ordinary fill -- above the page header, below the page footer on the last page.
+  There is no fill position there for a subreport's bands to follow.
+- **A subreport on a `header`, a `footer`, or a swapped band**, in any report.
+  Those bands are measured and reserved before the page they bound is filled, so
+  a subreport on one would emit bands into a frame that does not exist yet.
+
+Each is a load-time error naming the node, so none of them is something a build
+discovers half way through.
+
+### Splicing needs no splice
+
+"The child's pages go into the parent's page list at the point the subreport
+occurs" sounds like an insertion into the middle of a list. It is not: everything
+the host has built is already before that point, so closing the host's page,
+letting the child append its own, and then opening the host's next page puts them
+in exactly the right order. The consequence to state plainly is that a subreport
+that paginates itself always ends the host's page, full or not -- that is what
+"complete pages" means.
+
+Page numbering falls out of the same arrangement. Without `ownpageno` the child
+shares the host's counter, so it continues and the host resumes after it with no
+arithmetic anywhere; with `ownpageno` the child gets a counter of its own and the
+host's is simply untouched.
+
+### A page can now differ from the document
+
+A subreport that paginates itself may run at its own page size and margins, which
+is the first time a printout has needed per-page geometry. The format always said
+a page could carry overrides; the Go type carried only `width` and `height`, so
+the margins were added. They are optional *independently*, and written even when
+zero, because zero is a real margin: a page flush to the paper edge under a
+header that insets is an override and has to be able to say so.
+
+### A suppressed band suppresses its subreports
+
+`printwhen` on the host band decides both. A void invoice that does not print has
+no line items to print either, and the reference example walked straight into it:
+the void invoice's row was suppressed and its line items printed anyway, under
+the previous invoice's heading. The band's `printwhen` is evaluated once, where
+the band is, rather than once on each side of it -- the two sides are reached at
+different points in the record loop, and a condition reading `PAGE_COUNT` would
+otherwise answer differently at each.
+
+### An inline subreport's deferrals resolve when it ends
+
+The awkward case: a field with `evaltime="page"` inside an inline subreport. Its
+page is the host's, and the host's page may end long after the invocation does --
+by which time the child's context has moved on to another invocation, so the
+values `FINAL` would read are not the ones the field meant.
+
+Resolving everything the child registered at the end of its invocation is the
+answer. Its `report` scope ends there by definition, and once the invocation is
+over it has no band left to contribute, so nothing it registered is genuinely
+outstanding. A page break that happens *during* the invocation still resolves the
+child's page and column deferrals along with the host's, because there both are
+printing in the scope that just ended. A deferred value that has to read the
+host's final page state belongs on a host band, where the host resolves it.
+
+### Recursion is bounded, not forbidden
+
+A subreport may name the layout it is written in, which is how a template walks a
+tree, and the data normally ends the walk. Nothing guarantees the data is finite,
+so nesting stops at 32 with the node named. A `template=` cycle is different --
+it is a property of the documents rather than of the data -- so that one is
+refused at load, before any data is read.

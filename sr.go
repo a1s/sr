@@ -143,6 +143,9 @@ type FontCheck = build.FontCheck
 // A font that does not resolve is reported in the result rather than as an
 // error, so that one missing typeface does not hide the next. Parameters are
 // not required here -- one with no value and no default is simply left unbound.
+//
+// It covers the templates a subreport names by file as well as this one:
+// a template half of whose fonts resolve is not a template that resolves.
 func (tpl *Template) CheckFonts(options ...Option) (*FontCheck, error) {
 	opts := build.Options{Engine: "sr " + meta.Version}
 	for _, opt := range options {
@@ -174,8 +177,9 @@ type Info struct {
 	// Members are the record members the template declares,
 	// empty for a template that declares none.
 	Members []string
-	// Subreports names the subreport nodes, which this engine does not
-	// build yet. A template check reports them; a build refuses them.
+	// Subreports names the subreport nodes the template carries, in the
+	// order they are reached, so a front end can say what a build will
+	// pull in without loading anything itself.
 	Subreports []string
 }
 

@@ -149,15 +149,17 @@ func TestValidateUsage(test *testing.T) {
 	}
 }
 
-// A template naming a subreport validates, and says that it will not build.
+// A template naming a subreport validates, and the check names the node.
 func TestValidateNamesSubreports(test *testing.T) {
 	got := run(test, "", "validate",
 		filepath.Join("..", "..", "example", "invoices", "invoices.kdl"))
 	if got.code != ExitOK {
 		test.Fatalf("exit = %d, stderr %q", got.code, got.err)
 	}
-	if !strings.Contains(got.out, "subreports are not implemented yet") {
-		test.Errorf("the report does not mention subreports; it is:\n%s", got.out)
+	for _, want := range []string{"2 subreports", "subreports\n  report >"} {
+		if !strings.Contains(got.out, want) {
+			test.Errorf("the report does not carry %q; it is:\n%s", want, got.out)
+		}
 	}
 }
 

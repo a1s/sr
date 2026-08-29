@@ -297,16 +297,25 @@ func cborToJSON(raw cbor.RawMessage) ([]byte, error) {
 
 func decodePage(raw []byte, dir string) (*Page, error) {
 	var shape struct {
-		Kind   string            `json:"kind"`
-		Number int               `json:"number"`
-		Width  float64           `json:"width"`
-		Height float64           `json:"height"`
-		Marks  []json.RawMessage `json:"marks"`
+		Kind         string            `json:"kind"`
+		Number       int               `json:"number"`
+		Width        float64           `json:"width"`
+		Height       float64           `json:"height"`
+		LeftMargin   *float64          `json:"leftMargin"`
+		RightMargin  *float64          `json:"rightMargin"`
+		TopMargin    *float64          `json:"topMargin"`
+		BottomMargin *float64          `json:"bottomMargin"`
+		Marks        []json.RawMessage `json:"marks"`
 	}
 	if err := json.Unmarshal(raw, &shape); err != nil {
 		return nil, err
 	}
-	page := &Page{Kind: "page", Number: shape.Number, Width: shape.Width, Height: shape.Height}
+	page := &Page{
+		Kind: "page", Number: shape.Number,
+		Width: shape.Width, Height: shape.Height,
+		LeftMargin: shape.LeftMargin, RightMargin: shape.RightMargin,
+		TopMargin: shape.TopMargin, BottomMargin: shape.BottomMargin,
+	}
 	marks, err := decodeMarks(shape.Marks, dir)
 	if err != nil {
 		return nil, err

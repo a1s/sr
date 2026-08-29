@@ -83,15 +83,22 @@ func TestInfoRequiredParameter(test *testing.T) {
 	}
 }
 
-// Subreports are named by a check, since a build refuses them.
+// A check names the subreport nodes, so a front end can say what a build
+// will pull in without loading anything itself.
 func TestInfoNamesSubreports(test *testing.T) {
 	tpl, err := LoadTemplate("example/invoices/invoices.kdl")
 	if err != nil {
 		test.Fatalf("%v", err)
 	}
 	subreports := tpl.Info().Subreports
-	if len(subreports) != 1 || !strings.Contains(subreports[0], "subreport") {
-		test.Errorf("subreports = %v", subreports)
+	if len(subreports) != 2 {
+		test.Fatalf("subreports = %v, want the embedded one and the external one",
+			subreports)
+	}
+	for _, node := range subreports {
+		if !strings.HasSuffix(node, "subreport") {
+			test.Errorf("subreport node = %q", node)
+		}
 	}
 }
 

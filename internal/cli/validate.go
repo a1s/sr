@@ -113,6 +113,7 @@ func writeCheck(
 		{len(info.Variables), "variable"},
 		{len(info.Fonts), "font"},
 		{len(info.Data), "data blob"},
+		{len(info.Subreports), "subreport"},
 	} {
 		if item.number > 0 {
 			counts = append(counts, count(item.number, item.noun))
@@ -128,6 +129,12 @@ func writeCheck(
 		}
 		writeRows(out, items)
 	}
+	if len(info.Subreports) > 0 {
+		out.line("subreports")
+		for _, node := range info.Subreports {
+			out.line("  %s", node)
+		}
+	}
 	if len(fonts.Fonts) > 0 {
 		out.line("fonts")
 		items := make([][]string, 0, len(fonts.Fonts))
@@ -138,10 +145,6 @@ func writeCheck(
 	}
 	warnings := append([]string{}, loaded...)
 	warnings = append(warnings, fonts.Warnings...)
-	for _, node := range info.Subreports {
-		warnings = append(warnings, node+
-			": subreports are not implemented yet, so this template validates but will not build")
-	}
 	if len(warnings) > 0 {
 		out.line("warnings")
 		for _, warning := range warnings {

@@ -214,7 +214,8 @@ holds something:
 
 | | |
 |---|---|
-| `warnings` | Load diagnostics, a substituted typeface, a subreport this engine cannot build yet. The check still passes. |
+| `subreports` | The [subreport](template.md#subreport) nodes the template carries, by path. A `template=` one is loaded and checked with its host, so a fault in it is reported against its own file. |
+| `warnings` | Load diagnostics, a substituted typeface. The check still passes. |
 | `failures` | Fonts that did not resolve. These are why the exit code is 1, so they are not filed as warnings. |
 | `diagnostics` | Under `--verbose`: what the [host font enumeration](template.md#host-enumeration) had to say. About the machine, not the template. |
 
@@ -303,7 +304,10 @@ The header is followed by a section per table the header carries -- `groups`,
 and each padded like the [check's](#sr-validate).
 
 Every length is a number of points, as the printout holds it. A mark's `box` is
-`left,top widthxheight`. An [xref](printout.md#xref)'s nested marks are indented
+`left,top widthxheight`. A page line names the size the page runs at; a page that
+[differs from the document](printout.md#pages) -- which a subreport paginating
+itself produces -- names its margins too, since those are what a mark outside the
+printable area was judged against. An [xref](printout.md#xref)'s nested marks are indented
 under it, which is the only nesting a printout has. Text lines are quoted, one
 per line, under the mark that carries them, so a wrapped paragraph reads as the
 lines the engine actually broke it into. A field a mark does not carry is left
