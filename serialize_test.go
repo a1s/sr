@@ -229,3 +229,53 @@ func TestEmbeddedImageSharesOneDataEntry(test *testing.T) {
 		test.Errorf("image marks = %d, want 2", count)
 	}
 }
+
+// A page that runs at a size and inset of its own -- which only a subreport
+// that paginates itself produces -- carries the difference and reads it back.
+//
+// Zero is a real margin, so the fields are pointers: a page flush to the paper
+// edge under a header that insets has to be able to say so.
+func TestPageGeometryOverrideRoundTrips(test *testing.T) {
+	doc := buildString(test, minimal, rowsOf(1))
+	flush := 0.0
+	doc.Pages[0].Width, doc.Pages[0].Height = 400, 500
+	doc.Pages[0].LeftMargin = &flush
+
+	dir := test.TempDir()
+	path := filepath.Join(dir, "report.srp.jsonl")
+	if err := doc.WriteFile(path); err != nil {
+		test.Fatal(err)
+	}
+	back, err := printout.ReadFile(path)
+	if err != nil {
+		test.Fatal(err)
+	}
+	page := back.Pages[0]
+	if page.Width != 400 || page.Height != 500 {
+		test.Errorf("size = %g x %g", page.Width, page.Height)
+	}
+	if page.LeftMargin == nil || *page.LeftMargin != 0 {
+		test.Fatalf("left margin = %v, want a recorded zero", page.LeftMargin)
+	}
+	if page.RightMargin != nil {
+		test.Errorf("right margin = %v, want the header's", *page.RightMargin)
+	}
+	geom := page.Geometry(back.Header.Page)
+	if geom.LeftMargin != 0 || geom.RightMargin != back.Header.Page.RightMargin {
+		test.Errorf("resolved geometry = %+v", geom)
+	}
+
+	// CBOR carries it too.
+	var binary bytes.Buffer
+	if err := doc.WriteCBOR(&binary, dir); err != nil {
+		test.Fatal(err)
+	}
+	viaCBOR, err := printout.ReadCBOR(&binary, dir)
+	if err != nil {
+		test.Fatal(err)
+	}
+	page = viaCBOR.Pages[0]
+	if page.Width != 400 || page.LeftMargin == nil || *page.LeftMargin != 0 {
+		test.Errorf("cbor page = %+v", page)
+	}
+}

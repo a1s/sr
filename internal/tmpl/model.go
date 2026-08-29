@@ -473,8 +473,18 @@ type Outline struct {
 
 // Subreport runs another template over a nested sequence.
 type Subreport struct {
-	Template  string
-	Embedded  string
+	Template string
+	// Report is the template named by Template, loaded with this one.
+	// Nil for a subreport that names an embedded layout instead.
+	Report   *Report
+	Embedded string
+	// EmbeddedLayout is the layout Embedded names, resolved at load against
+	// the scope this node is written in. Nil for a subreport naming a file.
+	//
+	// Resolving once, at load, is what keeps validation and the engine
+	// from answering one name differently.
+	EmbeddedLayout *Embedded
+
 	Seq       int
 	Data      *expr.Program
 	When      *expr.Program

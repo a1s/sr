@@ -143,8 +143,8 @@ Making the printout's own directory self-contained is a separate, deliberate act
 | `engine` | Name and version of the producing engine. |
 | `strictFonts` | Whether font guessing was disabled for this run. |
 | `pages` | Number of page lines that follow. |
-| `groupRuns` | Per group, how many times it opened. |
-| `groupKeys` | Per group, how many distinct key values it saw. A `groupRuns` value larger than its `groupKeys` value means the input was not ordered by that group's key. |
+| `groupRuns` | Per group name, how many times it opened. Group names are per-report namespaces, and this table is the document's, so a host and a [subreport](layout.md#subreports) that both call a group `region` are counted together here. |
+| `groupKeys` | Per group name, how many distinct key values it saw. A `groupRuns` value larger than its `groupKeys` value means the input was not ordered by that group's key. |
 | `page` | Default page geometry, inherited by every page that does not override it. |
 | `fonts` | Resolved font table. |
 | `data` | Shared blobs, keyed by name. |
@@ -240,12 +240,20 @@ Two images from the same file share one entry.
 |---|---|
 | `kind` | Always `"page"`. |
 | `number` | 1-based page number as printed. Not necessarily the line's ordinal — a subreport with `ownpageno` restarts numbering. |
-| `width`, `height`, `*Margin` | Optional. Present only when they differ from the header's `page` defaults. |
+| `width`, `height` | Optional. Present only when they differ from the header's `page` defaults. |
+| `leftMargin`, `rightMargin`, `topMargin`, `bottomMargin` | Optional, and independently so. Present only where they differ from the header's, which is why zero is written rather than omitted: a page flush to the paper edge under a header that insets is an override. |
 | `marks` | Array of [marks](#marks) in paint order. |
 
 Pages appear in output order. Sections are flattened: a detail band's rectangle,
 four fields, and rule become five entries in `marks`, with no record of which band
 produced them.
+
+The overrides exist for a [subreport that paginates
+itself](layout.md#pages): it may run at a page size and inset of its own, and
+its pages sit in the middle of the host's. Everything else about the document
+stays single: one font table, one data table, one sequence of pages. A mark
+carries no record of which template produced it, exactly as it carries no record
+of which band did.
 
 ## Marks
 

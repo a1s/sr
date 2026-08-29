@@ -93,7 +93,7 @@ func (eng *engine) emitField(field *tmpl.Field, slot *elementSlot, measured *mea
 
 	mark := printout.NewText()
 	mark.Box = printout.Box{Left: box.Left, Top: box.Top, Width: box.Width, Height: box.Height}
-	mark.Font = slot.style.Font
+	mark.Font = eng.fontName(slot.style.Font)
 	mark.Color = slot.style.Color.Hex()
 	mark.Align = effectiveAlign(field, slot.el.Base().HAlign).String()
 	mark.Leading = leading
@@ -238,11 +238,13 @@ func (eng *engine) emitImage(im *tmpl.Image, slot *elementSlot, measured *measur
 	case !im.Embed:
 		mark.SetFile(img.file)
 	case im.Data != "":
-		// An image reading a template data node keeps that node's name.
-		if err := eng.publishBlob(im.Data); err != nil {
+		// An image reading a template data node keeps that node's name,
+		// unless another template in the document has taken it already.
+		published, err := eng.publishBlob(im.Data)
+		if err != nil {
 			return err
 		}
-		mark.Data = im.Data
+		mark.Data = published
 	default:
 		mark.Data = eng.addBlob(img)
 	}
@@ -410,7 +412,10 @@ func (eng *engine) barcode(
 
 // image decodes an image element's bytes and reads its natural size.
 func (eng *engine) image(im *tmpl.Image) (*decodedImage, error) {
-	key := im.File + "\x00" + im.Data + "\x00" + im.Content
+	// Keyed by the resolved path, not the written one: two templates in one
+	// document have base directories of their own, and one relative path
+	// can name two different files.
+	key := eng.resolvePath(im.File) + "\x00" + im.Data + "\x00" + im.Content
 	if cached, ok := eng.images[key]; ok {
 		return cached, nil
 	}

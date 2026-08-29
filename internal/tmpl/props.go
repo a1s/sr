@@ -56,7 +56,13 @@ type programSite struct {
 }
 
 type parser struct {
-	file     string
+	file string
+	// stack is the templates already being loaded, outermost first,
+	// so that a subreport naming one of them is a cycle rather than a hang.
+	stack []string
+	// loaded is every template this load has read, by absolute path,
+	// so a template two subreports both name is read once.
+	loaded   map[string]*Report
 	diags    DiagnosticList
 	warns    DiagnosticList
 	programs []programSite

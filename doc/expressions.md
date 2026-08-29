@@ -501,6 +501,30 @@ A subreport has its own variables, and its scopes are its own:
   since it shares the parent's pagination.
 - `group` and `detail` mean the subreport's own groups and detail band.
 
+The predefined names are the subreport's own too, with two exceptions. `THIS`,
+`ITEM_NUMBER`, `DATA_COUNT`, `REPORT_COUNT`, `PAGE_COUNT` and `COLUMN_COUNT`
+count the subreport's own records: `DATA_COUNT` is the length of the sequence
+this invocation was given, and `PAGE_COUNT` is how many of its rows printed on
+the current page. `PAGE_NUMBER` and `COLUMN_NUMBER` are the document's, so a
+subreport's page header prints the number the reader sees on the paper -- unless
+the subreport node asked for [`ownpageno`](layout.md#pages), which is the whole
+point of that property. `BUILD_TIME` is the document's.
+
+A subreport's parameters come from its `arg` nodes, evaluated in the **host's**
+context. So an `arg` reads the host's names and the subreport reads its own, and
+`arg "heading" value="film.title"` is how a value crosses between them. Nothing
+else does: the host's variables and record fields are not in scope inside the
+subreport, and the subreport's are not in scope outside it.
+
+An expression in a subreport that has to react to where its bands landed --
+`VERTICAL_POSITION`, `VERTICAL_SPACE` -- reads the frame it is printing in,
+which under `inline` is the host's.
+
+Every deferral a subreport registers resolves when its invocation ends, or
+earlier if a page it is printing on ends first. `FINAL` in a subreport therefore
+reads the subreport's own scope, never the host's; a deferred value that has to
+read the host's final page state belongs on a host band.
+
 ## Compilation
 
 Each expression is parsed and compiled once, at template load, into a function

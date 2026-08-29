@@ -245,16 +245,20 @@ func blobFields(blob *printout.Blob) []string {
 }
 
 // page writes a page and its marks.
+//
+// A page that runs at a geometry of its own -- which a subreport paginating
+// itself produces -- says so in full, because a reader comparing a mark against
+// the printable area needs the numbers that page was laid out against.
 func (dmp *dumper) page(doc *printout.Printout, page *printout.Page) {
-	width, height := page.Width, page.Height
-	if width == 0 {
-		width = doc.Header.Page.Width
+	geometry := page.Geometry(doc.Header.Page)
+	if geometry != doc.Header.Page {
+		dmp.line("", "page %d  %s  %s",
+			page.Number, describeSize(geometry), count(len(page.Marks), "mark"))
+	} else {
+		dmp.line("", "page %d  %s x %s  %s",
+			page.Number, num(geometry.Width), num(geometry.Height),
+			count(len(page.Marks), "mark"))
 	}
-	if height == 0 {
-		height = doc.Header.Page.Height
-	}
-	dmp.line("", "page %d  %s x %s  %s",
-		page.Number, num(width), num(height), count(len(page.Marks), "mark"))
 	for _, mark := range page.Marks {
 		dmp.mark(mark, "  ")
 	}

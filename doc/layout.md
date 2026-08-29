@@ -694,7 +694,18 @@ So a placeholder must be sized for the worst case — `text="Page 999 of 999"`, 
 A `subreport` runs another template over a nested sequence. It is a nested builder
 with its own context: its own parameters, fed by `arg` nodes, its own
 [records](template.md#records), its own variables and groups, and its own record
-loop. It shares the enclosing report's fonts and data blobs.
+loop.
+
+An [`embedded`](template.md#embedded) layout is written inside the report it
+belongs to and shares that report's fonts, data blobs, base directory and page;
+its style search continues outward into the enclosing `layout`, because the
+search walks outward through the document and the layout is where it is written.
+A layout named by `template=` is a separate document with fonts, data and a base
+directory of its own, and its style search ends at its own `layout` -- the same
+rule applied to a different tree. Either way the printout carries one font table
+and one data table for the whole document, so a face two templates both resolve
+is measured and embedded once, and a name two templates give to different things
+is published under distinct names.
 
 - **Non-inline** (default): the child builds complete pages, which are spliced into
   the parent's page list at the point the subreport occurs. `ownpageno` restarts
@@ -705,7 +716,17 @@ loop. It shares the enclosing report's fonts and data blobs.
   page size and inherits its margins. `inline` and `ownpageno` are mutually
   exclusive.
 
-A subreport may not appear inside a `columns` block.
+A subreport may not appear inside a `columns` block, and it may not sit on a
+`header`, a `footer`, a `swapheader` title or a `swapfooter` summary. Those five
+are the same rule from five sides: a subreport takes frame space of its own, and
+each of those bands is placed outside the ordinary fill of the frame it belongs
+to -- a header and a footer are measured and reserved before the page they bound
+is filled, and a swapped band sits beyond that reservation.
+
+Nesting is bounded at 32. A subreport may name the layout it is written in,
+which is how a template walks a tree, and the data normally ends that walk;
+nothing guarantees it does, so the recursion stops with an error naming the node
+rather than running out of stack.
 
 ### Where a subreport's bands go
 
@@ -726,13 +747,97 @@ When the host band splits, the subreport goes outside the whole split,
 not between the fragments: `seq` negative places it before the head,
 `seq` non-negative after the tail.
 
+**A host band suppressed by `printwhen` runs none of its subreports.**
+The subreport hangs off the band; an invoice that does not print has
+no line items to print either.
+
+The band's `printwhen` is answered **once per placement**, before any of its
+subreports run, and that one answer decides the band, the subreports before it
+and the subreports after it. It has to be one answer: a negative-seq subreport
+runs between the question and the band's own measurement and may eject, so a
+condition reading `VERTICAL_POSITION`, `VERTICAL_SPACE`, `PAGE_NUMBER` or
+`PAGE_COUNT` would answer differently at each point. The frame position
+it sees is therefore the one before the subreport's bands were placed.
+
+The same answer stands across the retries inside one placement, so a band
+cannot appear or vanish part way through being placed. A header, a footer
+and the [keep-together lookahead](#keeping-content-together) each ask on
+their own, being measurements rather than placements.
+
+A negative-seq subreport runs after the host band's own variables have folded,
+so both sides of the band read the same values. It is committed before the host
+band is measured, so if the host band then turns out not to fit and ejects,
+the subreport's bands stay where they were placed and the host band follows
+them onto the next page -- which is what "the host band follows them" means.
+
+### Pages
+
+**Inline.** The child prints in the frame the host band belongs to, from
+the host's current fill position. It shares the host's `PAGE_NUMBER` and
+`COLUMN_NUMBER`, and an eject inside it is the host's eject: the host's
+footers are placed, the host's page-scoped variables reset, and the host's
+header is reserved on the next page, all alongside the child's own. An inline
+subreport therefore has no frame of its own to attach a header, a footer or
+a `columns` block to, and defines none.
+
+**Its own pages.** The host's current page is closed -- footers placed, page
+and column deferrals resolved -- the child builds complete pages, and the host
+resumes on a fresh one. The child's pages land in the printout between the two,
+which is the splice: everything the host has built is already before that point.
+So a subreport that paginates itself always ends the host's page, whether or not
+that page was full.
+
+The child may run at a page size and margins of its own. Its pages carry
+whatever differs from the document's own geometry, which is what the
+printout's [per-page overrides](printout.md#pages) are for.
+
+Without `ownpageno` the child continues the host's numbering and the host
+resumes after it: a host on page 3 whose subreport takes three pages resumes
+on page 7. With `ownpageno` the child numbers from 1 and the host's numbering
+is untouched, so the host resumes on page 4.
+
+### What the lookahead does not see
+
+[Keep-together and `minrows`](#keeping-content-together) measure the host's own
+bands. A subreport's bands are not measured in advance: the child is a nested
+builder over a sequence the host has not evaluated yet, and running it to find
+out how tall it is would mean running it twice.
+
+So a group whose detail rows carry subreports is kept together against the
+height of the rows alone. It is an estimate, and it is the only place in the
+engine where one is left: everything the host itself contributes is measured.
+
+### Names and values
+
+The child's parameters are bound from the `arg` nodes, which are evaluated in
+the **host's** context before the child has one, and type-checked against the
+declaration rather than parsed for it. A parameter with neither an `arg` nor a
+default is a load-time error: a subreport has no command line to fall back on.
+
+The `data` expression is evaluated in the host's context too, and must yield
+a sequence. Its elements are coerced by the child's own
+[`records`](template.md#records), exactly as the input file is coerced
+by the report's -- a `list` member arrives from JSON untyped, and that
+declaration is what turns its fields into ints, decimals and times.
+
+Every deferral a child registered resolves when its invocation ends. For a child
+with its own pages that is the ordinary end-of-report resolution. For an inline
+one it is earlier than the host's page ends, and deliberately so: its `report`
+scope ends with the invocation, and its `page` and `column` scopes belong to a
+host whose end it cannot see, so once the invocation is over nothing it could
+still contribute is outstanding. A deferred value that has to read the host's
+final page state belongs on a host band. An eject that happens *during* the
+invocation does resolve the child's page and column deferrals along with the
+host's, because there both are printing in the scope that ended.
+
 ### Page headers and footers
 
 Only a paginating report has them. A **non-inline** subreport builds its own pages
 and so uses its own `header` and `footer`. An **inline** subreport shares the
 parent's pages, whose header and footer are already reserved, so it has no frames
-of its own to attach them to: an inline subreport must not define `header` or
-`footer`, and doing so is a [validation error](template.md#validation).
+of its own to attach them to: an inline subreport must not define `header`,
+`footer`, `columns`, a `swapheader` title or a `swapfooter` summary, and doing so
+is a [validation error](template.md#validation).
 
 For a heading that prints once per invocation — column labels above a line-item
 table, say — use `title` and `summary`, which are per-report bands and work in
@@ -756,6 +861,11 @@ Each of these names the template node, the record index, and the measured values
 | A value a `calc="sum"` accumulator cannot add to its running total | error |
 | `FINAL` without `evaltime`, or `evaltime` without `FINAL` | error, at template validation |
 | Column count so high that column width is non-positive | error, at template validation |
+| A subreport's `data` yields something that is not a sequence | error |
+| An `arg` value whose type is not the parameter's | error |
+| Subreports nested more than 32 deep | error |
+| A subreport parameter with no `arg` and no default | error, at template validation |
+| A template that reaches itself through a subreport | error, at template load |
 
 The rows marked **overflow** are errors that `--allow-overflow` downgrades to a
 warning, placing the marks anyway. The warning is recorded in the printout header,

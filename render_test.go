@@ -206,9 +206,6 @@ func TestSakilaRendersFaithfully(test *testing.T) {
 
 // A report over several pages renders faithfully too, with its page
 // header and footer on each of them and a deferred page count resolved.
-//
-// The second reference template is not used here: it needs subreports,
-// which are staged after this, so it does not build yet.
 func TestMultiPageRendersFaithfully(test *testing.T) {
 	const paged = `report name="Paged" {
   records { member "n" type="int" }
@@ -388,4 +385,13 @@ func TestCollectionFaceReachesThePage(test *testing.T) {
 			test.Errorf("BaseFont = %q, want the collection's bold face", font.BaseFont)
 		}
 	}
+}
+
+// The second reference report renders faithfully too, subreport and all:
+// the line items a nested builder emitted are ordinary marks by the time
+// the renderer sees them, and land where the printout puts them.
+func TestInvoicesRenderFaithfully(test *testing.T) {
+	doc := buildInvoices(test)
+	pages, _ := renderScan(test, doc)
+	checkRendered(test, doc, pages)
 }

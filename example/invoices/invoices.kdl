@@ -1,13 +1,14 @@
 // invoices.kdl -- the companion to sakila.kdl.
 //
 // Invoices grouped by region, each with its line items as a subreport.
-// Written to cover what sakila.kdl does not: an embedded subreport with an `arg`,
-// `records` inside `embedded`, a group that keeps itself together with
-// `minrows` and `mintailrows`, a `summary` with `swapfooter`, a referenced
-// rather than embedded image, a compressed `data` blob read through a field,
-// a detail band configured to split with `orphans` and `widows`, and the
-// variable modes sakila leaves out -- `set`, `chain`, `std`, `var`, and
-// `iter="item"`.
+// Written to cover what sakila.kdl does not: both kinds of subreport --
+// an inline `embedded` one with an `arg`, and a `template=` one that
+// paginates itself -- `records` inside `embedded`, a group that keeps
+// itself together with `minrows` and `mintailrows`, a `summary` with
+// `swapfooter`, a referenced rather than embedded image, a compressed
+// `data` blob read through a field, a detail band configured to split
+// with `orphans` and `widows`, and the variable modes sakila leaves out:
+// `set`, `chain`, `std`, `var`, and `iter="item"`.
 //
 // Build it with:
 //   sr build -t invoices.kdl -d invoices.jsonl -o invoices.pdf
@@ -54,6 +55,12 @@ report name="Invoice register" \
   variable "first_cust"  expr="customer"   calc="first" reset="group" resetgrp="region"
   variable "last_cust"   expr="customer"   calc="last"  reset="group" resetgrp="region"
   variable "invoice_nos" expr="invoice_no" calc="list"  reset="group" resetgrp="region"
+
+  // The rows region_sheet.kdl runs over. A subreport's data is any expression
+  // yielding a sequence of records, so it can be built here rather than read
+  // out of the input: these are the invoices of the region just ended.
+  variable "region_rows" calc="list" reset="group" resetgrp="region" \
+           expr="{'invoice_no': invoice_no, 'customer': customer, 'amount': total}"
 
   font "body"  file="../fonts/Go-Regular.ttf" size=9
   font "bold"  file="../fonts/Go-Bold.ttf"    size=9
@@ -217,6 +224,17 @@ report name="Invoice register" \
         }
         field expr="(region, region_total)" format="%s total: %.2f" \
               align="right" right=0 top="8mm" width="120mm"
+
+        // The other kind of subreport: a separate template, resolved against
+        // basedir, and not inline, so it builds complete pages of its own.
+        // They go into the printout here -- after this region's summary,
+        // before the next region -- and the host resumes on a fresh page.
+        // Because it has pages of its own it may have a `header` and a
+        // `footer`, which the inline one above may not.
+        subreport template="region_sheet.kdl" seq=1 data="region_rows" {
+          arg "region" value="region"
+          arg "total"  value="region_total"
+        }
       }
 
       // Only `customer` can split, and it needs orphans+widows = 4 lines before

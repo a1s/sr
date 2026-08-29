@@ -398,9 +398,10 @@ func TestReadmeExample(test *testing.T) {
 	}
 }
 
-// invoices.kdl loads and validates, and refuses to build
-// with the offending node named: subreports are staged last.
-func TestInvoicesLoadsAndNamesTheUnbuiltFeature(test *testing.T) {
+// buildInvoices builds the second reference template, which is the acceptance
+// example for subreports: an embedded layout invoked once per invoice.
+func buildInvoices(test *testing.T) *Printout {
+	test.Helper()
 	tpl, err := LoadTemplate("example/invoices/invoices.kdl")
 	if err != nil {
 		test.Fatalf("the second reference template must load and validate:\n%v", err)
@@ -413,11 +414,136 @@ func TestInvoicesLoadsAndNamesTheUnbuiltFeature(test *testing.T) {
 		test.Fatal(err)
 	}
 	defer file.Close() // nolint:errcheck
-	_, err = tpl.BuildJSON(file, StrictFonts(), WithBuildTime(fixedTime))
-	if err == nil {
-		test.Fatal("want the unimplemented subreport reported")
+	out, err := tpl.BuildJSON(file, StrictFonts(), WithBuildTime(fixedTime))
+	if err != nil {
+		test.Fatalf("building the invoice register:\n%v", err)
 	}
-	if !strings.Contains(err.Error(), "subreport") {
-		test.Errorf("the diagnostic must name the node: %v", err)
+	if err := out.Validate(); err != nil {
+		test.Fatalf("%v", err)
+	}
+	return out
+}
+
+// invoices.kdl builds, subreport and all.
+func TestInvoicesBuilds(test *testing.T) {
+	out := buildInvoices(test)
+
+	// Every line item in invoices.jsonl reaches a page, under the heading
+	// its arg supplied, with the subreport's own summary after it.
+	var all []string
+	for _, page := range out.Pages {
+		all = append(all, lines(page)...)
+	}
+	joinedText := strings.Join(all, "\n")
+	for _, want := range []string{
+		"Torque wrench, 40-200 Nm", // a line item, from the nested sequence
+		"Mooring rope, 12mm, per metre",
+		"Invoice #01041 — lines total 410.50", // the arg, and the child's own sum
+	} {
+		if !strings.Contains(joinedText, want) {
+			test.Errorf("the printout does not carry %q", want)
+		}
+	}
+
+	// The line items of a void invoice are not printed: the host band
+	// is suppressed by printwhen, and the subreport is on that band.
+	if strings.Contains(joinedText, "#01044") {
+		test.Error("a suppressed invoice must not reach the page")
+	}
+
+	// The external, self-paginating subreport put its pages into the document
+	// where it occurs, with its own header, its own title and summary,
+	// and the argument the host passed it.
+	for _, want := range []string{
+		"Region sheet: Baltic",
+		"3 invoices, 1650.70 in total",
+		"sheet total 1650.70",
+	} {
+		if !strings.Contains(joinedText, want) {
+			test.Errorf("the printout does not carry %q", want)
+		}
+	}
+
+	// The host and its subreports share one document: one page sequence,
+	// whose numbers run straight through, because neither subreport asked
+	// for ownpageno.
+	for index, page := range out.Pages {
+		if page.Number != index+1 {
+			test.Errorf("page %d is numbered %d; without ownpageno the numbering runs on",
+				index+1, page.Number)
+		}
+	}
+
+	// The region sheets run landscape, and at their own inset,
+	// so those pages carry the difference and the rest carry nothing.
+	sheets := 0
+	for _, page := range out.Pages {
+		if page.Width == 0 {
+			if page.LeftMargin != nil {
+				test.Errorf("page %d records a margin without a size", page.Number)
+			}
+			continue
+		}
+		sheets++
+		if page.Width <= page.Height {
+			test.Errorf("page %d is %g x %g, want the landscape sheet",
+				page.Number, page.Width, page.Height)
+		}
+		if page.LeftMargin == nil || *page.LeftMargin == out.Header.Page.LeftMargin {
+			test.Errorf("page %d records no inset of its own", page.Number)
+		}
+	}
+	if sheets != 3 {
+		test.Errorf("pages at their own geometry = %d, want one per region", sheets)
+	}
+
+	// And one font table: both templates call a font "body" and name
+	// the same file, so it is measured, published and embedded once.
+	names := map[string]bool{}
+	for _, entry := range out.Header.Fonts {
+		if names[entry.Name] {
+			test.Errorf("two font entries answer to %q", entry.Name)
+		}
+		names[entry.Name] = true
+	}
+	if len(out.Header.Fonts) != 5 {
+		test.Errorf("fonts = %d, want the five distinct faces the two templates name",
+			len(out.Header.Fonts))
+	}
+}
+
+// The region sheet is a report in its own right, so it validates
+// on its own even though it is only ever built as a subreport.
+func TestRegionSheetValidatesAlone(test *testing.T) {
+	tpl, err := LoadTemplate("example/invoices/region_sheet.kdl")
+	if err != nil {
+		test.Fatalf("%v", err)
+	}
+	if warnings := tpl.Warnings(); len(warnings) > 0 {
+		test.Errorf("unexpected load warnings: %v", warnings)
+	}
+	params := tpl.Info().Parameters
+	if len(params) != 2 || !params[0].Required || !params[1].Required {
+		test.Errorf("parameters = %+v, want two the host has to supply", params)
+	}
+}
+
+// The line items follow their invoice row, because the subreport's seq is 1.
+func TestInvoiceLinesFollowTheirRow(test *testing.T) {
+	out := buildInvoices(test)
+	var order []string
+	for _, page := range out.Pages {
+		for _, text := range texts(page) {
+			joined := strings.Join(text.Lines, " ")
+			switch {
+			case strings.HasPrefix(joined, "#01041"):
+				order = append(order, "row")
+			case strings.Contains(joined, "Anchor bolt, galvanised"):
+				order = append(order, "line")
+			}
+		}
+	}
+	if len(order) < 2 || order[0] != "row" {
+		test.Errorf("seq=1 puts the line items after the invoice row; got %v", order)
 	}
 }

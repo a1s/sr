@@ -8,10 +8,8 @@ page count.
 A Go library with a CLI over it. Template plus JSON in, PDF out,
 one static binary.
 
-> **Status:** the engine, the PDF renderer and the command line are implemented.
-> One thing named below is not built yet: **subreports**, which a build refuses
-> with the offending node named, and a template check reports as such.
-> Everything else in these documents is implemented and tested.
+> **Status:** everything in these documents is implemented and tested:
+> the engine, subreports, the PDF renderer and the command line.
 
 ## Documentation
 
@@ -25,7 +23,7 @@ one static binary.
 | [doc/cli.md](doc/cli.md) | The command line: subcommands, flags, streams, exit codes |
 | [doc/decisions.md](doc/decisions.md) | Why the design is what it is, and what it replaces |
 | [example/sakila/](example/sakila/) | Reference template and dataset |
-| [example/invoices/](example/invoices/) | Second example: subreports, region grouping, the remaining variable modes |
+| [example/invoices/](example/invoices/) | Second example: both kinds of subreport, region grouping, the remaining variable modes |
 | [example/fonts/](example/fonts/) | Fonts committed so examples resolve identically everywhere |
 
 The Go packages are `github.com/a1s/sr` for the library,
@@ -174,11 +172,7 @@ Narrowed to one month, using the template's `date` parameters:
 sr build -t example/sakila/sakila.kdl -d example/sakila/payments.jsonl -o june.pdf --param period_start=2005-06-01 --param period_end=2005-07-01
 ```
 
-The second example uses a subreport, so it checks but does not yet build:
-
-```bash
-sr validate example/invoices/invoices.kdl
-```
+The second example, which uses both kinds of subreport:
 
 ```bash
 sr build -t example/invoices/invoices.kdl -d example/invoices/invoices.jsonl -o invoices.pdf
@@ -191,10 +185,12 @@ embedded image and a referenced one, both kinds of cross-reference, conditional
 outline entries, a deferred page count, justified text, and typed parameters.
 
 [invoices.kdl](example/invoices/invoices.kdl) — invoices by region with line
-items: an inline subreport with an `arg` and its own `records`, a group using
-`keeptogether` with `minrows` and `mintailrows`, a `summary` with `swapfooter`,
-an image with `embed=#false`, a compressed `data` blob, `iter="item"` against
-`iter="detail"`, and the `calc` modes sakila leaves out.
+items: an inline `embedded` subreport with an `arg` and its own `records`, a
+`template=` subreport in [region_sheet.kdl](example/invoices/region_sheet.kdl)
+that paginates itself onto landscape pages of its own, a group using `keeptogether`
+with `minrows` and `mintailrows`, a `summary` with `swapfooter`, an image with
+`embed=#false`, a compressed `data` blob, `iter="item"` against `iter="detail"`,
+and the `calc` modes sakila leaves out.
 
 Between them the two templates use every node in the format and all twelve `calc`
 modes. They do not exhaust every property. What they leave out, so that reading
@@ -202,13 +198,10 @@ them as a reference does not mislead:
 
 | | |
 |---|---|
-| Properties | `layout width` / `height` / `landscape`, `font typeface` / `data` / `bold` / `italic`, `line backslant`, `rectangle opaque`, `image type`, `barcode data`, `data expr`, `maxheight`, `format` as a date-parse layout on either `parameter` or `member`, `subreport template` / `ownpageno` |
+| Properties | `layout width` / `height` / `landscape`, `font typeface` / `data` / `bold` / `italic`, `line backslant`, `rectangle opaque`, `image type`, `barcode data`, `data expr`, `maxheight`, `format` as a date-parse layout on either `parameter` or `member`, `subreport ownpageno` |
 | Spellings | the `x` / `y` aliases for `left` / `top` — both examples use `left` and `top` throughout |
 | Enumerations | barcode types `Code93`, `DataMatrix`, `QR-M`, `QR-H`; `image scale="cut"` and `"grow"`; `dash="dash"` |
 | Scopes | `iter="report"` / `"page"` / `"column"`; `reset="detail"` / `"item"` |
-
-A subreport in its own file — `subreport template=` with `ownpageno` — needs
-a third template, which neither of these is.
 
 Both reference the [committed fonts](example/fonts/) by path, so they build
 identically on any machine and work under `--strict-fonts`. Swap `file=` for

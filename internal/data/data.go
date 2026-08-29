@@ -548,3 +548,88 @@ func MatchesType(value starlark.Value, kind tmpl.ValueType) bool {
 
 func inf(sign int) float64 { return math.Inf(sign) }
 func nan() float64         { return math.NaN() }
+
+// Sequence converts an expression's result into rows.
+//
+// This is how a subreport reads the nested sequence its `data` names.
+//
+// The elements arrive as Starlark values, already generic: a member declared
+// type="list" holds whatever JSON put there, untyped. Turning them back into
+// the plain Go shape a record is read from means the subreport's `records`
+// coerces them exactly as a top-level `records` coerces the input file,
+// rather than through a second path that could disagree with it.
+func Sequence(value starlark.Value) ([]map[string]any, error) {
+	if value == nil || value == starlark.None {
+		return nil, nil
+	}
+	seq, ok := value.(starlark.Iterable)
+	if !ok {
+		return nil, fmt.Errorf("want a sequence of records, got %s", value.Type())
+	}
+	iter := seq.Iterate()
+	defer iter.Done()
+	var rows []map[string]any
+	var item starlark.Value
+	for index := 0; iter.Next(&item); index++ {
+		row, ok := FromStarlark(item).(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("element %d is %s, and a record is an object",
+				index, item.Type())
+		}
+		rows = append(rows, row)
+	}
+	return rows, nil
+}
+
+// FromStarlark converts a value an expression produced
+// back to the plain Go shape Record reads.
+//
+// Anything without a plain equivalent -- a decimal, a time -- is
+// passed through as itself, because Convert already accepts those.
+func FromStarlark(value starlark.Value) any {
+	switch typed := value.(type) {
+	case nil, starlark.NoneType:
+		return nil
+	case starlark.String:
+		return string(typed)
+	case starlark.Bool:
+		return bool(typed)
+	case starlark.Int:
+		return json.Number(typed.String())
+	case starlark.Float:
+		return float64(typed)
+	case *expr.Record:
+		out := make(map[string]any, len(typed.Keys()))
+		for _, key := range typed.Keys() {
+			member, err := typed.Attr(key)
+			if err != nil || member == nil {
+				continue
+			}
+			out[key] = FromStarlark(member)
+		}
+		return out
+	case *starlark.Dict:
+		out := make(map[string]any, typed.Len())
+		for _, item := range typed.Items() {
+			key, ok := starlark.AsString(item[0])
+			if !ok {
+				key = item[0].String()
+			}
+			out[key] = FromStarlark(item[1])
+		}
+		return out
+	case *starlark.List:
+		out := make([]any, typed.Len())
+		for index := range out {
+			out[index] = FromStarlark(typed.Index(index))
+		}
+		return out
+	case starlark.Tuple:
+		out := make([]any, len(typed))
+		for index, item := range typed {
+			out[index] = FromStarlark(item)
+		}
+		return out
+	}
+	return value
+}
