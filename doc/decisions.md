@@ -2134,15 +2134,47 @@ the margins were added. They are optional *independently*, and written even when
 zero, because zero is a real margin: a page flush to the paper edge under a
 header that insets is an override and has to be able to say so.
 
+The reference example uses it. `region_sheet.kdl` is landscape and inset
+differently from the register it sits inside, which is what a wide table wants
+and what a subreport with pages of its own is free to choose.
+
 ### A suppressed band suppresses its subreports
 
 `printwhen` on the host band decides both. A void invoice that does not print has
 no line items to print either, and the reference example walked straight into it:
 the void invoice's row was suppressed and its line items printed anyway, under
-the previous invoice's heading. The band's `printwhen` is evaluated once, where
-the band is, rather than once on each side of it -- the two sides are reached at
-different points in the record loop, and a condition reading `PAGE_COUNT` would
-otherwise answer differently at each.
+the previous invoice's heading.
+
+Deciding it takes more than reading the same property twice. The band's own
+measurement evaluates `printwhen` after setting `VERTICAL_POSITION` and
+`VERTICAL_SPACE`, and a negative-seq subreport runs -- and may eject -- between
+the gate and that measurement. A condition reading either of those,
+or `PAGE_NUMBER`, answered one way at the gate and another at the band,
+which reproduced the original bug with the halves swapped: a row's line items
+printed and the row did not.
+
+So the answer is taken once, at `bandPrints`, with the vertical context set
+exactly as the measurement would set it, and passed into the measurement.
+It also stands across the retries inside one placement, so a band cannot appear
+or vanish half way through being placed. A header, a footer and the keep-together
+lookahead still ask for themselves: each is a measurement of its own rather than
+a placement.
+
+The frame position the condition sees is the one before the band's negative-seq
+subreports ran. That is the only self-consistent choice -- the gate has to be
+answered before they run, because it decides whether they run at all.
+
+### What the keep-together lookahead cannot see
+
+`keeptogether` and `minrows` measure ahead by laying the coming bands out into a
+scratch context. A subreport's bands are not among them: the child runs over a
+sequence the host has not evaluated yet, and measuring it would mean running the
+whole nested build twice, once to size it and once to print it.
+
+Left as an estimate, and said so in the layout document. It is the only estimate
+in the engine -- everything the host itself contributes is measured -- and the
+alternative is a cost that scales with the nesting depth for a decision that is
+a preference rather than a rule.
 
 ### An inline subreport's deferrals resolve when it ends
 
@@ -2158,6 +2190,34 @@ outstanding. A page break that happens *during* the invocation still resolves th
 child's page and column deferrals along with the host's, because there both are
 printing in the scope that just ended. A deferred value that has to read the
 host's final page state belongs on a host band, where the host resolves it.
+
+### An embedded name is resolved once, at load
+
+The first implementation looked a `subreport embedded=` name up twice:
+validation against a flat map of every layout in the document, the engine
+against a pre-order walk of the same tree. Two searches over one tree,
+and they did not agree -- the flat map took the last of a repeated name,
+the walk took the first -- so a template could pass `sr validate` against
+one layout and build against another. Where the two layouts happened to
+declare matching parameters, it built the wrong one silently.
+
+The fix is to search once, at load, and record the result on the subreport node.
+There is then no second search to disagree with, and the engine holds a pointer
+rather than a name.
+
+Choosing which search to keep settled the scoping question the format had
+left open. The lexical one: beside the layout the reference is written in,
+then outward. A layout nested inside a *sibling* is out of scope, which is
+what makes nesting mean anything -- a pre-order walk over the whole tree
+makes every name global and the nesting decorative.
+
+Shadowing is then refused rather than resolved. Lexical scope gives a nested
+name that repeats an enclosing one a well-defined meaning, but not a readable one:
+the reader has to trace the nesting to know which layout a name means. Two layouts
+in one scope chain may not share a name, and neither may two siblings, which the
+format already said for the top level and never checked below it. Two unrelated
+layouts may each keep a private one of the same name, since neither is in the
+other's scope and there is nothing to confuse.
 
 ### Recursion is bounded, not forbidden
 

@@ -253,7 +253,7 @@ func (dmp *dumper) page(doc *printout.Printout, page *printout.Page) {
 	geometry := page.Geometry(doc.Header.Page)
 	if geometry != doc.Header.Page {
 		dmp.line("", "page %d  %s  %s",
-			page.Number, describeGeometry(geometry), count(len(page.Marks), "mark"))
+			page.Number, describeSize(geometry), count(len(page.Marks), "mark"))
 	} else {
 		dmp.line("", "page %d  %s x %s  %s",
 			page.Number, num(geometry.Width), num(geometry.Height),

@@ -143,8 +143,8 @@ Making the printout's own directory self-contained is a separate, deliberate act
 | `engine` | Name and version of the producing engine. |
 | `strictFonts` | Whether font guessing was disabled for this run. |
 | `pages` | Number of page lines that follow. |
-| `groupRuns` | Per group, how many times it opened. |
-| `groupKeys` | Per group, how many distinct key values it saw. A `groupRuns` value larger than its `groupKeys` value means the input was not ordered by that group's key. |
+| `groupRuns` | Per group name, how many times it opened. Group names are per-report namespaces, and this table is the document's, so a host and a [subreport](layout.md#subreports) that both call a group `region` are counted together here. |
+| `groupKeys` | Per group name, how many distinct key values it saw. A `groupRuns` value larger than its `groupKeys` value means the input was not ordered by that group's key. |
 | `page` | Default page geometry, inherited by every page that does not override it. |
 | `fonts` | Resolved font table. |
 | `data` | Shared blobs, keyed by name. |

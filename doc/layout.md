@@ -748,10 +748,21 @@ not between the fragments: `seq` negative places it before the head,
 `seq` non-negative after the tail.
 
 **A host band suppressed by `printwhen` runs none of its subreports.**
-The subreport hangs off the band; an invoice that does not print has no
-line items to print either. The band's `printwhen` is evaluated once,
-where the band is, because the two sides of it are reached at different
-points in the record loop and have to agree.
+The subreport hangs off the band; an invoice that does not print has
+no line items to print either.
+
+The band's `printwhen` is answered **once per placement**, before any of its
+subreports run, and that one answer decides the band, the subreports before it
+and the subreports after it. It has to be one answer: a negative-seq subreport
+runs between the question and the band's own measurement and may eject, so a
+condition reading `VERTICAL_POSITION`, `VERTICAL_SPACE`, `PAGE_NUMBER` or
+`PAGE_COUNT` would answer differently at each point. The frame position
+it sees is therefore the one before the subreport's bands were placed.
+
+The same answer stands across the retries inside one placement, so a band
+cannot appear or vanish part way through being placed. A header, a footer
+and the [keep-together lookahead](#keeping-content-together) each ask on
+their own, being measurements rather than placements.
 
 A negative-seq subreport runs after the host band's own variables have folded,
 so both sides of the band read the same values. It is committed before the host
@@ -784,6 +795,17 @@ Without `ownpageno` the child continues the host's numbering and the host
 resumes after it: a host on page 3 whose subreport takes three pages resumes
 on page 7. With `ownpageno` the child numbers from 1 and the host's numbering
 is untouched, so the host resumes on page 4.
+
+### What the lookahead does not see
+
+[Keep-together and `minrows`](#keeping-content-together) measure the host's own
+bands. A subreport's bands are not measured in advance: the child is a nested
+builder over a sequence the host has not evaluated yet, and running it to find
+out how tall it is would mean running it twice.
+
+So a group whose detail rows carry subreports is kept together against the
+height of the rows alone. It is an estimate, and it is the only place in the
+engine where one is left: everything the host itself contributes is measured.
 
 ### Names and values
 

@@ -355,21 +355,22 @@ func (eng *engine) closeGroups(level int) error {
 // A group's title is not the exception.
 func (eng *engine) placeReportTitle(sec *tmpl.Section) error {
 	fr := eng.frames.frameOf[sec]
-	gate, err := eng.subreportGate(sec)
-	if err != nil {
-		return err
-	}
-	if err := eng.runSubreports(sec, true, gate); err != nil {
-		return err
-	}
-	// A swapheader title was already placed when the page opened.
+	// A swapheader title was already placed when the page opened, and a
+	// subreport on one is refused at load, so there is nothing to decide.
 	if !sec.SwapHeader {
-		if err := eng.placeMeasured(sec, fr, eng.frames.scopesOf[sec], nil); err != nil {
+		prints, err := eng.bandPrints(sec, fr)
+		if err != nil {
 			return err
 		}
-	}
-	if err := eng.runSubreports(sec, false, gate); err != nil {
-		return err
+		if err := eng.runSubreports(sec, true, prints); err != nil {
+			return err
+		}
+		if err := eng.placeMeasured(sec, fr, eng.frames.scopesOf[sec], nil, &prints); err != nil {
+			return err
+		}
+		if err := eng.runSubreports(sec, false, prints); err != nil {
+			return err
+		}
 	}
 	kind, want, err := eng.selectEject(sec, fr)
 	if err != nil {
@@ -393,7 +394,12 @@ func (eng *engine) placeSummary(sec *tmpl.Section) error {
 		// and that page's footer is placed immediately above it.
 		// The last page's content space is that much shorter,
 		// and if what remains is already filled a page eject happens first.
-		measured, err := eng.measureSection(sec, eng.frames.scopesOf[sec], fr, fr.available())
+		prints, err := eng.bandPrints(sec, fr)
+		if err != nil {
+			return err
+		}
+		measured, err := eng.measureDecided(sec,
+			eng.frames.scopesOf[sec], fr, fr.available(), &prints)
 		if err != nil {
 			return err
 		}
@@ -404,8 +410,9 @@ func (eng *engine) placeSummary(sec *tmpl.Section) error {
 			if err := eng.eject(fr, tmpl.EjectPage); err != nil {
 				return err
 			}
-			measured, err = eng.measureSection(sec,
-				eng.frames.scopesOf[sec], fr, fr.available())
+			// The same answer after the eject: one placement, one printwhen.
+			measured, err = eng.measureDecided(sec,
+				eng.frames.scopesOf[sec], fr, fr.available(), &prints)
 			if err != nil {
 				return err
 			}
@@ -430,7 +437,11 @@ func (eng *engine) placeGroupTitle(group *tmpl.Group, level, record int) error {
 	want := 0.0
 	kind := tmpl.EjectColumn
 
-	measured, err := eng.measureSection(group.Title, scopes, fr, fr.available())
+	prints, err := eng.bandPrints(group.Title, fr)
+	if err != nil {
+		return err
+	}
+	measured, err := eng.measureDecided(group.Title, scopes, fr, fr.available(), &prints)
 	if err != nil {
 		return err
 	}
@@ -471,17 +482,13 @@ func (eng *engine) placeGroupTitle(group *tmpl.Group, level, record int) error {
 	}
 	// The eject decision has been made here, so the band goes straight
 	// to placement rather than having its eject nodes tested a second time.
-	gate, err := eng.subreportGate(group.Title)
-	if err != nil {
+	if err := eng.runSubreports(group.Title, true, prints); err != nil {
 		return err
 	}
-	if err := eng.runSubreports(group.Title, true, gate); err != nil {
+	if err := eng.placeMeasured(group.Title, fr, scopes, nil, &prints); err != nil {
 		return err
 	}
-	if err := eng.placeMeasured(group.Title, fr, scopes, nil); err != nil {
-		return err
-	}
-	return eng.runSubreports(group.Title, false, gate)
+	return eng.runSubreports(group.Title, false, prints)
 }
 
 // lookahead measures a group's extent, or its title plus minrows detail rows.
@@ -596,18 +603,19 @@ func (eng *engine) placeDetail(sec *tmpl.Section, record int) error {
 		return err
 	}
 
-	// A negative seq puts the subreport's bands in the frame ahead of this
-	// one, which then follows them. It runs after the fold, so both sides of
-	// the band read the same variables.
-	gate, err := eng.subreportGate(sec)
+	// The band's printwhen, answered here and used for the band and for both
+	// sides of it. A negative seq puts the subreport's bands in the frame ahead
+	// of this one, which then follows them; it runs after the fold, so both
+	// sides of the band read the same variables.
+	prints, err := eng.bandPrints(sec, fr)
 	if err != nil {
 		return err
 	}
-	if err := eng.runSubreports(sec, true, gate); err != nil {
+	if err := eng.runSubreports(sec, true, prints); err != nil {
 		return err
 	}
 
-	measured, merr := eng.measureSection(sec, scopes, fr, fr.available())
+	measured, merr := eng.measureDecided(sec, scopes, fr, fr.available(), &prints)
 	if merr != nil {
 		return merr
 	}
@@ -621,17 +629,17 @@ func (eng *engine) placeDetail(sec *tmpl.Section, record int) error {
 	if geom.Fits(measured.height, fr.available()) {
 		eng.commit(measured, fr, fr.fillY)
 		eng.afterDetail()
-		return eng.runSubreports(sec, false, gate)
+		return eng.runSubreports(sec, false, prints)
 	}
 
 	// The band splits where it can, and the fold stands:
 	// part of the row is committed here.
 	if sec.Split {
 		if _, ok := legalSplit(measured, sec, fr.available()); ok {
-			if err := eng.placeMeasured(sec, fr, scopes, measured); err != nil {
+			if err := eng.placeMeasured(sec, fr, scopes, measured, &prints); err != nil {
 				return err
 			}
-			return eng.runSubreports(sec, false, gate)
+			return eng.runSubreports(sec, false, prints)
 		}
 	}
 
@@ -644,12 +652,12 @@ func (eng *engine) placeDetail(sec *tmpl.Section, record int) error {
 	if err := eng.ctx.iterate(tmpl.ScopeDetail, ""); err != nil {
 		return err
 	}
-	if err := eng.placeMeasured(sec, fr, scopes, nil); err != nil {
+	if err := eng.placeMeasured(sec, fr, scopes, nil, &prints); err != nil {
 		return err
 	}
 	// After the whole band, split or not: a subreport goes outside the split,
 	// not between its fragments.
-	return eng.runSubreports(sec, false, gate)
+	return eng.runSubreports(sec, false, prints)
 }
 
 func (eng *engine) afterDetail() {
@@ -672,17 +680,17 @@ func (eng *engine) place(sec *tmpl.Section, fr *frame, scopes styleScopes) error
 			return err
 		}
 	}
-	gate, err := eng.subreportGate(sec)
+	prints, err := eng.bandPrints(sec, fr)
 	if err != nil {
 		return err
 	}
-	if err := eng.runSubreports(sec, true, gate); err != nil {
+	if err := eng.runSubreports(sec, true, prints); err != nil {
 		return err
 	}
-	if err := eng.placeMeasured(sec, fr, scopes, nil); err != nil {
+	if err := eng.placeMeasured(sec, fr, scopes, nil, &prints); err != nil {
 		return err
 	}
-	return eng.runSubreports(sec, false, gate)
+	return eng.runSubreports(sec, false, prints)
 }
 
 // placeMeasured runs the four branches of doc/layout.md#placing-a-band.
@@ -691,12 +699,16 @@ func (eng *engine) placeMeasured(
 	fr *frame,
 	scopes styleScopes,
 	carried *measurement,
+	prints *bool,
 ) error {
 	for attempt := 0; ; attempt++ {
 		measured := carried
 		if measured == nil {
 			var err error
-			measured, err = eng.measureSection(sec, scopes, fr, fr.available())
+			// The same printwhen answer on every retry: an eject between them
+			// moves the frame, and a band cannot appear or vanish part way
+			// through being placed.
+			measured, err = eng.measureDecided(sec, scopes, fr, fr.available(), prints)
 			if err != nil {
 				return err
 			}

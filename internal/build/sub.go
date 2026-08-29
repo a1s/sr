@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/a1s/sr/internal/data"
+	"github.com/a1s/sr/internal/geom"
 	"github.com/a1s/sr/internal/tmpl"
 	"go.starlark.net/starlark"
 )
@@ -15,19 +16,25 @@ import (
 // the data is finite, so the recursion is bounded here rather than by the stack.
 const maxSubreportDepth = 32
 
-// subreportGate decides whether a band's subreports run at all.
+// bandPrints answers a band's printwhen, once, where the band is.
 //
-// A subreport hangs off a band, so a band suppressed by printwhen runs none
-// of them: an invoice that does not print has no line items to print either.
-// The answer is taken once, where the band is, because the two sides of the
-// band are asked at different points in the record loop and have to agree.
+// The answer decides the band and its subreports together -- a subreport hangs
+// off a band, and an invoice that does not print has no line items to print
+// either -- and the three points that need it are reached at different moments:
+// the negative-seq subreports before the band, the band's own measurement, and
+// the non-negative subreports after it. Between the first and the second a
+// subreport can eject, so a printwhen reading VERTICAL_SPACE, PAGE_NUMBER or
+// PAGE_COUNT would answer differently at each. Asking here and passing the
+// answer to measureDecided is what makes it one answer.
 //
-// A band with no subreports is not asked, so a printwhen with an error in it
-// is still reported by the band itself rather than here.
-func (eng *engine) subreportGate(sec *tmpl.Section) (bool, error) {
-	if sec == nil || len(sec.Subreports) == 0 {
+// The vertical position and space are set exactly as measureDecided sets them,
+// because a printwhen may read them and they are what it would have read.
+func (eng *engine) bandPrints(sec *tmpl.Section, fr *frame) (bool, error) {
+	if sec == nil {
 		return false, nil
 	}
+	eng.ctx.verticalPosition = geom.Round(fr.fillY - fr.top)
+	eng.ctx.verticalSpace = geom.Round(fr.available())
 	return eng.ctx.truth(sec.PrintWhen)
 }
 
@@ -37,8 +44,11 @@ func (eng *engine) subreportGate(sec *tmpl.Section) (bool, error) {
 // runs before the band, non-negative after it, and the band is placed whole
 // in between: a subreport emits bands of its own rather than content inside
 // the host band's box, so a host band that splits is not split around it.
-func (eng *engine) runSubreports(sec *tmpl.Section, before, gate bool) error {
-	if !gate || sec == nil || len(sec.Subreports) == 0 {
+//
+// prints is the band's own printwhen, from bandPrints.
+// A band that does not print runs none of them.
+func (eng *engine) runSubreports(sec *tmpl.Section, before, prints bool) error {
+	if !prints || sec == nil || len(sec.Subreports) == 0 {
 		return nil
 	}
 	fr := eng.frames.frameOf[sec]
@@ -145,17 +155,8 @@ func (eng *engine) runChild(child *engine, sub *tmpl.Subreport) error {
 // and the unit's caches, and has a context, a record loop, and a set of
 // deferrals of its own.
 func (eng *engine) newChild(sub *tmpl.Subreport, item *unit, fr *frame) *engine {
-	child := &engine{
-		opts:    eng.opts,
-		out:     eng.out,
-		ctx:     newScopeContext(eng.ctx.buildTime),
-		host:    eng,
-		inline:  sub.Inline,
-		depth:   eng.depth + 1,
-		pending: map[string][]*deferral{},
-	}
-	child.adopt(eng.doc)
-	child.attach(item)
+	child := eng.nested(item)
+	child.inline = sub.Inline
 	switch {
 	case sub.Inline:
 		// The host's pages, so the host's pagination and the host's frame.
@@ -165,6 +166,25 @@ func (eng *engine) newChild(sub *tmpl.Subreport, item *unit, fr *frame) *engine 
 		// Its own pages, numbered on from the host's.
 		child.ctx.pages = eng.ctx.pages
 	}
+	return child
+}
+
+// nested builds an engine under this one, sharing the document
+// and running one template's unit.
+//
+// It is short of everything a run needs -- no records, no frames, no page
+// arrangement -- because what those should be is what the caller knows.
+func (eng *engine) nested(item *unit) *engine {
+	child := &engine{
+		opts:    eng.opts,
+		out:     eng.out,
+		ctx:     newScopeContext(eng.ctx.buildTime),
+		host:    eng,
+		depth:   eng.depth + 1,
+		pending: map[string][]*deferral{},
+	}
+	child.adopt(eng.doc)
+	child.attach(item)
 	return child
 }
 
@@ -209,15 +229,15 @@ func (eng *engine) unitFor(sub *tmpl.Subreport) (*unit, error) {
 		// A separate document: its own fonts, its own data, its own
 		// base directory, so its own caches and its own resolver.
 		item = newUnit(sub.Report, eng.opts, eng.doc)
-	default:
-		found := findEmbedded(eng.report.Layout, sub.Embedded)
-		if found == nil {
-			return nil, fmt.Errorf("no embedded layout named %q", sub.Embedded)
-		}
+	case sub.EmbeddedLayout != nil:
+		// The layout the name resolved to when the template was loaded.
+		// Resolving it there rather than here is what keeps validation
+		// and this from answering one name differently.
+		//
 		// An embedded layout shares the enclosing report's fonts and data,
 		// so it shares the caches those names are keyed in.
 		item = &unit{
-			report:    embeddedReport(eng.report, found),
+			report:    embeddedReport(eng.report, sub.EmbeddedLayout),
 			resolver:  eng.resolver,
 			faces:     eng.faces,
 			fontNames: eng.fontNames,
@@ -225,6 +245,9 @@ func (eng *engine) unitFor(sub *tmpl.Subreport) (*unit, error) {
 			published: eng.published,
 			images:    eng.images,
 		}
+	default:
+		return nil, fmt.Errorf("no embedded layout named %q is in scope here",
+			sub.Embedded)
 	}
 	if err := checkInlineLayout(sub, item.report.Layout); err != nil {
 		return nil, err
@@ -259,23 +282,6 @@ func checkInlineLayout(sub *tmpl.Subreport, layout *tmpl.Layout) error {
 	return nil
 }
 
-// findEmbedded looks an embedded layout up by name, anywhere in the layout.
-func findEmbedded(layout *tmpl.Layout, name string) *tmpl.Embedded {
-	var walk func([]*tmpl.Embedded) *tmpl.Embedded
-	walk = func(list []*tmpl.Embedded) *tmpl.Embedded {
-		for _, item := range list {
-			if item.Name == name {
-				return item
-			}
-			if found := walk(item.Embedded); found != nil {
-				return found
-			}
-		}
-		return nil
-	}
-	return walk(layout.Embedded)
-}
-
 // embeddedReport presents an embedded layout as the report it behaves like.
 //
 // An embedded layout is its own namespace for parameters, records, variables
@@ -288,13 +294,15 @@ func findEmbedded(layout *tmpl.Layout, name string) *tmpl.Embedded {
 // because the style search walks outward through the document and an embedded
 // layout is written inside one. A layout named by file is a separate document
 // and its search ends at its own layout, which is the same rule.
+//
+// The nested embedded layouts are carried across as they stand rather than
+// merged with the host's. Nothing here looks a name up -- a subreport node
+// already holds the layout its name resolved to at load -- so the list is
+// a description of this layout and not a search path.
 func embeddedReport(host *tmpl.Report, emb *tmpl.Embedded) *tmpl.Report {
 	layout := *host.Layout
 	layout.Styles = append(append([]*tmpl.Style{}, emb.Styles...), host.Layout.Styles...)
-	// An embedded layout may name one defined beside it or one defined
-	// further out, so both are in scope for a subreport nested in it.
-	layout.Embedded = append(append([]*tmpl.Embedded{}, emb.Embedded...),
-		host.Layout.Embedded...)
+	layout.Embedded = emb.Embedded
 	layout.Body = emb.Body
 	return &tmpl.Report{
 		File:        host.File,

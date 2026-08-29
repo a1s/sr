@@ -121,13 +121,40 @@ func (psr *parser) uniqueNames(report *Report) {
 		func(index int) { report.DataByName[report.Data[index].Name] = report.Data[index] })
 
 	if report.Layout != nil {
-		seen := map[string]bool{}
-		for _, embedded := range report.Layout.Embedded {
-			if seen[embedded.Name] {
-				psr.errf(embedded.Node, "", "duplicate embedded layout %q", embedded.Name)
-			}
-			seen[embedded.Name] = true
+		psr.uniqueEmbedded(report.Layout.Embedded, map[string]bool{})
+	}
+}
+
+// uniqueEmbedded refuses a name two embedded layouts in one scope chain share.
+//
+// Siblings cannot repeat a name, and neither can a nested layout repeat one
+// an enclosing layout already has: the search is outward, so a repeat would
+// shadow, and a name that means one layout here and another layout one level
+// down is the kind of thing a reader has to trace the nesting to resolve.
+// Two unrelated layouts may each nest a private one of the same name,
+// because neither is in the other's scope.
+func (psr *parser) uniqueEmbedded(list []*Embedded, enclosing map[string]bool) {
+	seen := map[string]bool{}
+	for _, embedded := range list {
+		switch {
+		case seen[embedded.Name]:
+			psr.errf(embedded.Node, "", "duplicate embedded layout %q", embedded.Name)
+		case enclosing[embedded.Name]:
+			psr.errf(embedded.Node, "",
+				"an enclosing layout already defines an embedded layout named %q, and the search for one runs outward, so this would shadow it",
+				embedded.Name)
 		}
+		seen[embedded.Name] = true
+	}
+	for _, embedded := range list {
+		inner := make(map[string]bool, len(enclosing)+len(seen))
+		for name := range enclosing {
+			inner[name] = true
+		}
+		for name := range seen {
+			inner[name] = true
+		}
+		psr.uniqueEmbedded(embedded.Embedded, inner)
 	}
 }
 
@@ -170,7 +197,9 @@ func (psr *parser) validateNamespace(ns *namespace, shared *sharedNames) {
 			return
 		}
 		if expr.IsReserved(name) {
-			psr.errf(node, "", "%s %q collides with a predefined name, a module, or a builtin, which resolution puts first", kind, name)
+			psr.errf(node, "",
+				"%s %q collides with a predefined name, a module, or a builtin, which resolution puts first",
+				kind, name)
 		}
 	}
 	for _, param := range ns.params {
@@ -181,11 +210,13 @@ func (psr *parser) validateNamespace(ns *namespace, shared *sharedNames) {
 	}
 	for _, group := range ns.groups {
 		reserved(group.Node, "group", group.Name)
-		// The derived names count too: a group called PAGE would produce a
-		// PAGE_COUNT that already exists.
+		// The derived names count too: a group called PAGE would produce
+		// a PAGE_COUNT that already exists.
 		for _, suffix := range []string{"_COUNT", "_PAGE_NUMBER"} {
 			if expr.IsReserved(group.Name + suffix) {
-				psr.errf(group.Node, "", "group %q would derive %s, which already exists", group.Name, group.Name+suffix)
+				psr.errf(group.Node, "",
+					"group %q would derive %s, which already exists",
+					group.Name, group.Name+suffix)
 			}
 		}
 	}
@@ -197,7 +228,8 @@ func (psr *parser) validateNamespace(ns *namespace, shared *sharedNames) {
 		}
 		if variable.Reset == ScopeGroup && variable.ResetGrp != "" {
 			if _, ok := ns.groups[variable.ResetGrp]; !ok {
-				psr.errf(variable.Node, "resetgrp", "no group named %q", variable.ResetGrp)
+				psr.errf(variable.Node, "resetgrp",
+					"no group named %q", variable.ResetGrp)
 			}
 		}
 	}
@@ -234,7 +266,9 @@ func (psr *parser) validateEmbedded(embedded *Embedded, shared *sharedNames) {
 }
 
 func (psr *parser) validateBody(body *Body, ns *namespace, shared *sharedNames, inColumns bool) {
-	for _, section := range []*Section{body.Title, body.Summary, body.Header, body.Footer, body.Detail} {
+	for _, section := range []*Section{
+		body.Title, body.Summary, body.Header, body.Footer, body.Detail,
+	} {
 		psr.validateSection(section, ns, shared, inColumns)
 	}
 	if body.Columns != nil {
@@ -294,7 +328,8 @@ func (psr *parser) validateElement(el Element, ns *namespace, shared *sharedName
 	case *Field:
 		psr.validateContent(typed.Node, &typed.Content, ns, shared)
 		if typed.Float && !typed.Stretch && !typed.Vert.Size.Set {
-			psr.errf(typed.Node, "float", "a floating element's height must come from the element: give it a height, or stretch=#true")
+			psr.errf(typed.Node, "float",
+				"a floating element's height must come from the element: give it a height, or stretch=#true")
 		}
 	case *Barcode:
 		psr.validateContent(typed.Node, &typed.Content, ns, shared)
@@ -305,7 +340,8 @@ func (psr *parser) validateElement(el Element, ns *namespace, shared *sharedName
 			}
 		}
 		if typed.Float && !typed.Vert.Size.Set && typed.Scale != ScaleGrow {
-			psr.errf(typed.Node, "float", "a floating element's height must come from the element: give it a height, or scale=\"grow\"")
+			psr.errf(typed.Node, "float",
+				"a floating element's height must come from the element: give it a height, or scale=\"grow\"")
 		}
 	case *Xref:
 		for _, inner := range typed.Elements {
@@ -313,7 +349,8 @@ func (psr *parser) validateElement(el Element, ns *namespace, shared *sharedName
 		}
 	case *Line, *Rectangle:
 		if el.Base().Float && !el.Base().Vert.Size.Set {
-			psr.errf(el.Base().Node, "float", "a floating element's height must come from the element, not from the band")
+			psr.errf(el.Base().Node, "float",
+				"a floating element's height must come from the element, not from the band")
 		}
 	}
 }
@@ -331,7 +368,8 @@ func (psr *parser) validateContent(node *kdl.Node, content *Content, ns *namespa
 	case "report", "page", "column":
 	default:
 		if _, ok := ns.groups[content.EvalTime]; !ok {
-			psr.errf(node, "evaltime", "names neither report, page, column, nor a group defined here")
+			psr.errf(node, "evaltime",
+				"names neither report, page, column, nor a group defined here")
 		}
 	}
 }
@@ -385,16 +423,19 @@ func (psr *parser) validateFinalUse(report *Report, ns *namespace) {
 		}
 		if !site.deferrable {
 			if site.prog.UsesFinal {
-				psr.errf(site.node, site.prop, "FINAL lives in the expr of a field or barcode with an evaltime, and nowhere else: everything here is evaluated when the band is measured, before the scope ends")
+				psr.errf(site.node, site.prop,
+					"FINAL lives in the expr of a field or barcode with an evaltime, and nowhere else: everything here is evaluated when the band is measured, before the scope ends")
 			}
 			continue
 		}
 		if !site.prog.UsesFinal {
-			psr.errf(site.node, "evaltime", "this expression never names FINAL, so deferring it would give the same answer in place")
+			psr.errf(site.node, "evaltime",
+				"this expression never names FINAL, so deferring it would give the same answer in place")
 		}
 		for _, name := range site.prog.FinalNames {
 			if !known[name] {
-				psr.errf(site.node, "expr", "FINAL.%s is neither a predefined variable nor a declared variable; a parameter is constant and a record field belongs to a record, so reach one through FINAL.THIS", name)
+				psr.errf(site.node, "expr",
+					"FINAL.%s is neither a predefined variable nor a declared variable; a parameter is constant and a record field belongs to a record, so reach one through FINAL.THIS", name)
 			}
 		}
 	}
@@ -455,38 +496,59 @@ type subTarget struct {
 	page *geom.PageSize
 }
 
+// validateSubreports binds each subreport to the layout it names
+// and checks the two against each other.
+//
+// The scope of an `embedded` reference is lexical: the layouts declared beside
+// the one the subreport is written in -- which includes that one, so a layout
+// can invoke itself and walk a tree -- and then those declared in each layout
+// enclosing it, out to the report's own. A layout nested in a sibling is not
+// in scope, which is what makes a nested one private to its parent.
 func (psr *parser) validateSubreports(report *Report) {
-	embedded := map[string]*Embedded{}
-	if report.Layout != nil {
-		var index func(list []*Embedded)
-		index = func(list []*Embedded) {
-			for _, sub := range list {
-				embedded[sub.Name] = sub
-				index(sub.Embedded)
-			}
-		}
-		index(report.Layout.Embedded)
+	if report.Layout == nil {
+		return
 	}
-	forEachSection(report, func(section *Section) {
-		for _, sub := range section.Subreports {
-			target := psr.subreportTarget(sub, embedded)
-			if target == nil {
-				continue
+	var walk func(body *Body, scope [][]*Embedded)
+	walk = func(body *Body, scope [][]*Embedded) {
+		visitBody(body, func(section *Section) {
+			for _, sub := range section.Subreports {
+				target := psr.subreportTarget(sub, scope)
+				if target == nil {
+					continue
+				}
+				psr.checkSubreportTarget(sub, target, report)
 			}
-			psr.checkSubreportTarget(sub, target, report)
+		})
+		for _, embedded := range scope[0] {
+			walk(&embedded.Body, append([][]*Embedded{embedded.Embedded}, scope...))
 		}
-	})
+	}
+	walk(&report.Layout.Body, [][]*Embedded{report.Layout.Embedded})
+}
+
+// lookupEmbedded searches a scope chain, innermost first.
+func lookupEmbedded(scope [][]*Embedded, name string) *Embedded {
+	for _, level := range scope {
+		for _, embedded := range level {
+			if embedded.Name == name {
+				return embedded
+			}
+		}
+	}
+	return nil
 }
 
 // subreportTarget resolves a subreport to the layout it runs,
 // or nil when the reference is broken and has already been reported.
-func (psr *parser) subreportTarget(sub *Subreport, embedded map[string]*Embedded) *subTarget {
+func (psr *parser) subreportTarget(sub *Subreport, scope [][]*Embedded) *subTarget {
 	if sub.Embedded != "" {
-		found, ok := embedded[sub.Embedded]
-		if !ok {
-			psr.errf(sub.Node, "embedded", "no embedded layout named %q", sub.Embedded)
+		found := lookupEmbedded(scope, sub.Embedded)
+		if found == nil {
+			psr.errf(sub.Node, "embedded",
+				"no embedded layout named %q is in scope here", sub.Embedded)
 			return nil
 		}
+		sub.EmbeddedLayout = found
 		return &subTarget{
 			what:   strconv.Quote(sub.Embedded),
 			params: found.Params,

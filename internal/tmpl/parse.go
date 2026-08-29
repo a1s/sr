@@ -16,17 +16,22 @@ import (
 // one call loads the whole tree, so a build never touches the filesystem
 // for a document it has not already validated.
 func Load(file string) (*Report, error) {
-	return loadFile(file, nil)
+	return loadFile(file, nil, map[string]*Report{})
 }
 
-// loadFile reads one template, with the paths already being loaded,
-// outermost first, so that a cycle is reported rather than followed.
-func loadFile(file string, stack []string) (*Report, error) {
+// loadFile reads one template.
+//
+// stack is the paths already being loaded, outermost first, so that a cycle
+// is reported rather than followed. loaded is every template read so far
+// in this call, so a template two subreports both name is read once: without it
+// a diamond of includes is re-read once per path through it, and its warnings
+// would arrive once per path too.
+func loadFile(file string, stack []string, loaded map[string]*Report) (*Report, error) {
 	nodes, err := kdl.ParseFile(file)
 	if err != nil {
 		return nil, err
 	}
-	return build(file, nodes, stack)
+	return build(file, nodes, stack, loaded)
 }
 
 // LoadString reads and validates a template from a string.
@@ -36,11 +41,16 @@ func LoadString(src, name string) (*Report, error) {
 	if err != nil {
 		return nil, err
 	}
-	return build(name, nodes, nil)
+	return build(name, nodes, nil, map[string]*Report{})
 }
 
-func build(file string, nodes []*kdl.Node, stack []string) (*Report, error) {
-	psr := &parser{file: file, stack: stack}
+func build(
+	file string,
+	nodes []*kdl.Node,
+	stack []string,
+	loaded map[string]*Report,
+) (*Report, error) {
+	psr := &parser{file: file, stack: stack, loaded: loaded}
 	if len(nodes) != 1 || nodes[0].Name != "report" {
 		psr.errf(nil, "", "a template's root node is a single `report`")
 		return nil, psr.diags
@@ -91,7 +101,14 @@ func (psr *parser) loadSubreport(sub *Subreport, baseDir, here string) {
 			filepath.Base(path))
 		return
 	}
-	child, err := loadFile(path, append(append([]string{}, psr.stack...), here))
+	if child, done := psr.loaded[path]; done {
+		// Read already, through another subreport. Its warnings
+		// came with it the first time, so they are not repeated here.
+		sub.Report = child
+		return
+	}
+	child, err := loadFile(path,
+		append(append([]string{}, psr.stack...), here), psr.loaded)
 	if err != nil {
 		var diags DiagnosticList
 		if errors.As(err, &diags) {
@@ -101,6 +118,7 @@ func (psr *parser) loadSubreport(sub *Subreport, baseDir, here string) {
 		psr.errf(sub.Node, "template", "%v", err)
 		return
 	}
+	psr.loaded[path] = child
 	sub.Report = child
 	psr.warns = append(psr.warns, child.Warnings...)
 }

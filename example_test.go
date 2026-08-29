@@ -474,6 +474,29 @@ func TestInvoicesBuilds(test *testing.T) {
 		}
 	}
 
+	// The region sheets run landscape, and at their own inset,
+	// so those pages carry the difference and the rest carry nothing.
+	sheets := 0
+	for _, page := range out.Pages {
+		if page.Width == 0 {
+			if page.LeftMargin != nil {
+				test.Errorf("page %d records a margin without a size", page.Number)
+			}
+			continue
+		}
+		sheets++
+		if page.Width <= page.Height {
+			test.Errorf("page %d is %g x %g, want the landscape sheet",
+				page.Number, page.Width, page.Height)
+		}
+		if page.LeftMargin == nil || *page.LeftMargin == out.Header.Page.LeftMargin {
+			test.Errorf("page %d records no inset of its own", page.Number)
+		}
+	}
+	if sheets != 3 {
+		test.Errorf("pages at their own geometry = %d, want one per region", sheets)
+	}
+
 	// And one font table: both templates call a font "body" and name
 	// the same file, so it is measured, published and embedded once.
 	names := map[string]bool{}

@@ -70,8 +70,14 @@ func describeBox(box printout.Box) string {
 
 // describeGeometry renders a page size and its margins.
 func describeGeometry(page printout.PageGeometry) string {
+	return "page " + describeSize(page)
+}
+
+// describeSize is the same without the leading noun,
+// for a line that has already said which page it is talking about.
+func describeSize(page printout.PageGeometry) string {
 	return fmt.Sprintf(
-		"page %s x %s pt, margins left %s right %s top %s bottom %s",
+		"%s x %s pt, margins left %s right %s top %s bottom %s",
 		num(page.Width), num(page.Height),
 		num(page.LeftMargin), num(page.RightMargin),
 		num(page.TopMargin), num(page.BottomMargin))

@@ -9,7 +9,10 @@
 // It is not `inline`, so it builds complete pages of its own, and those pages
 // go into the printout where the subreport occurs -- after the region that
 // invoked it, before the next one. Having its own pages is what lets it have
-// a `header` and a `footer`, which an inline subreport cannot.
+// a `header` and a `footer`, which an inline subreport cannot -- and a page size
+// and margins of its own, which this one uses: the sheet is landscape and
+// inset differently from the register it sits inside. The printout records
+// the difference on those pages alone; every other page takes the document's.
 //
 // It is never built on its own -- it has no data of its own to build over --
 // but `sr validate region_sheet.kdl` checks it like any other template.
@@ -37,8 +40,12 @@ report name="Region sheet" description="One region's invoices, on their own page
   font "body" file="../fonts/Go-Regular.ttf" size=9
   font "bold" file="../fonts/Go-Bold.ttf"    size=9
 
-  layout pagesize="A4" leftmargin="18mm" rightmargin="15mm" \
-         topmargin="15mm" bottommargin="15mm" \
+  // Landscape, because a sheet of one region's invoices is a wide table, and
+  // a subreport that paginates itself is free to choose. An inline one is not:
+  // it prints on the host's pages, so it must match them.
+  layout pagesize="A4" landscape=#true \
+         leftmargin="20mm" rightmargin="20mm" \
+         topmargin="12mm" bottommargin="12mm" \
   {
     style font="body" color="black"
 

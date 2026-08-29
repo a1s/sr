@@ -40,10 +40,7 @@ func Fonts(report *tmpl.Report, opts Options) (*FontCheck, error) {
 	// Checking only the host would say a template resolves
 	// when half of what it prints does not.
 	for _, child := range externalTemplates(report) {
-		sub := newEngine(child, opts)
-		sub.adopt(eng.doc)
-		sub.attach(newUnit(child, opts, eng.doc))
-		sub.out = eng.out
+		sub := eng.nested(newUnit(child, opts, eng.doc))
 		if err := sub.checkFonts(check); err != nil {
 			return nil, err
 		}

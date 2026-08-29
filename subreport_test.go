@@ -773,3 +773,238 @@ func TestCheckFontsReportsASubreportFailure(test *testing.T) {
 		test.Errorf("failure = %q", check.Failures[0])
 	}
 }
+
+// A band's printwhen is answered once, where the band is,
+// and the answer decides the band and its subreports together.
+//
+// A negative-seq subreport runs between the question and the band's own
+// measurement, and it moves the fill position, so a condition reading
+// VERTICAL_SPACE used to answer differently at each: the second row's
+// line items printed with no row above them.
+func TestPrintwhenIsAnsweredOnceAroundASubreport(test *testing.T) {
+	const src = `report name="host" {
+  records {
+    member "name"  type="string"
+    member "items" type="list"
+  }
+  font "body" file="Go-Regular.ttf" size=8
+  layout width=200 height=400 leftmargin=10 rightmargin=10 topmargin=10 bottommargin=10 {
+    style font="body" color="black"
+    embedded "lines" {
+      records { member "sku" type="string" }
+      detail height=20 { field expr="sku" left=10 right=0 }
+    }
+    header height=12 { field text="HEADER" left=0 right=0 }
+    detail height=12 printwhen="VERTICAL_SPACE > 320" {
+      field expr="name" left=0 right=0
+      subreport embedded="lines" seq=-1 data="items" inline=#true
+    }
+  }
+}`
+	rows := []map[string]any{
+		{"name": "alpha", "items": []any{map[string]any{"sku": "x"}}},
+		{"name": "beta", "items": []any{map[string]any{"sku": "y"}}},
+	}
+	doc := buildString(test, src, rows)
+
+	// Whatever the condition decides, a row and its line items agree.
+	// The seq is negative, so each line item is immediately followed by
+	// its own row; what must never happen is a line item with no row after it.
+	got := allLines(doc)
+	rowOf := map[string]string{"x": "alpha", "y": "beta"}
+	items := 0
+	for index, line := range got {
+		want, ok := rowOf[line]
+		if !ok {
+			continue
+		}
+		items++
+		if index+1 >= len(got) || got[index+1] != want {
+			test.Errorf("marks = %v: %q printed without %q after it", got, line, want)
+		}
+	}
+	if items == 0 {
+		test.Errorf("marks = %v: the fixture must place at least one row", got)
+	}
+}
+
+// scopedHost has an embedded layout nested inside another, and the
+// OUTER marker replaced by whatever the top-level detail band invokes.
+const scopedHost = `report name="host" {
+  records { member "items" type="list" }
+  font "body" file="Go-Regular.ttf" size=8
+  layout width=300 height=400 leftmargin=10 rightmargin=10 topmargin=10 bottommargin=10 {
+    style font="body" color="black"
+    embedded "outer" {
+      records { member "sku" type="string" }
+      embedded "private" {
+        records { member "sku" type="string" }
+        detail height=10 { field expr="'private ' + sku" left=20 right=0 }
+      }
+      detail height=10 {
+        field expr="'outer ' + sku" left=10 right=0
+        subreport embedded="private" seq=1 data="[{'sku': sku}]" inline=#true
+      }
+    }
+    detail height=10 {
+      field text="root" left=0 right=0
+      subreport embedded="TARGET" seq=1 data="items" inline=#true
+    }
+  }
+}`
+
+func scopedTemplate(target string) string {
+	return strings.Replace(scopedHost, `embedded="TARGET"`, `embedded="`+target+`"`, 1)
+}
+
+// A layout nested inside another is private to it: a subreport outside
+// cannot name it, and the diagnostic says so rather than silently running it.
+func TestNestedEmbeddedLayoutIsPrivate(test *testing.T) {
+	_, err := ParseTemplate("example/fonts/test.kdl", scopedTemplate("private"))
+	if err == nil {
+		test.Fatal("want the out-of-scope reference refused")
+	}
+	if !strings.Contains(err.Error(), "in scope") {
+		test.Errorf("diagnostic = %v", err)
+	}
+}
+
+// From inside its parent it resolves, and so does the parent itself.
+func TestNestedEmbeddedLayoutIsInScopeInsideItsParent(test *testing.T) {
+	doc := buildString(test, scopedTemplate("outer"), []map[string]any{
+		{"items": []any{map[string]any{"sku": "a"}}},
+	})
+	got := joined(allLines(doc))
+	if want := "root,outer a,private a"; got != want {
+		test.Errorf("marks = %q, want %q", got, want)
+	}
+}
+
+// Validation and the engine resolve a name the same way, because the name
+// is resolved once, at load, and the node keeps what it resolved to.
+//
+// A nested layout that shadows an outer one of the same name is refused,
+// so the case where the two could disagree cannot be written.
+func TestEmbeddedLayoutNamesDoNotShadow(test *testing.T) {
+	src := strings.Replace(scopedTemplate("lines"),
+		`embedded "private" {`, `embedded "lines" {`, 1)
+	src = strings.Replace(src, `embedded="private"`, `embedded="lines"`, 1)
+	src = strings.Replace(src, `embedded "outer" {`,
+		`embedded "lines" {
+      records { member "sku" type="string" }
+      detail height=10 { field text="top level" left=0 right=0 }
+    }
+    embedded "outer" {`, 1)
+	_, err := ParseTemplate("example/fonts/test.kdl", src)
+	if err == nil {
+		test.Fatal("want the shadowing name refused")
+	}
+	if !strings.Contains(err.Error(), "shadow") {
+		test.Errorf("diagnostic = %v", err)
+	}
+}
+
+// Two embedded layouts side by side may not share a name, at any depth.
+func TestDuplicateEmbeddedSiblingsAreRefused(test *testing.T) {
+	src := strings.Replace(scopedTemplate("outer"),
+		`embedded "private" {
+        records { member "sku" type="string" }
+        detail height=10 { field expr="'private ' + sku" left=20 right=0 }
+      }`,
+		`embedded "private" {
+        records { member "sku" type="string" }
+        detail height=10 { field expr="'private ' + sku" left=20 right=0 }
+      }
+      embedded "private" {
+        records { member "sku" type="string" }
+        detail height=10 { field text="second" left=20 right=0 }
+      }`, 1)
+	_, err := ParseTemplate("example/fonts/test.kdl", src)
+	if err == nil {
+		test.Fatal("want the duplicate nested name refused")
+	}
+	if !strings.Contains(err.Error(), "duplicate embedded layout") {
+		test.Errorf("diagnostic = %v", err)
+	}
+}
+
+// Two unrelated layouts may each keep a private one of the same name:
+// neither is in the other's scope, so there is nothing to confuse.
+func TestPrivateEmbeddedNamesMayRepeatAcrossScopes(test *testing.T) {
+	const src = `report name="host" {
+  records { member "items" type="list" }
+  font "body" file="Go-Regular.ttf" size=8
+  layout width=300 height=400 leftmargin=10 rightmargin=10 topmargin=10 bottommargin=10 {
+    style font="body" color="black"
+    embedded "first" {
+      records { member "sku" type="string" }
+      embedded "rows" {
+        records { member "sku" type="string" }
+        detail height=10 { field expr="'one ' + sku" left=10 right=0 }
+      }
+      detail height=10 {
+        subreport embedded="rows" seq=1 data="[{'sku': sku}]" inline=#true
+      }
+    }
+    embedded "second" {
+      records { member "sku" type="string" }
+      embedded "rows" {
+        records { member "sku" type="string" }
+        detail height=10 { field expr="'two ' + sku" left=10 right=0 }
+      }
+      detail height=10 {
+        subreport embedded="rows" seq=1 data="[{'sku': sku}]" inline=#true
+      }
+    }
+    detail height=10 {
+      subreport embedded="first"  seq=1 data="items" inline=#true
+      subreport embedded="second" seq=2 data="items" inline=#true
+    }
+  }
+}`
+	doc := buildString(test, src, []map[string]any{
+		{"items": []any{map[string]any{"sku": "a"}}},
+	})
+	if got := joined(allLines(doc)); got != "one a,two a" {
+		test.Errorf("marks = %q, want each private layout to run its own", got)
+	}
+}
+
+// A template two subreports both name is read once, so its warnings
+// arrive once and a diamond of includes costs one read per file
+// rather than one per path through the graph.
+func TestSharedSubreportTemplateIsReadOnce(test *testing.T) {
+	dir := test.TempDir()
+	// A layout that warns: a band with no height whose only element
+	// takes its height from the band collapses to nothing.
+	writeTemplate(test, dir, "lines.kdl", `report name="lines" {
+  records { member "sku" type="string" }
+  font "body" file="`+fontFile(test, "Go-Regular.ttf")+`" size=8
+  layout width=300 height=400 leftmargin=10 rightmargin=10 topmargin=10 bottommargin=10 {
+    style font="body" color="black"
+    detail { field expr="sku" left=0 right=0 }
+  }
+}`)
+	host := writeTemplate(test, dir, "host.kdl", `report name="host" {
+  records { member "items" type="list" }
+  font "body" file="`+fontFile(test, "Go-Regular.ttf")+`" size=8
+  layout width=300 height=400 leftmargin=10 rightmargin=10 topmargin=10 bottommargin=10 {
+    style font="body" color="black"
+    title height=10 {
+      field text="t" left=0 right=0
+      subreport template="lines.kdl" seq=1 data="[]" inline=#true
+    }
+    detail height=10 {
+      subreport template="lines.kdl" seq=1 data="items" inline=#true
+    }
+  }
+}`)
+	tpl, err := LoadTemplate(host)
+	if err != nil {
+		test.Fatal(err)
+	}
+	warnings := tpl.Warnings()
+	if len(warnings) != 1 {
+		test.Errorf("warnings = %v, want the referenced template's one, once", warnings)
+	}
+}

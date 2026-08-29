@@ -207,6 +207,15 @@ func newEngine(report *tmpl.Report, opts Options) *engine {
 	}
 	eng.adopt(doc)
 	eng.attach(newUnit(report, opts, doc))
+	// Every blob name any template in the document declares, registered
+	// before anything is published, so that a generated name never takes
+	// one -- a subreport's unit is not built until its first invocation,
+	// which may be after an image has been published.
+	for _, child := range externalTemplates(report) {
+		for name := range child.DataByName {
+			doc.declared[name] = true
+		}
+	}
 	eng.out = &printout.Printout{Header: printout.Header{
 		SR:          printout.Version,
 		Kind:        "header",

@@ -95,6 +95,25 @@ func (eng *engine) measureSection(
 	fr *frame,
 	available float64,
 ) (*measurement, error) {
+	return eng.measureDecided(sec, scopes, fr, available, nil)
+}
+
+// measureDecided is measureSection with the band's printwhen already answered.
+//
+// Placing a band asks its printwhen once, at bandPrints, and passes the answer
+// here. It has to be one answer: the question is asked before the band's
+// negative-seq subreports run, those may eject, and a printwhen reading
+// VERTICAL_SPACE or PAGE_NUMBER would then answer differently by the time
+// the band itself is measured -- which is how a suppressed row's subreport
+// came to print without it. A nil answer means ask, which is what a header, a
+// footer and the keep-together lookahead do, each being a measurement of its own.
+func (eng *engine) measureDecided(
+	sec *tmpl.Section,
+	scopes styleScopes,
+	fr *frame,
+	available float64,
+	prints *bool,
+) (*measurement, error) {
 	measured := &measurement{section: sec}
 	if sec == nil {
 		return measured, nil
@@ -104,9 +123,14 @@ func (eng *engine) measureSection(
 	eng.ctx.verticalSpace = geom.Round(available)
 
 	// 1. The band's printwhen. A suppressed band is dropped whole.
-	ok, err := eng.ctx.truth(sec.PrintWhen)
-	if err != nil {
-		return nil, err
+	var ok bool
+	if prints != nil {
+		ok = *prints
+	} else {
+		var err error
+		if ok, err = eng.ctx.truth(sec.PrintWhen); err != nil {
+			return nil, err
+		}
 	}
 	if !ok {
 		return measured, nil

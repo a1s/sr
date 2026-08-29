@@ -187,10 +187,10 @@ outline entries, a deferred page count, justified text, and typed parameters.
 [invoices.kdl](example/invoices/invoices.kdl) — invoices by region with line
 items: an inline `embedded` subreport with an `arg` and its own `records`, a
 `template=` subreport in [region_sheet.kdl](example/invoices/region_sheet.kdl)
-that paginates itself, a group using `keeptogether` with `minrows` and
-`mintailrows`, a `summary` with `swapfooter`, an image with `embed=#false`, a
-compressed `data` blob, `iter="item"` against `iter="detail"`, and the `calc`
-modes sakila leaves out.
+that paginates itself onto landscape pages of its own, a group using `keeptogether`
+with `minrows` and `mintailrows`, a `summary` with `swapfooter`, an image with
+`embed=#false`, a compressed `data` blob, `iter="item"` against `iter="detail"`,
+and the `calc` modes sakila leaves out.
 
 Between them the two templates use every node in the format and all twelve `calc`
 modes. They do not exhaust every property. What they leave out, so that reading

@@ -1102,10 +1102,21 @@ the `embedded` node's, then the `layout` the `embedded` node is written in.
 A layout named by `template=` is a separate document and its walk ends at
 its own `layout`, which is the same rule read against a different tree.
 
-A `subreport` inside an `embedded` layout may name one defined beside it, one
-nested in it, or one defined further out, including the layout it is itself in
--- which is how a template walks a tree. See
-[the nesting bound](layout.md#subreports).
+The scope of an `embedded` name is lexical, searched from the inside out: the
+layouts declared beside the one the subreport is written in -- which includes
+that one, so a layout can invoke itself and walk a tree -- then those declared
+in each layout enclosing it, out to the report's own. A layout nested inside a
+*sibling* is not in scope, which is what makes a nested one private to its
+parent. See also [the nesting bound](layout.md#subreports).
+
+Two layouts in one scope chain may not share a name: not two siblings, and not
+a nested one repeating a name an enclosing layout already has, since the search
+runs outward and the second would shadow the first. Two unrelated layouts may
+each nest a private one of the same name, because neither is in the other's
+scope.
+
+A name is resolved once, when the template is loaded, so the check and the build
+always mean the same layout by it.
 
 Its `records` declares the fields of the sequence the subreport runs over, which
 is a different shape from the parent's records — an invoice report's records are
@@ -1320,6 +1331,8 @@ Validation runs once, at load, before any data is read. It checks:
   no `swapheader` title and no `swapfooter` summary, and runs at the page size
   of the report that invokes it.
 - No `subreport template=` chain reaches the template it started from.
+- Every `subreport embedded=` names a layout in scope where it is written, and
+  no two embedded layouts in one scope chain share a name.
 - `image` does not combine `embed=#false` with `data` or a `content` child.
 - `columns count` does not make the column width non-positive.
 - Expressions parse. Name resolution is not checked at load, since undeclared
