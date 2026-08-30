@@ -600,6 +600,11 @@ type Image struct {
 func (image *Image) Kind() string { return "image" }
 
 // Barcode draws a symbol.
+//
+// Ink and Paper are the barcode's own, and are deliberately not taken
+// from the style: a style's colour falls through from every enclosing
+// scope, so a layout that colours its text would otherwise recolour
+// every symbol under it and change what scans.
 type Barcode struct {
 	Common
 	Content
@@ -607,6 +612,8 @@ type Barcode struct {
 	Module   float64
 	Vertical bool
 	Grow     bool
+	Ink      *Color
+	Paper    *Color
 }
 
 // Kind names the element.

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"sort"
 
+	"github.com/a1s/sr/internal/barcodes"
 	"github.com/a1s/sr/internal/geom"
 	"github.com/a1s/sr/internal/kdl"
 )
@@ -932,6 +933,8 @@ func (psr *parser) parseBarcode(node *kdl.Node) *Barcode {
 	barcode.Module = pr.dimDefault("module", mustDim("10mil"))
 	barcode.Vertical = pr.boolean("vertical", false)
 	barcode.Grow = pr.boolean("grow", false)
+	barcode.Ink = pr.color("ink")
+	barcode.Paper = pr.color("paper")
 	pr.done()
 	psr.allowChildren(node, "style")
 	if barcode.Type == "" {
@@ -942,10 +945,39 @@ func (psr *parser) parseBarcode(node *kdl.Node) *Barcode {
 	if barcode.Module <= 0 {
 		psr.errf(node, "module", "must be positive")
 	}
+	psr.checkBarcodeContrast(node, barcode)
 	// A barcode's box always grows along the coding direction, so a deferred
 	// one always needs a placeholder.
 	psr.checkContent(node, &barcode.Content, true)
 	return barcode
+}
+
+// checkBarcodeContrast rejects an ink and paper pair a scanner cannot read.
+//
+// Paper the template does not name is taken to be white, because that
+// is what an unprinted background usually is. The engine cannot see what
+// a band or a rectangle put there instead, which is the whole reason
+// `paper` exists: naming it is how a template stops guessing.
+func (psr *parser) checkBarcodeContrast(node *kdl.Node, barcode *Barcode) {
+	if barcode.Ink == nil && barcode.Paper == nil {
+		return
+	}
+	ink := Color{0x00, 0x00, 0x00}
+	if barcode.Ink != nil {
+		ink = *barcode.Ink
+	}
+	paper := Color{0xFF, 0xFF, 0xFF}
+	if barcode.Paper != nil {
+		paper = *barcode.Paper
+	}
+	key := "ink"
+	if barcode.Ink == nil {
+		key = "paper"
+	}
+	if err := barcodes.CheckContrast(ink.Red, paper.Red); err != nil {
+		psr.errf(node, key, "ink %s on paper %s will not scan: %v",
+			ink.Hex(), paper.Hex(), err)
+	}
 }
 
 func (psr *parser) parseXref(node *kdl.Node) *Xref {

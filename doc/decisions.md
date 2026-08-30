@@ -29,6 +29,7 @@ can state what is true without also arguing for it.
 - [What building subreports settled](#what-building-subreports-settled)
 - [Balancing columns after the fact](#balancing-columns-after-the-fact)
 - [An inline subreport may open a columns block](#an-inline-subreport-may-open-a-columns-block)
+- [Barcode colour, and the margin that was missing](#barcode-colour-and-the-margin-that-was-missing)
 
 ## Relationship to PythonReports
 
@@ -1627,7 +1628,10 @@ by opening the array with a zero-width bar, which keeps the alternation
 unambiguous and keeps the invariant that the runs sum to the box's extent.
 A 1-D symbol also needs a bar height that does not come from its box,
 since a band of barcodes sizes to them: fifteen per cent of the symbol length,
-or a quarter of an inch, whichever is greater.
+or a quarter of an inch, whichever is greater. (The zero-width bar is gone:
+the arrays start light now, and what made the old shape look reasonable
+was a quiet zone that was never being added to a 2-D symbol. See
+[barcode colour](#barcode-colour-and-the-margin-that-was-missing).)
 
 **Not built at this stage.** Subreports are staged last and the engine refuses
 a template containing one, naming the node. (They are built now -- see
@@ -2362,3 +2366,118 @@ for. `title` and `summary` print once per invocation, and a page header belongs
 to the host. A `columns` block of one column with a header in it is a frame with
 nothing else to it, and its header is re-placed on every page and column the
 invocation reaches -- which is what a line-item table wanted all along.
+
+## Barcode colour, and the margin that was missing
+
+The question that started this was whether a barcode has to be black on white.
+It does not, and answering it turned up a defect underneath: two of the
+two-dimensional symbologies were being emitted with no quiet zone at all.
+
+### The encoder adds nothing, and the comment said otherwise
+
+`QuietModules` added ten modules to each end of a 1-D symbol and nothing to
+a 2-D one, on the stated grounds that "two-dimensional symbols carry whatever
+quiet zone their own encoding requires". They do not. `boombuler/barcode`
+returns the bare symbol: a version-1 QR comes back 21x21, which is exactly the
+symbol and none of the 4-module margin ISO/IEC 18004 asks for, and the smallest
+Data Matrix comes back 10x10 against ISO/IEC 16022's 1-module margin. Only
+Aztec was right, and only by coincidence — ISO/IEC 24778 asks for no margin,
+because the bullseye finder does not need one.
+
+Nothing caught it. The encoder's test asserted the leading and trailing quiet
+zone for 1-D symbols only, and the comment stood in for the check on the other
+side. The margin is now applied per symbology in `quietZone`, and the test
+asserts it on all four sides of every 2-D type -- including that Aztec has
+none, so the zero is a decision rather than an oversight.
+
+This is a visible change. A version-1 QR goes from 21 modules to 29, so
+the same template at the same module width produces a symbol 38% wider,
+and any layout around one moves.
+
+### Runs start light, which is what the margin was telling us
+
+With the margin in place, every row of a 2-D symbol begins light, and so does
+every 1-D stripe array. Under the old convention (index 0 is dark) that meant
+a zero-width bar in front of every single run array: one wasted element per row,
+185 of them on a large QR, each saying nothing but "the next run is the one you
+wanted".
+
+So the polarity is inverted. Index 0 is light, index 1 dark. The quiet zone is
+now simply the first element, the common case costs nothing, and the zero-length
+run survives only for the case it was invented for: a row that genuinely opens
+dark, which only a symbology with no quiet zone can produce. Aztec is the sole
+type that still emits one.
+
+What the convention was defending is unchanged and still worth defending.
+Polarity is positional, so no mark carries a `startsDark` flag. A flag is
+exactly the kind of field a renderer can ignore and still produce a plausible
+drawing -- the inverse of the symbol, which passes the run-sum invariant
+perfectly. The zero-run makes the wrong thing inexpressible rather than
+merely incorrect.
+
+### The format version does not move
+
+Both changes are silent under a shared version number: a reader built for the
+old convention, handed a new printout, paints every symbol inverted and has no
+way to know. That is the whole argument for `sr: 2`, and it assumes such a
+reader exists. None does. The format has not been published to anyone and this
+repository holds its only renderer, so a number separating two revisions nobody
+has ever read would record nothing.
+
+So version 1 is simply what the format says now, these changes included.
+The first revision worth reserving a number for is the first one somebody
+outside this repository has read -- and the rule earns its keep from then on,
+because the failure it guards against is invisible rather than loud.
+
+### `ink` and `paper` are the barcode's own, not the style's
+
+The obvious way to colour a barcode is to honour the style's `color`, and it
+is wrong. Unset style properties fall through outward -- the same behaviour
+that made `stroke=#false` necessary on a rectangle -- so a `layout` that sets
+`color` for its text would reach every barcode beneath it. Colouring a report's
+prose would silently change which of its symbols scan. `ink` and `paper` sit on
+the `barcode` node, are read from nowhere else, and default to what the engine
+did before.
+
+`paper` is separate from `ink` because the background was never drawn at all.
+The renderer painted bars and left whatever was underneath showing, so a barcode
+over a dark band produced an unreadable symbol and the engine said nothing.
+`paper` fills the whole box, quiet zone included, which is the only way a
+template can state its background rather than hope for it. It stays optional:
+absent means paint nothing, which is what every template written before it
+means, and is correct over a white page.
+
+### Red light is the rule, and the check is coarse on purpose
+
+Contrast here is not luminance. A scanner reads at about 660 nm (670 nm is
+where ISO/IEC 15416 grades it), so what decides whether a symbol scans is
+the red a colour reflects, not how dark it looks. That is why navy, brown and
+purple bars read and yellow ones do not, and why yellow, orange and pink are
+good backgrounds while navy is not. The rule is the standard's two parameters
+applied to the sRGB red component, linearised: symbol contrast of at least 40%,
+which is its grade C, and ink reflecting no more than half of what the paper
+does.
+
+An unreadable pair is a load error rather than a warning. `ink` and `paper` are
+static node properties, so the check is decidable when the template loads, and
+the failure it prevents -- a label that does not scan at a loading dock -- is
+not one worth deferring. Naming only `ink` measures it against white, because
+that is what an unprinted background is.
+
+The check cannot be better than coarse, and saying so is part of the decision.
+It sees the colours a template names and nothing about ink spread, substrate,
+or press. It rejects what cannot work in principle and passes plenty that will
+still need verifying off a printed label. A precise answer would need a
+reflectance measurement, which is not a thing a template contains.
+
+### Logos are not a barcode feature
+
+Drawing a logo over a QR code needs no support in `barcode`. Document order
+is paint order, so a `rectangle` and an `image` declared after the symbol
+land on top of it, which is the whole mechanism. What makes it work is the
+error-correction budget -- `QR-H` recovers about 30% -- spent centrally,
+clear of the finder and alignment patterns, with a filled patch under the logo
+so its own edges do not read as modules. The worked example in
+`example/invoices/invoices.kdl` covers 16% of the data area, well inside
+the budget. A `logo` property would have bought nothing except a second way
+to position an image.

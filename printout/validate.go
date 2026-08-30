@@ -165,13 +165,18 @@ func (chk *checker) checkImage(page *Page, image *Image) {
 	}
 }
 
-// checkBarcode checks a barcode's stripes against the box it was drawn in.
+// checkBarcode checks a barcode's runs against the box it was drawn in.
 func (chk *checker) checkBarcode(page *Page, barcode *Barcode, box Box) {
-	// 9. Stripe sums times module equal the box extent along the coding
-	// direction.
-	extent := box.Width
+	// 12. Every barcode carries an ink colour.
+	if barcode.Ink == "" {
+		chk.fail("page %d: a barcode carries no ink colour", page.Number)
+	}
+	// 9. Run sums times module equal the box extent along the coding
+	// direction, and for a 2-D symbol the row count times module equals
+	// the extent across it.
+	extent, cross := box.Width, box.Height
 	if barcode.Vertical {
-		extent = box.Height
+		extent, cross = box.Height, box.Width
 	}
 	total := 0
 	switch {
@@ -182,6 +187,24 @@ func (chk *checker) checkBarcode(page *Page, barcode *Barcode, box Box) {
 	case len(barcode.Rows) > 0:
 		for _, run := range barcode.Rows[0] {
 			total += run
+		}
+		// A matrix is rectangular: every row spans the same extent.
+		// Only the first is measured against the box, so the rest are
+		// measured against the first.
+		for index, row := range barcode.Rows[1:] {
+			sum := 0
+			for _, run := range row {
+				sum += run
+			}
+			if sum != total {
+				chk.fail("page %d: barcode row %d sums to %d, and row 0 sums to %d",
+					page.Number, index+1, sum, total)
+			}
+		}
+		want := float64(len(barcode.Rows)) * barcode.Module
+		if math.Abs(want-cross) > tolerance {
+			chk.fail("page %d: %d rows at %g measure %g across, and the box is %g",
+				page.Number, len(barcode.Rows), barcode.Module, want, cross)
 		}
 	default:
 		chk.fail("page %d: a barcode carries neither stripes nor rows", page.Number)

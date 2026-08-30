@@ -279,6 +279,15 @@ func (eng *engine) emitBarcode(barcode *tmpl.Barcode, slot *elementSlot, measure
 	mark.Value = sym.Value
 	mark.Module = metrics.Module
 	mark.Vertical = barcode.Vertical
+	// The mark is born with black ink, so only a template
+	// that named a colour of its own changes anything here.
+	if barcode.Ink != nil {
+		mark.Ink = barcode.Ink.Hex()
+	}
+	if barcode.Paper != nil {
+		paper := barcode.Paper.Hex()
+		mark.Paper = &paper
+	}
 	mark.Stripes = sym.Stripes
 	mark.Rows = sym.Rows
 

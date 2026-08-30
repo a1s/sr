@@ -326,6 +326,10 @@ func (dmp *dumper) mark(mark printout.Mark, indent string) {
 		if typed.Vertical {
 			parts = append(parts, "vertical")
 		}
+		parts = append(parts, "ink "+typed.Ink)
+		if typed.Paper != nil {
+			parts = append(parts, "paper "+*typed.Paper)
+		}
 		if typed.Rows != nil {
 			parts = append(parts, count(len(typed.Rows), "row"))
 		} else {

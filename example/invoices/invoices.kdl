@@ -140,6 +140,33 @@ report name="Invoice register" \
       {
         style font="small"
       }
+
+      // A logo over a QR code. Nothing in `barcode` does this and nothing
+      // needs to: document order is paint order, so whatever is declared
+      // after the symbol lands on top of it.
+      //
+      // Two things keep it readable. QR-H carries enough error correction
+      // to recover about 30% of the symbol, and the patch below covers
+      // well under half of that. The white rectangle is the other half of
+      // the trick: without it the logo's own edges read as modules.
+      //
+      // `paper` fills the whole box, quiet zone included, so the symbol
+      // brings its own background and its own margin rather than borrowing
+      // whatever the band happens to leave underneath. `grow` spends the
+      // whole 18mm square on the symbol, which is what makes the overlay
+      // positions below something one can write down in advance.
+      barcode type="QR-H" text="https://example.invalid/invoice-register" \
+              grow=#true paper="white" \
+              right=0 width="18mm" top="2mm" height="18mm"
+      // `width` on a rectangle is the pen, not the box, so this one is
+      // placed by its two edges: the frame is 177mm wide here, and the
+      // patch is the 6mm centred under the symbol above.
+      rectangle stroke=#false opaque=#true \
+                left="165mm" right="6mm" top="8mm" height="6mm" {
+        style bgcolor="white"
+      }
+      image file="logo.png" embed=#false scale="fill" proportional=#true \
+            right="6.75mm" width="4.5mm" top="8.75mm" height="4.5mm"
     }
 
     header height="7mm" {

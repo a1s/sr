@@ -47,6 +47,7 @@ func TestEveryTypeEncodes(test *testing.T) {
 						test.Errorf("row %d runs sum to %d, want %d", index, total, sym.Modules)
 					}
 				}
+				checkTwoDQuietZone(test, testCase.kind, sym)
 				return
 			}
 			if len(sym.Stripes) == 0 {
@@ -59,10 +60,10 @@ func TestEveryTypeEncodes(test *testing.T) {
 			if total != sym.Modules {
 				test.Errorf("stripes sum to %d, want Modules = %d", total, sym.Modules)
 			}
-			// A one-dimensional symbol opens with a quiet zone, which the
-			// alternation expresses as a zero-width bar followed by a space.
-			if sym.Stripes[0] != 0 || sym.Stripes[1] != QuietModules {
-				test.Errorf("leading quiet zone = %v", sym.Stripes[:2])
+			// Runs start light, so a one-dimensional symbol opens
+			// with its quiet zone and needs nothing in front of it.
+			if sym.Stripes[0] != QuietModules {
+				test.Errorf("leading quiet zone = %d", sym.Stripes[0])
 			}
 			if sym.Stripes[len(sym.Stripes)-1] != QuietModules {
 				test.Errorf("trailing quiet zone = %d", sym.Stripes[len(sym.Stripes)-1])
@@ -108,10 +109,13 @@ func TestRunsFromBits(test *testing.T) {
 		quiet int
 		want  []int
 	}{
-		{"opens dark", []bool{true, true, false, true}, 0, []int{2, 1, 1}},
-		{"opens light", []bool{false, true}, 0, []int{0, 1, 1}},
-		{"with a quiet zone", []bool{true, false, true}, 10, []int{0, 10, 1, 1, 1, 10}},
-		{"ending light with a quiet zone", []bool{true, false}, 10, []int{0, 10, 1, 11}},
+		// Index 0 is light, so a pattern that opens dark spends a
+		// zero-length light run saying so, and one that opens light
+		// does not have to.
+		{"opens dark", []bool{true, true, false, true}, 0, []int{0, 2, 1, 1}},
+		{"opens light", []bool{false, true}, 0, []int{1, 1}},
+		{"with a quiet zone", []bool{true, false, true}, 10, []int{10, 1, 1, 1, 10}},
+		{"ending light with a quiet zone", []bool{true, false}, 10, []int{10, 1, 11}},
 	}
 	for _, testCase := range cases {
 		test.Run(testCase.name, func(test *testing.T) {
@@ -191,5 +195,91 @@ func TestStripeSumMatchesTheExtent(test *testing.T) {
 	}
 	if got := float64(total) * metrics.Module; got != metrics.Length {
 		test.Errorf("stripes x module = %v, extent = %v", got, metrics.Length)
+	}
+}
+
+// checkTwoDQuietZone asserts the margin a two-dimensional symbology
+// requires is actually there, on all four sides.
+//
+// The encoder this package wraps returns the bare symbol, so nothing
+// but Encode puts these modules in and nothing but this notices if they
+// stop arriving.
+func checkTwoDQuietZone(test *testing.T, kind string, sym *Symbol) {
+	test.Helper()
+	quiet := quietZone(kind)
+	if quiet == 0 {
+		// Aztec asks for no margin, so its rows may legitimately begin
+		// and end dark and there is nothing here to assert.
+		return
+	}
+	if len(sym.Rows) < 2*quiet+1 {
+		test.Fatalf("%d rows cannot hold a quiet zone of %d", len(sym.Rows), quiet)
+	}
+	// The top and bottom bands are wholly light, which one run says.
+	for index := 0; index < quiet; index++ {
+		for _, row := range [][]int{sym.Rows[index], sym.Rows[len(sym.Rows)-1-index]} {
+			if len(row) != 1 || row[0] != sym.Modules {
+				test.Errorf("quiet row %d = %v, want one light run of %d",
+					index, row, sym.Modules)
+			}
+		}
+	}
+	// Every data row opens and closes light, by at least the margin.
+	for index := quiet; index < len(sym.Rows)-quiet; index++ {
+		row := sym.Rows[index]
+		if row[0] < quiet {
+			test.Errorf("row %d opens with %d light modules, want %d", index, row[0], quiet)
+		}
+		// A row ends light only when it has an even number of runs,
+		// the last one being the odd-indexed dark run's light successor.
+		last := len(row) - 1
+		if last%2 != 0 || row[last] < quiet {
+			test.Errorf("row %d ends %v, want a light run of at least %d", index, row, quiet)
+		}
+	}
+}
+
+func TestQuietZonesMatchTheStandards(test *testing.T) {
+	// Four modules for QR, one for Data Matrix, none for Aztec.
+	cases := map[string]int{
+		"QR-L": 4, "QR-M": 4, "QR-Q": 4, "QR-H": 4,
+		"DataMatrix": 1, "Aztec": 0,
+		"Code128": QuietModules, "Code39": QuietModules,
+	}
+	for kind, want := range cases {
+		if got := quietZone(kind); got != want {
+			test.Errorf("quietZone(%q) = %d, want %d", kind, got, want)
+		}
+	}
+}
+
+func TestCheckContrast(test *testing.T) {
+	// Judged by red light, so what matters is the red component alone:
+	// dark blue, brown and purple bars read, and yellow ones do not;
+	// yellow and pink backgrounds read, and navy ones do not.
+	cases := []struct {
+		name             string
+		inkRed, paperRed uint8
+		wantOK           bool
+	}{
+		{"black on white", 0x00, 0xFF, true},
+		{"navy bars on white", 0x00, 0xFF, true},
+		{"brown bars on white", 0x65, 0xFF, true},
+		{"purple bars on white", 0x80, 0xFF, true},
+		{"black on yellow", 0x00, 0xFF, true},
+		{"black on pink", 0x00, 0xFF, true},
+		{"yellow bars on white", 0xFF, 0xFF, false},
+		{"red bars on white", 0xFF, 0xFF, false},
+		{"light grey bars on white", 0xD3, 0xFF, false},
+		{"black on navy", 0x00, 0x00, false},
+		{"white bars on black", 0xFF, 0x00, false},
+		{"navy bars on brown", 0x00, 0x65, false},
+	}
+	for _, testCase := range cases {
+		err := CheckContrast(testCase.inkRed, testCase.paperRed)
+		if (err == nil) != testCase.wantOK {
+			test.Errorf("%s: error = %v, want ok = %v",
+				testCase.name, err, testCase.wantOK)
+		}
 	}
 }

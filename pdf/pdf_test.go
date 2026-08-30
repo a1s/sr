@@ -2,6 +2,7 @@ package pdf
 
 import (
 	"bytes"
+	"fmt"
 	"math"
 	"os"
 	"testing"
@@ -371,9 +372,10 @@ func TestBarcodeStripes(test *testing.T) {
 	code.Type = "Code128"
 	code.Value = "42"
 	code.Module = 2
-	// A zero-width bar, a quiet zone, then two bars
-	// with a space between: 0 + 10 + 3 + 1 + 2 = 16 modules.
-	code.Stripes = []int{0, 10, 3, 1, 2}
+	// A quiet zone, then two bars with a space between:
+	// 10 + 3 + 1 + 2 = 16 modules. Runs start light,
+	// so the quiet zone is the first of them.
+	code.Stripes = []int{10, 3, 1, 2}
 	code.Box = printout.Box{Left: 20, Top: 20, Width: 32, Height: 18}
 
 	pages, _ := render(test, document(code))
@@ -393,6 +395,57 @@ func TestBarcodeStripes(test *testing.T) {
 	}
 }
 
+// Ink colours the bars, and paper is laid under the whole box first,
+// so the quiet zone is the colour the template asked for rather than
+// whatever the band left underneath.
+func TestBarcodeInkAndPaper(test *testing.T) {
+	code := printout.NewBarcode()
+	code.Type = "Code128"
+	code.Value = "42"
+	code.Module = 2
+	code.Stripes = []int{10, 3, 1, 2}
+	code.Box = printout.Box{Left: 20, Top: 20, Width: 32, Height: 18}
+	code.Ink = "#000080"
+	paper := "#FFFF00"
+	code.Paper = &paper
+
+	pages, _ := render(test, document(code))
+	rects := pages[0].Rects
+	if len(rects) != 3 {
+		test.Fatalf("rectangles = %d, want the paper and two bars", len(rects))
+	}
+	// The paper comes first and covers the box, quiet zone included.
+	near(test, "paper left", rects[0].Left, 20)
+	near(test, "paper width", rects[0].Width, 32)
+	near(test, "paper height", rects[0].Height, 18)
+	if rects[0].Fill != [3]float64{1, 1, 0} {
+		test.Errorf("paper fill = %v, want yellow", rects[0].Fill)
+	}
+	// Navy: the PDF carries the component to three decimals.
+	for index, rect := range rects[1:] {
+		near(test, fmt.Sprintf("bar %d blue", index), rect.Fill[2], 128.0/255)
+		if rect.Fill[0] != 0 || rect.Fill[1] != 0 {
+			test.Errorf("bar %d is not navy: %v", index, rect.Fill)
+		}
+	}
+}
+
+// Without paper nothing is laid down behind the symbol, which is
+// what a template that says nothing about the background means.
+func TestBarcodeWithoutPaperDrawsNoBackground(test *testing.T) {
+	code := printout.NewBarcode()
+	code.Type = "Code128"
+	code.Value = "42"
+	code.Module = 2
+	code.Stripes = []int{10, 3, 1, 2}
+	code.Box = printout.Box{Left: 20, Top: 20, Width: 32, Height: 18}
+
+	pages, _ := render(test, document(code))
+	if got := len(pages[0].Rects); got != 2 {
+		test.Errorf("rectangles = %d, want the two bars alone", got)
+	}
+}
+
 // A matrix symbol draws one row of runs per module of height,
 // and a vertical one is the same symbol turned a quarter turn clockwise.
 func TestBarcodeMatrix(test *testing.T) {
@@ -400,7 +453,9 @@ func TestBarcodeMatrix(test *testing.T) {
 	code.Type = "QR-L"
 	code.Value = "x"
 	code.Module = 3
-	code.Rows = [][]int{{2}, {0, 1, 1}}
+	// Runs start light: the first row is wholly dark, so it opens with
+	// a zero-length light run, and the second is one light then one dark.
+	code.Rows = [][]int{{0, 2}, {1, 1}}
 	code.Box = printout.Box{Left: 10, Top: 10, Width: 6, Height: 6}
 
 	pages, _ := render(test, document(code))

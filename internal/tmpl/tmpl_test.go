@@ -174,6 +174,18 @@ func TestValidationRejects(test *testing.T) {
 		{"unknown property",
 			wrap(`detail { field text="x" nonesuch=1 }`),
 			"unknown property"},
+		{"barcode ink that reflects red light",
+			wrap(`detail { barcode type="Code128" text="x" ink="yellow" }`),
+			"will not scan"},
+		{"barcode paper that absorbs red light",
+			wrap(`detail { barcode type="Code128" text="x" paper="navy" }`),
+			"will not scan"},
+		{"inverted barcode",
+			wrap(`detail { barcode type="QR-L" text="x" ink="white" paper="black" }`),
+			"will not scan"},
+		{"barcode ink too close to its paper",
+			wrap(`detail { barcode type="Code128" text="x" ink="navy" paper="#654321" }`),
+			"will not scan"},
 		{"unknown node",
 			wrap(`detail { nonesuch }`),
 			"unexpected node here"},
@@ -422,5 +434,49 @@ func TestColors(test *testing.T) {
 		if _, err := ParseColor(bad); err == nil {
 			test.Errorf("ParseColor(%q): want an error", bad)
 		}
+	}
+}
+
+// A barcode's colours are its own, and a combination a red-light
+// scanner cannot read is refused rather than quietly printed.
+func TestBarcodeInkAndPaper(test *testing.T) {
+	report, err := LoadString(wrap(
+		`detail { barcode type="Code128" text="x" ink="navy" paper="yellow" }`), "test.kdl")
+	if err != nil {
+		test.Fatalf("loading: %v", err)
+	}
+	barcode := report.Layout.Body.Detail.Elements[0].(*Barcode)
+	if barcode.Ink == nil || barcode.Ink.Hex() != "#000080" {
+		test.Errorf("ink = %v, want navy", barcode.Ink)
+	}
+	if barcode.Paper == nil || barcode.Paper.Hex() != "#FFFF00" {
+		test.Errorf("paper = %v, want yellow", barcode.Paper)
+	}
+}
+
+// Saying nothing about colour is always legal: the barcode is black,
+// and the background is left to whatever the band put there.
+func TestBarcodeWithoutColoursIsUncoloured(test *testing.T) {
+	report, err := LoadString(wrap(
+		`detail { barcode type="Code128" text="x" }`), "test.kdl")
+	if err != nil {
+		test.Fatalf("loading: %v", err)
+	}
+	barcode := report.Layout.Body.Detail.Elements[0].(*Barcode)
+	if barcode.Ink != nil || barcode.Paper != nil {
+		test.Errorf("ink = %v, paper = %v, want both unset", barcode.Ink, barcode.Paper)
+	}
+}
+
+// Naming only the ink measures it against white,
+// because that is what an unprinted background is.
+func TestBarcodeInkAloneIsJudgedAgainstWhite(test *testing.T) {
+	if _, err := LoadString(wrap(
+		`detail { barcode type="Code128" text="x" ink="#654321" }`), "test.kdl"); err != nil {
+		test.Errorf("brown ink on white should load: %v", err)
+	}
+	msg := mustFail(test, wrap(`detail { barcode type="Code128" text="x" ink="orange" }`))
+	if !strings.Contains(msg, "will not scan") {
+		test.Errorf("diagnostic = %q", msg)
 	}
 }
