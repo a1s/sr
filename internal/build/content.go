@@ -136,6 +136,8 @@ func (eng *engine) emitField(field *tmpl.Field, slot *elementSlot, measured *mea
 			stretch:  field.Stretch,
 			kind:     "field",
 			draft:    dft,
+			halign:   slot.el.Base().HAlign,
+			valign:   slot.el.Base().VAlign,
 		})
 	}
 	return nil
@@ -313,6 +315,8 @@ func (eng *engine) emitBarcode(barcode *tmpl.Barcode, slot *elementSlot, measure
 			kind:     "barcode",
 			draft:    dft,
 			boxWidth: slot.width,
+			halign:   slot.el.Base().HAlign,
+			valign:   slot.el.Base().VAlign,
 		})
 	}
 	return nil

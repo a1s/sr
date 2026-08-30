@@ -63,6 +63,13 @@ type deferral struct {
 	module   float64
 	kind     string
 	draft    *draft
+	// halign and valign re-anchor the mark when the resolved value turns out
+	// smaller than the placeholder. The alignment is applied to the mark's
+	// own box rather than to the slot: the box was aligned in the slot when
+	// the band was measured, so shrinking within it gives the same answer
+	// without the slot having to survive until the scope ends.
+	halign geom.HAlign
+	valign geom.VAlign
 }
 
 // elementSlot is one element's intermediate state while a band is measured.

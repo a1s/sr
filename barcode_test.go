@@ -188,3 +188,98 @@ func TestDeferredMatrixShrinksOnBothAxes(test *testing.T) {
 		test.Errorf("box is %g along and the symbol measures %g", mark.Box.Width, want)
 	}
 }
+
+// fieldTemplate wraps one field declaration in a title band, ahead
+// of a detail band that only exists because a layout needs one.
+func fieldTemplate(declaration string) string {
+	return `report name="t" {
+  records { member "n" type="int" }
+  font "body" file="Go-Regular.ttf" size=8
+  layout width=300 height=300 leftmargin=10 rightmargin=10 topmargin=10 bottommargin=10 {
+    style font="body" color="black"
+    title height=120 {
+      ` + declaration + `
+    }
+    detail height=10 { field expr="n" format="row %d" left=0 width=100 height=10 }
+  }
+}`
+}
+
+// A deferred barcode is aligned by the symbol it resolves to,
+// not by the placeholder that reserved room for it. The same declaration
+// without a deferral produces exactly that placeholder box, so the edge
+// the alignment names has to be the same in both.
+func TestDeferredBarcodeStaysAligned(test *testing.T) {
+	placeholder := strings.Repeat("9", 130)
+	const geometry = ` type="QR-L" left=0 width=150 top=0 height=100 `
+	cases := []struct {
+		name, align string
+		// edge is the coordinate the alignment pins.
+		edge func(box printout.Box) float64
+	}{
+		{"halign right", `halign="right"`,
+			func(box printout.Box) float64 { return box.Left + box.Width }},
+		{"halign center", `halign="center"`,
+			func(box printout.Box) float64 { return box.Left + box.Width/2 }},
+		{"valign bottom", `valign="bottom"`,
+			func(box printout.Box) float64 { return box.Top + box.Height }},
+		{"valign center", `valign="center"`,
+			func(box printout.Box) float64 { return box.Top + box.Height/2 }},
+	}
+	for _, testCase := range cases {
+		test.Run(testCase.name, func(test *testing.T) {
+			reserved := onlyBarcode(test, buildString(test, barcodeTemplate(
+				`barcode`+geometry+testCase.align+` text="`+placeholder+`"`),
+				rowsOf(1, 2, 3))).Box
+			resolved := onlyBarcode(test, buildString(test, barcodeTemplate(
+				`barcode`+geometry+testCase.align+
+					` expr="FINAL.REPORT_COUNT" format="%04d" evaltime="report"`+
+					` text="`+placeholder+`"`), rowsOf(1, 2, 3))).Box
+			if resolved.Width >= reserved.Width {
+				test.Fatalf("the resolved symbol did not shrink: %g wide against %g",
+					resolved.Width, reserved.Width)
+			}
+			got := testCase.edge(resolved)
+			want := testCase.edge(reserved)
+			if math.Abs(got-want) > 0.001 {
+				test.Errorf("aligned edge = %g, want %g", got, want)
+			}
+		})
+	}
+}
+
+// The same for a deferred field, whose box spans the slot horizontally --
+// so only the vertical can drift, and `align` handles the rest at render time.
+func TestDeferredFieldStaysAligned(test *testing.T) {
+	const placeholder = "9999 9999 9999 9999 9999 9999 9999 9999"
+	const geometry = ` left=0 width=60 top=0 height=100 `
+	for _, align := range []string{`valign="bottom"`, `valign="center"`} {
+		test.Run(align, func(test *testing.T) {
+			reserved := texts(buildString(test, fieldTemplate(
+				`field`+geometry+align+` text="`+placeholder+`"`),
+				rowsOf(1, 2, 3)).Pages[0])[0]
+			resolved := texts(buildString(test, fieldTemplate(
+				`field`+geometry+align+
+					` expr="FINAL.REPORT_COUNT" format="%d" evaltime="report"`+
+					` text="`+placeholder+`"`), rowsOf(1, 2, 3)).Pages[0])[0]
+			if len(resolved.Lines) >= len(reserved.Lines) {
+				test.Fatalf("the resolved text did not shrink: %d lines against %d",
+					len(resolved.Lines), len(reserved.Lines))
+			}
+			// Measured from the lines themselves, not from the box: the
+			// box moving is the fix, and what a reader sees is where the
+			// text ends up. Without it the box keeps the placeholder's
+			// top and the shorter text simply rides up inside it.
+			edge := func(mark *printout.Text) float64 {
+				extent := float64(len(mark.Lines)) * mark.Leading
+				if align == `valign="bottom"` {
+					return mark.Box.Top + extent
+				}
+				return mark.Box.Top + extent/2
+			}
+			if got, want := edge(resolved), edge(reserved); math.Abs(got-want) > 0.001 {
+				test.Errorf("aligned edge = %g, want %g", got, want)
+			}
+		})
+	}
+}

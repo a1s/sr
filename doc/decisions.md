@@ -463,6 +463,26 @@ rather than a harmless no-op, and both are caught at load. Under the rejected de
 the original defect, `evaltime="report"` on an expression with no end-of-scope name
 in it, was silently a no-op.
 
+**The placeholder reserves room; it does not define geometry.** A deferred
+element is measured from its placeholder, and from the beginning it was also
+*positioned* from it: the box was aligned in the slot when the band was
+measured, and the resolved value only ever overwrote the extent along one axis.
+A value shorter than its placeholder therefore sat adrift of the edge its
+`halign` or `valign` named, and a 2-D barcode kept a cross extent its rows
+no longer filled. Every other property of a deferred element already describes
+the resolved value -- its lines, its stripes, its box -- so position was the last
+thing still describing something the reader never sees.
+
+Both are re-anchored when the value resolves, and the alignment is applied to
+the mark's own box rather than to the slot. The box was correctly aligned in the
+slot at measure time, so shrinking within it gives the same answer without the
+slot having to survive until the scope ends — which matters, because by then the
+band has been placed, possibly split, and the mark may be a clone in a different
+frame. It also bounds the movement: the new box is a subset of the old, so
+nothing reaches outside the room the placeholder reserved, and the band height,
+the float placement, and the printable-area check all stay valid without being
+recomputed.
+
 ## Smaller decisions
 
 **`printwhen` moved from `style` to the element.** In the predecessor it was a
