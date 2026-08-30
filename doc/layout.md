@@ -748,13 +748,15 @@ Validation rejects a deferred element that needs one and has none. See
 
 After substitution the element is re-measured:
 
-- **Height unchanged or smaller** — accepted. The box stays as reserved, which
-  shows as whitespace.
+- **Height unchanged or smaller** — accepted. The box shrinks to the resolved
+  value, a barcode's on both axes, and the element's `halign` and `valign`
+  re-anchor it inside the room the placeholder reserved, so the whitespace
+  falls on the side the alignment does not name.
 - **Height larger** — **error**, naming the field, its placeholder, and both
   heights.
 
-So a placeholder must be sized for the worst case — `text="Page 999 of 999"`, not
-`text="Page 1 of 1"`.
+So a placeholder must be sized for the worst case: `text="Page 999 of 999"`, 
+not `text="Page 1 of 1"`.
 
 ## Subreports
 
