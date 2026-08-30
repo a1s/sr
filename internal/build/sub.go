@@ -96,6 +96,11 @@ func (eng *engine) runSubreport(sub *tmpl.Subreport, fr *frame) error {
 		return fmt.Errorf("%s: %w", node, err)
 	}
 
+	// A subreport emits bands of its own into this frame, and they are the
+	// child engine's rather than a band of the host's, so a balanced frame
+	// has no way to carry them along when it moves one.
+	fr.blockBalance()
+
 	child := eng.newChild(sub, item, fr)
 	// Attaching the child's unit pointed the resolver's way back to the data
 	// blobs at the child's context. This puts it back, however this returns.

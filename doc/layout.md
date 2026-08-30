@@ -14,6 +14,7 @@ a [printout](printout.md).
 - [Placing a band](#placing-a-band)
 - [Band splitting](#band-splitting)
 - [Ejects](#ejects)
+- [Balanced columns](#balanced-columns)
 - [Keeping content together](#keeping-content-together)
 - [The record loop](#the-record-loop)
 - [Deferred evaluation](#deferred-evaluation)
@@ -475,6 +476,57 @@ own `title` — the band at `layout` or `embedded` level — evaluates them **af
 so an `eject` there gives the title a page of its own. A group's `title` is not the
 exception; its ejects run first, which is what lets one say "open this group
 somewhere it has room".
+
+## Balanced columns
+
+A frame fills each column before starting the next, so content that stops
+part way down the last one leaves it short: twenty rows on the left and two
+on the right. `columns balance=#true` spreads that last run of bands over
+the columns so that they end at similar heights.
+
+What balances is the **fragment**: what the frame has been given since the
+current page opened. A page the content filled is even already, so only the
+last page a frame prints on can change.
+
+### What it does
+
+1. Each column of the fragment begins where its first band was placed.
+   Columns the fragment never reached begin at the frame's `top`, and are
+   open to it only when the frame has neither a header nor a footer -- both
+   are placed as a column opens, measured against the context of that moment,
+   and balancing has no context to place one in afterwards.
+2. The fill is reproduced by packing the bands into the same columns to the
+   same bottom. If that does not put every band where it actually went,
+   something other than the room left decided it, and the fragment is left alone.
+3. The shallowest bottom the same bands still reach in those columns is found by
+   bisection, and every band is moved to the column and position it is assigned.
+4. The frame is left filled to the deepest of the balanced columns, so that
+   what follows starts immediately below them rather than at the bottom the
+   ragged fill reached.
+
+Nothing is measured or evaluated a second time: the columns are the same width,
+so moving a band is a translation of the marks already built. An expression
+that read its own position -- `COLUMN_NUMBER`, `VERTICAL_SPACE` -- was answered
+where the band was first placed and keeps that answer. Marks keep the order
+they were painted in.
+
+### What is left where the fill put it
+
+The whole fragment stays exactly as it was placed when any of these happens
+in it:
+
+- **An `eject` node, or an eject that keeps a group together.** The band
+  was moved for a reason that packing by height would not reproduce.
+- **A band split.** Its two halves belong at the column edge they were cut on.
+- **A subreport.** Its bands are the child engine's rather than a band of the
+  host's, and the frame has no way to carry them along when it moves one.
+- **A `column` deferral.** It is resolved when the column ends, against
+  the column it ended in.
+- **A band placed outside the frame after the fragment's first one.**
+  It interleaves with the columns and would be left behind by anything that moved.
+  A group `summary` outside that group's own `columns` block is the usual case.
+- **A column the fill opened being left empty** by the new distribution,
+  because its header is already printed in it.
 
 ## Keeping content together
 

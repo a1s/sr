@@ -382,12 +382,15 @@ type Embedded struct {
 
 // Columns splits the enclosing frame.
 type Columns struct {
-	Count  int
-	Gap    float64
-	Styles []*Style
-	Header *Section
-	Footer *Section
-	Node   *kdl.Node
+	Count int
+	Gap   float64
+	// Balance spreads the frame's last fragment over the columns it reached,
+	// so that they end at similar heights instead of the last one running short.
+	Balance bool
+	Styles  []*Style
+	Header  *Section
+	Footer  *Section
+	Node    *kdl.Node
 }
 
 // Group is a data-driven grouping level.

@@ -27,6 +27,7 @@ can state what is true without also arguing for it.
 - [What building the renderer settled](#what-building-the-renderer-settled)
 - [What building the command line settled](#what-building-the-command-line-settled)
 - [What building subreports settled](#what-building-subreports-settled)
+- [Balancing columns after the fact](#balancing-columns-after-the-fact)
 
 ## Relationship to PythonReports
 
@@ -2226,3 +2227,69 @@ tree, and the data normally ends the walk. Nothing guarantees the data is finite
 so nesting stops at 32 with the node named. A `template=` cycle is different --
 it is a property of the documents rather than of the data -- so that one is
 refused at load, before any data is read.
+
+## Balancing columns after the fact
+
+A columns frame fills one column before starting the next, which leaves the last
+one short whenever the content stops in the middle of it. Balancing that is a
+standard thing to want and a standard thing to compute -- find the shallowest
+column the same content still fits in -- and the standard way to compute it
+is to measure the content, choose the height, and lay it out again.
+
+This engine cannot lay it out again. It is one pass over the records, and the
+pass has effects a second one would repeat: pages appended to the printout,
+deferrals registered, variables folded, page numbers advanced, a subreport's
+whole invocation run. There is no scratch document to build a trial into and
+no way to roll one back, and adding either would touch every placement path
+in the engine for a feature that decides where twenty bands sit.
+
+So balancing happens **after the bands are placed** rather than before. By then
+every band's height is known, its marks are built, and the columns are the same
+width, so moving a band to another column is a translation. Nothing is measured
+again and nothing is evaluated again, which is the whole of the cost and the
+whole of the price.
+
+### The fragment, not the frame
+
+What balances is what the frame holds on one page. A page the content filled
+is even already; the ragged one is always the last, which is also the only one
+whose bands are all still in hand when the content ends. So the record of
+placements is cleared at every page start, and balancing runs once -- when
+the frames have everything they are going to get, and before the summary
+that goes below them.
+
+That is also what makes the frame's fill position afterwards a real answer
+rather than an approximation: the balanced columns end where they end, the frame
+is left filled to the deepest of them, and the summary starts immediately below.
+The alternative -- leaving the fill at the bottom the ragged columns reached --
+would have kept the whitespace that balancing exists to remove.
+
+### Not re-evaluating is the cost, and the guards are where it shows
+
+A band that read its own position was answered where it was first placed and
+keeps that answer after it moves. Most of the ways that shows are refusable,
+and each is refused by a flag set where the thing happens rather than by a scan
+of the template: an `eject` node or a keep-together eject decided a column for
+a reason that packing by height does not know; a split band was cut at a column
+edge; a `column` deferral resolves against the column it ended in; a subreport's
+bands belong to the child engine and the frame cannot carry them.
+
+One guard is not a flag but a check. The fill is packed again into the same
+columns at the same bottom, and if that does not put every band where it
+actually went, something the engine was not told about decided it and the
+fragment is left alone. It is the net under the others.
+
+What is left is the position names -- `COLUMN_NUMBER`, `VERTICAL_SPACE` --
+read by an expression that is not deferred. Refusing those would mean a
+load-time scan of every expression that can reach the frame, and the answer
+they give is a position the band does not have either way: without balancing
+it is the ragged one. Stated in the layout document rather than refused.
+
+### A column that was never opened
+
+Content that never reaches the second column is the emptiest case of all,
+and spreading into it is what balancing is for. But a column header is placed
+as its column opens, measured against the context of that moment, and there is
+no such context afterwards. So a frame with a header or a footer balances only
+between the columns the fill opened, and a frame with neither balances across
+them all.

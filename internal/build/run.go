@@ -62,6 +62,12 @@ func (eng *engine) run() error {
 	if err := eng.closeGroups(len(eng.groups) - 1); err != nil {
 		return err
 	}
+
+	// The frames have everything they are going to get, so a balanced one
+	// spreads its last fragment now -- before the summary, which is placed
+	// below it and has to start at the balanced bottom.
+	eng.balanceFrames()
+
 	if summary := layout.Body.Summary; summary != nil {
 		if err := eng.placeSummary(summary); err != nil {
 			return err
@@ -117,6 +123,8 @@ func (eng *engine) startPage() error {
 	page.outerTop = eng.report.Layout.TopMargin
 	eng.frames.walk(func(fr *frame) {
 		fr.column = 0
+		// A balanced fragment is what one page holds, so it starts here.
+		fr.fragment = nil
 		if fr.parent != nil {
 			fr.left = fr.parent.left
 			if fr.columnCount > 1 {
@@ -472,10 +480,14 @@ func (eng *engine) placeGroupTitle(group *tmpl.Group, level, record int) error {
 		if ejectKind == tmpl.EjectPage {
 			kind = tmpl.EjectPage
 		}
+		fr.blockBalance()
 		if err := eng.eject(fr, kind); err != nil {
 			return err
 		}
 	} else if want > 0 && !geom.Fits(want, fr.available()) && geom.Fits(want, fr.emptyHeight()) {
+		// Keeping the group together decided this column, and it decided it
+		// from what follows the title rather than from the title's own height.
+		fr.blockBalance()
 		if err := eng.eject(fr, kind); err != nil {
 			return err
 		}
@@ -591,6 +603,9 @@ func (eng *engine) placeDetail(sec *tmpl.Section, record int) error {
 		return err
 	}
 	if ejects {
+		// An eject node moved this band for a reason of its own,
+		// which packing by height would not reproduce.
+		fr.blockBalance()
 		if err := eng.eject(fr, kind); err != nil {
 			return err
 		}
@@ -676,6 +691,7 @@ func (eng *engine) place(sec *tmpl.Section, fr *frame, scopes styleScopes) error
 		return err
 	}
 	if ejects {
+		fr.blockBalance()
 		if err := eng.eject(fr, kind); err != nil {
 			return err
 		}
@@ -729,6 +745,9 @@ func (eng *engine) placeMeasured(
 		if sec.Split {
 			if cut, ok := legalSplit(measured, sec, available); ok {
 				head, tail := splitAt(measured, cut)
+				// The two halves of a split band belong at a column edge,
+				// and moving either would put the cut somewhere else.
+				fr.blockBalance()
 				eng.commit(head, fr, fr.fillY)
 				if err := eng.eject(fr, tmpl.EjectColumn); err != nil {
 					return err
@@ -750,6 +769,7 @@ func (eng *engine) placeMeasured(
 		if sec.Split {
 			if cut, ok := lastCutPoint(measured, available); ok {
 				head, tail := splitAt(measured, cut)
+				fr.blockBalance()
 				eng.commit(head, fr, fr.fillY)
 				if err := eng.eject(fr, tmpl.EjectColumn); err != nil {
 					return err
@@ -939,41 +959,71 @@ func (eng *engine) commit(measured *measurement, fr *frame, top float64) {
 	if !measured.printed {
 		return
 	}
+	// The marks are kept as they are appended, so that a balanced frame can
+	// move the band afterwards without going looking for them. Only a frame
+	// that has one above it pays for the list.
+	var placed []printout.Mark
+	if fr.recording() {
+		placed = make([]printout.Mark, 0, len(measured.drafts)+1)
+	}
 	for _, dft := range measured.drafts {
-		translate(dft.mark, top)
+		translate(dft.mark, 0, top)
 		eng.doc.page.Marks = append(eng.doc.page.Marks, dft.mark)
+		if placed != nil {
+			placed = append(placed, dft.mark)
+		}
 	}
 	if measured.outline != nil {
 		measured.outline.Top = geom.Round(measured.outline.Top + top)
 		eng.doc.page.Marks = append(eng.doc.page.Marks, measured.outline)
+		if placed != nil {
+			placed = append(placed, measured.outline)
+		}
 	}
+	fr.record(measured.section, placed, top, measured.height)
 	for _, deferred := range measured.defers {
 		eng.pending[deferred.scope] = append(eng.pending[deferred.scope], deferred)
+		if deferred.scope == "column" {
+			// Resolved when the column ends, against the column it ended in.
+			// Moving the band would answer it from the wrong one.
+			fr.blockBalance()
+		}
 	}
 	if bottom := geom.Round(top + measured.height); bottom > fr.fillY {
 		fr.advance(bottom)
 	}
 }
 
-// translate moves a mark and everything nested in it down the page.
-func translate(mark printout.Mark, dy float64) {
+// translate moves a mark and everything nested in it across and down the page.
+//
+// Placing a band moves it down to where the frame is filled; balancing
+// a column moves the band again, across to the column it was given.
+// An outline is a position in the document rather than on the page,
+// so it has nothing to move sideways.
+func translate(mark printout.Mark, dx, dy float64) {
 	switch typed := mark.(type) {
 	case *printout.Text:
+		typed.Box.Left = geom.Round(typed.Box.Left + dx)
 		typed.Box.Top = geom.Round(typed.Box.Top + dy)
 	case *printout.Line:
+		typed.Box.Left = geom.Round(typed.Box.Left + dx)
 		typed.Box.Top = geom.Round(typed.Box.Top + dy)
 	case *printout.Rectangle:
+		typed.Box.Left = geom.Round(typed.Box.Left + dx)
 		typed.Box.Top = geom.Round(typed.Box.Top + dy)
 	case *printout.Image:
+		typed.Box.Left = geom.Round(typed.Box.Left + dx)
 		typed.Box.Top = geom.Round(typed.Box.Top + dy)
 	case *printout.Barcode:
+		typed.Box.Left = geom.Round(typed.Box.Left + dx)
 		typed.Box.Top = geom.Round(typed.Box.Top + dy)
 	case *printout.Outline:
 		typed.Top = geom.Round(typed.Top + dy)
 	case *printout.Xref:
+		typed.Box.Left = geom.Round(typed.Box.Left + dx)
 		typed.Box.Top = geom.Round(typed.Box.Top + dy)
 		for _, inner := range typed.Marks {
-			translate(inner, dy)
+			translate(inner, dx, dy)
 		}
 	}
 }

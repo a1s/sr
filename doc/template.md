@@ -729,10 +729,17 @@ columns count=2 gap="5mm" {
 |---|---|---|
 | `count` | integer | required |
 | `gap` | dimension | 0 |
+| `balance` | boolean | `#false` |
 
 Children: `style*`, `header?`, `footer?`.
 
 Column width is `(frame width - (count - 1) × gap) / count`.
+
+`balance=#true` spreads the last run of bands the frame holds over its columns,
+so that they end at similar heights instead of the last one running short.
+It needs more than one column to spread between. Some content cannot be moved
+once it is placed and is left where the fill put it; see
+[layout.md](layout.md#balanced-columns) for the list.
 
 A `subreport` may not appear inside a column.
 

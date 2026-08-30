@@ -24,6 +24,12 @@ type frame struct {
 	columnGap   float64
 	column      int
 
+	// balance spreads the frame's last fragment over the columns it reached.
+	// fragment is what it has been given since the current page opened,
+	// which is what balancing redistributes; see balance.go.
+	balance  bool
+	fragment *fragment
+
 	header, footer *tmpl.Section
 	headerScopes   styleScopes
 	footerScopes   styleScopes
@@ -168,6 +174,7 @@ func buildFramesIn(layout *tmpl.Layout, root *frame) *frameTree {
 		if columns != nil {
 			child.columnCount = columns.Count
 			child.columnGap = columns.Gap
+			child.balance = columns.Balance
 			child.width = columnWidth(parent.width, columns.Count, columns.Gap)
 			child.header, child.footer = columns.Header, columns.Footer
 			child.headerScopes = scopes
