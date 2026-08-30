@@ -15,7 +15,7 @@ import (
 func (eng *engine) run() error {
 	layout := eng.report.Layout
 	if eng.frames == nil {
-		eng.frames = buildFrames(layout)
+		eng.frames = buildFrames(eng, layout)
 	}
 
 	for group := layout.Body.Group; group != nil; group = group.Group {
@@ -66,7 +66,7 @@ func (eng *engine) run() error {
 	// The frames have everything they are going to get, so a balanced one
 	// spreads its last fragment now -- before the summary, which is placed
 	// below it and has to start at the balanced bottom.
-	eng.balanceFrames()
+	eng.balanceOwn()
 
 	if summary := layout.Body.Summary; summary != nil {
 		if err := eng.placeSummary(summary); err != nil {
@@ -123,8 +123,10 @@ func (eng *engine) startPage() error {
 	page.outerTop = eng.report.Layout.TopMargin
 	eng.frames.walk(func(fr *frame) {
 		fr.column = 0
-		// A balanced fragment is what one page holds, so it starts here.
+		// A balanced fragment is what one page holds, so it starts here,
+		// and a grafted frame is back at the top of the host's.
 		fr.fragment = nil
+		fr.graftTop = 0
 		if fr.parent != nil {
 			fr.left = fr.parent.left
 			if fr.columnCount > 1 {
@@ -151,25 +153,42 @@ func (eng *engine) startPage() error {
 		}
 		eng.swapTitle = nil
 	}
-	return eng.openFrames(page)
+	return openFrames(page)
 }
 
 // openFrames reserves header and footer space for a frame and its descendants,
 // and places the headers.
 //
-// Both bands are measured against the context as it stands when
-// the frame begins, and a header opens the frame it belongs to.
-func (eng *engine) openFrames(fr *frame) error {
+// Both bands are measured against the context as it stands when the frame
+// begins, and a header opens the frame it belongs to. The engine that measures
+// them is the frame's own: a frame an inline subreport grafted on is opened by
+// the host's page machinery and measured in the child's context, so the bands
+// and their styles are read off the frame rather than out of one engine's tree.
+func openFrames(fr *frame) error {
 	if fr.parent != nil {
 		fr.outerTop = fr.parent.top
+		if fr.graftTop > fr.outerTop {
+			// The invocation started part way down the host's frame,
+			// and every column of this one starts there for this page.
+			fr.outerTop = fr.graftTop
+		}
 		fr.outerBottom = fr.parent.bottom
 	}
+	return fr.open()
+}
+
+// open reserves and places a frame's own furniture, and then its children's.
+//
+// The outer bounds are already set, which is what lets an inline subreport's
+// frames be opened where the host is filled rather than where it begins.
+func (fr *frame) open() error {
+	eng := fr.eng
 	fr.top, fr.bottom = fr.outerTop, fr.outerBottom
 	fr.fillY = fr.top
 
 	if fr.footer != nil {
 		measured, err := eng.measureSection(fr.footer,
-			eng.frames.scopesOf[fr.footer], fr, fr.outerBottom-fr.outerTop)
+			fr.footerScopes, fr, fr.outerBottom-fr.outerTop)
 		if err != nil {
 			return err
 		}
@@ -184,7 +203,7 @@ func (eng *engine) openFrames(fr *frame) error {
 
 	if fr.header != nil {
 		measured, err := eng.measureSection(fr.header,
-			eng.frames.scopesOf[fr.header], fr, fr.bottom-fr.top)
+			fr.headerScopes, fr, fr.bottom-fr.top)
 		if err != nil {
 			return err
 		}
@@ -200,7 +219,23 @@ func (eng *engine) openFrames(fr *frame) error {
 	fr.fillY = fr.top
 
 	for _, child := range fr.children {
-		if err := eng.openFrames(child); err != nil {
+		if err := openFrames(child); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// openGrafted opens the frames an inline subreport just added to a host frame.
+//
+// They begin where the host is filled rather than where it begins, and stay
+// there for the rest of the page: the space above belongs to the host.
+func openGrafted(host *frame, from int) error {
+	for _, child := range host.children[from:] {
+		child.graftTop = host.fillY
+		child.outerTop = host.fillY
+		child.outerBottom = host.bottom
+		if err := child.open(); err != nil {
 			return err
 		}
 	}
@@ -222,8 +257,8 @@ func (eng *engine) closePage() error {
 		if fr.footer == nil {
 			continue
 		}
-		measured, err := eng.measureSection(fr.footer,
-			eng.frames.scopesOf[fr.footer], fr, fr.footerHeight)
+		measured, err := fr.eng.measureSection(fr.footer,
+			fr.footerScopes, fr, fr.footerHeight)
 		if err != nil {
 			return err
 		}
@@ -231,7 +266,7 @@ func (eng *engine) closePage() error {
 			continue
 		}
 		// A footer is placed flush against the frame's reserved bottom band.
-		eng.commit(measured, fr, geom.Round(fr.outerBottom-measured.height))
+		fr.eng.commit(measured, fr, geom.Round(fr.outerBottom-measured.height))
 	}
 	return nil
 }
@@ -385,7 +420,7 @@ func (eng *engine) placeReportTitle(sec *tmpl.Section) error {
 		return err
 	}
 	if want {
-		return eng.eject(fr, kind)
+		return eng.forcedEject(fr, kind)
 	}
 	return nil
 }
@@ -415,7 +450,7 @@ func (eng *engine) placeSummary(sec *tmpl.Section) error {
 			return nil
 		}
 		if !geom.Fits(measured.height, geom.Round(fr.outerBottom-fr.fillY-fr.footerHeight)) {
-			if err := eng.eject(fr, tmpl.EjectPage); err != nil {
+			if err := eng.forcedEject(fr, tmpl.EjectPage); err != nil {
 				return err
 			}
 			// The same answer after the eject: one placement, one printwhen.
@@ -480,15 +515,13 @@ func (eng *engine) placeGroupTitle(group *tmpl.Group, level, record int) error {
 		if ejectKind == tmpl.EjectPage {
 			kind = tmpl.EjectPage
 		}
-		fr.blockBalance()
-		if err := eng.eject(fr, kind); err != nil {
+		if err := eng.forcedEject(fr, kind); err != nil {
 			return err
 		}
 	} else if want > 0 && !geom.Fits(want, fr.available()) && geom.Fits(want, fr.emptyHeight()) {
 		// Keeping the group together decided this column, and it decided it
 		// from what follows the title rather than from the title's own height.
-		fr.blockBalance()
-		if err := eng.eject(fr, kind); err != nil {
+		if err := eng.forcedEject(fr, kind); err != nil {
 			return err
 		}
 	}
@@ -603,10 +636,7 @@ func (eng *engine) placeDetail(sec *tmpl.Section, record int) error {
 		return err
 	}
 	if ejects {
-		// An eject node moved this band for a reason of its own,
-		// which packing by height would not reproduce.
-		fr.blockBalance()
-		if err := eng.eject(fr, kind); err != nil {
+		if err := eng.forcedEject(fr, kind); err != nil {
 			return err
 		}
 	}
@@ -661,7 +691,7 @@ func (eng *engine) placeDetail(sec *tmpl.Section, record int) error {
 	// Otherwise the fold is rolled back before the eject and reapplied after,
 	// so no value is counted twice.
 	eng.ctx.restoreVars(snapshot)
-	if err := eng.eject(fr, tmpl.EjectColumn); err != nil {
+	if _, err := eng.eject(fr, tmpl.EjectColumn); err != nil {
 		return err
 	}
 	if err := eng.ctx.iterate(tmpl.ScopeDetail, ""); err != nil {
@@ -691,8 +721,7 @@ func (eng *engine) place(sec *tmpl.Section, fr *frame, scopes styleScopes) error
 		return err
 	}
 	if ejects {
-		fr.blockBalance()
-		if err := eng.eject(fr, kind); err != nil {
+		if err := eng.forcedEject(fr, kind); err != nil {
 			return err
 		}
 	}
@@ -749,7 +778,7 @@ func (eng *engine) placeMeasured(
 				// and moving either would put the cut somewhere else.
 				fr.blockBalance()
 				eng.commit(head, fr, fr.fillY)
-				if err := eng.eject(fr, tmpl.EjectColumn); err != nil {
+				if _, err := eng.eject(fr, tmpl.EjectColumn); err != nil {
 					return err
 				}
 				carried = tail
@@ -758,7 +787,7 @@ func (eng *engine) placeMeasured(
 		}
 
 		if geom.Fits(measured.height, fr.emptyHeight()) {
-			if err := eng.eject(fr, tmpl.EjectColumn); err != nil {
+			if _, err := eng.eject(fr, tmpl.EjectColumn); err != nil {
 				return err
 			}
 			carried = nil
@@ -771,7 +800,7 @@ func (eng *engine) placeMeasured(
 				head, tail := splitAt(measured, cut)
 				fr.blockBalance()
 				eng.commit(head, fr, fr.fillY)
-				if err := eng.eject(fr, tmpl.EjectColumn); err != nil {
+				if _, err := eng.eject(fr, tmpl.EjectColumn); err != nil {
 					return err
 				}
 				carried = tail
@@ -816,8 +845,9 @@ func (eng *engine) selectEject(sec *tmpl.Section, fr *frame) (tmpl.EjectType, bo
 	return tmpl.EjectPage, false, nil
 }
 
-// eject ends the current page or column and starts the next.
-func (eng *engine) eject(from *frame, kind tmpl.EjectType) error {
+// eject ends the current page or column and starts the next,
+// and reports which of the two it turned out to be.
+func (eng *engine) eject(from *frame, kind tmpl.EjectType) (tmpl.EjectType, error) {
 	owner := eng.owner()
 
 	// Which frames participate: for a column eject, the frame and
@@ -838,7 +868,7 @@ func (eng *engine) eject(from *frame, kind tmpl.EjectType) error {
 	}
 
 	if err := eng.endPage(target, kind); err != nil {
-		return err
+		return kind, err
 	}
 
 	if kind == tmpl.EjectColumn {
@@ -846,9 +876,25 @@ func (eng *engine) eject(from *frame, kind tmpl.EjectType) error {
 		target.setColumn(target.column + 1)
 		// Re-opening the frame re-places its own header in the new column
 		// and re-reserves its footer.
-		return owner.openFrames(target)
+		return kind, openFrames(target)
 	}
-	return eng.beginPage()
+	return kind, eng.beginPage()
+}
+
+// forcedEject ejects because the template asked for it rather than because
+// a band ran out of room, and refuses to balance the fragment the band
+// lands in when that is still this page: packing by height would put the band
+// back in the column the eject moved it out of. A page eject starts a fragment
+// that nothing has decided yet, so it leaves that one alone.
+func (eng *engine) forcedEject(from *frame, kind tmpl.EjectType) error {
+	done, err := eng.eject(from, kind)
+	if err != nil {
+		return err
+	}
+	if done == tmpl.EjectColumn {
+		from.blockBalance()
+	}
+	return nil
 }
 
 // endPage is the closing half of a break: footers, then the deferrals
@@ -860,6 +906,14 @@ func (eng *engine) eject(from *frame, kind tmpl.EjectType) error {
 // because the scope that ended is the one both are printing in.
 func (eng *engine) endPage(target *frame, kind tmpl.EjectType) error {
 	owner, chain := eng.owner(), eng.chain()
+
+	// A page ends holding whatever its balanced frames were given, so
+	// they spread it before the footers go against the frame bottoms.
+	// A column eject is not the end of anything a frame balances --
+	// the fragment is what the whole page holds.
+	if kind == tmpl.EjectPage {
+		owner.balancePage()
+	}
 
 	// 1. Footers, innermost first.
 	if err := owner.closeFrameFooters(target, kind); err != nil {
@@ -941,15 +995,15 @@ func (eng *engine) closeFrameFooters(target *frame, kind tmpl.EjectType) error {
 		if fr.footer == nil {
 			continue
 		}
-		measured, err := eng.measureSection(fr.footer,
-			eng.frames.scopesOf[fr.footer], fr, fr.footerHeight)
+		measured, err := fr.eng.measureSection(fr.footer,
+			fr.footerScopes, fr, fr.footerHeight)
 		if err != nil {
 			return err
 		}
 		if !measured.printed {
 			continue
 		}
-		eng.commit(measured, fr, geom.Round(fr.outerBottom-measured.height))
+		fr.eng.commit(measured, fr, geom.Round(fr.outerBottom-measured.height))
 	}
 	return nil
 }
@@ -959,15 +1013,21 @@ func (eng *engine) commit(measured *measurement, fr *frame, top float64) {
 	if !measured.printed {
 		return
 	}
-	// The marks are kept as they are appended, so that a balanced frame can
-	// move the band afterwards without going looking for them. Only a frame
-	// that has one above it pays for the list.
+	// A measurement carried across an eject was laid out against the column
+	// the band started in -- the tail of a split band is the only one -- so
+	// it moves to the column it is committed in as it is placed.
+	across := geom.Round(fr.left - measured.left)
+	measured.left = fr.left
+
+	// The marks are kept as they are appended, so that a balanced frame
+	// can move the band afterwards without going looking for them.
+	// Only a frame that has one above it pays for the list.
 	var placed []printout.Mark
 	if fr.recording() {
 		placed = make([]printout.Mark, 0, len(measured.drafts)+1)
 	}
 	for _, dft := range measured.drafts {
-		translate(dft.mark, 0, top)
+		translate(dft.mark, across, top)
 		eng.doc.page.Marks = append(eng.doc.page.Marks, dft.mark)
 		if placed != nil {
 			placed = append(placed, dft.mark)

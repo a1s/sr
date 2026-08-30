@@ -36,7 +36,7 @@ func (psr *parser) validate(report *Report) {
 	if report.Layout != nil {
 		psr.validateStyles(report.Layout.Styles, shared)
 		psr.validateNamespace(ns, shared)
-		psr.validateBody(&report.Layout.Body, ns, shared, false)
+		psr.validateBody(&report.Layout.Body, ns, shared)
 		if report.Layout.Body.Columns != nil {
 			columns := report.Layout.Body.Columns
 			width := report.Layout.Page.Width -
@@ -259,45 +259,42 @@ func (psr *parser) validateEmbedded(embedded *Embedded, shared *sharedNames) {
 	embedded.GroupNames = ns.order
 	psr.validateNamespace(ns, shared)
 	psr.validateStyles(embedded.Styles, shared)
-	psr.validateBody(&embedded.Body, ns, shared, false)
+	psr.validateBody(&embedded.Body, ns, shared)
 	for _, inner := range embedded.Embedded {
 		psr.validateEmbedded(inner, shared)
 	}
 }
 
-func (psr *parser) validateBody(body *Body, ns *namespace, shared *sharedNames, inColumns bool) {
+func (psr *parser) validateBody(body *Body, ns *namespace, shared *sharedNames) {
 	for _, section := range []*Section{
 		body.Title, body.Summary, body.Header, body.Footer, body.Detail,
 	} {
-		psr.validateSection(section, ns, shared, inColumns)
+		psr.validateSection(section, ns, shared)
 	}
 	if body.Columns != nil {
 		psr.validateStyles(body.Columns.Styles, shared)
-		psr.validateSection(body.Columns.Header, ns, shared, true)
-		psr.validateSection(body.Columns.Footer, ns, shared, true)
+		psr.validateSection(body.Columns.Header, ns, shared)
+		psr.validateSection(body.Columns.Footer, ns, shared)
 	}
 	for group := body.Group; group != nil; group = group.Group {
 		psr.validateStyles(group.Styles, shared)
-		psr.validateSection(group.Title, ns, shared, inColumns)
-		psr.validateSection(group.Summary, ns, shared, inColumns)
-		psr.validateSection(group.Detail, ns, shared, inColumns)
+		psr.validateSection(group.Title, ns, shared)
+		psr.validateSection(group.Summary, ns, shared)
+		psr.validateSection(group.Detail, ns, shared)
 		if group.Columns != nil {
 			psr.validateStyles(group.Columns.Styles, shared)
-			psr.validateSection(group.Columns.Header, ns, shared, true)
-			psr.validateSection(group.Columns.Footer, ns, shared, true)
+			psr.validateSection(group.Columns.Header, ns, shared)
+			psr.validateSection(group.Columns.Footer, ns, shared)
 		}
 	}
 }
 
-func (psr *parser) validateSection(section *Section, ns *namespace, shared *sharedNames, inColumns bool) {
+func (psr *parser) validateSection(section *Section, ns *namespace, shared *sharedNames) {
 	if section == nil {
 		return
 	}
 	psr.validateStyles(section.Styles, shared)
 	for _, sub := range section.Subreports {
-		if inColumns {
-			psr.errf(sub.Node, "", "a subreport may not appear inside a columns block")
-		}
 		if section.Kind == BandHeader || section.Kind == BandFooter {
 			psr.errf(sub.Node, "",
 				"a subreport emits bands of its own, and a %s band is measured and reserved before the page it belongs to is filled; put it on a title, summary or detail band",
@@ -580,14 +577,6 @@ func (psr *parser) checkSubreportTarget(sub *Subreport, target *subTarget, repor
 				"an inline subreport shares the parent's pages, whose header and footer are already reserved; %s must not define them",
 				target.what)
 		}
-		// A columns block reserves a frame across the pages it spans, and an
-		// inline subreport does not own the pages it prints on -- the same
-		// reason its header and footer are refused.
-		if body.Columns != nil || hasGroupColumns(body) {
-			psr.errf(sub.Node, "inline",
-				"an inline subreport prints in the host's frame, and a columns block reserves a frame of its own across the pages it spans; %s must not open one",
-				target.what)
-		}
 		// swapheader places a band outside the page header and swapfooter
 		// below the page footer, and an inline subreport has neither.
 		if body.Title != nil && body.Title.SwapHeader {
@@ -631,16 +620,6 @@ func (psr *parser) checkSubreportTarget(sub *Subreport, target *subTarget, repor
 			"%s requires the parameter %q, which has no default and no arg here",
 			target.what, param.Name)
 	}
-}
-
-// hasGroupColumns reports whether any group in the body opens a columns block.
-func hasGroupColumns(body *Body) bool {
-	for group := body.Group; group != nil; group = group.Group {
-		if group.Columns != nil {
-			return true
-		}
-	}
-	return false
 }
 
 // warnCollapsingBand reports a band that declares no height and holds only

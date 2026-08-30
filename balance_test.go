@@ -61,7 +61,7 @@ func TestBalancedColumnsSpreadTheLastFragment(test *testing.T) {
 	}
 }
 
-// Only the last page balances: a page the content filled is already even.
+// A page the content filled is already even, so balancing leaves it alone.
 func TestBalanceLeavesFilledPagesAlone(test *testing.T) {
 	doc := buildString(test, balanceSource(true, ""), letters(26))
 	if len(doc.Pages) != 2 {
@@ -93,7 +93,7 @@ func TestBalanceOpensAColumnTheFillNeverReached(test *testing.T) {
 }
 
 // A column header is placed as its column opens, against the context
-// at moment, and balancing cannot place one afterwards. So a frame
+// of the moment, and balancing cannot place one afterwards. So a frame
 // that has one balances between the columns it opened and no further.
 func TestBalanceWillNotOpenAColumnUnderAHeader(test *testing.T) {
 	const header = `header height=10 { field text="CH" left=0 right=0 }`
@@ -304,5 +304,178 @@ func TestBalanceEvensHeightsRatherThanCounts(test *testing.T) {
 	if got, want := joined(placements(buildString(test, src, rows))),
 		"a@10,10,b@155,10,c@155,50,d@155,60,e@155,70"; got != want {
 		test.Errorf("balanced = %q, want the heights evened", got)
+	}
+}
+
+// Every page the frame prints on balances as it ends, not just the report's
+// last. Two identical groups, each starting a page of its own, come out the
+// same -- which is the whole point of asking for it.
+func TestBalanceEveryPageAsItEnds(test *testing.T) {
+	src := `report name="t" {
+  records { member "g" type="string"; member "n" type="string" }
+  font "body" file="Go-Regular.ttf" size=8
+  layout width=300 height=120 leftmargin=10 rightmargin=10 topmargin=10 bottommargin=10 {
+    style font="body" color="black"
+    columns count=2 gap=10 balance=#true { }
+    group "g" expr="g" {
+      title height=0 { eject type="page" when="ITEM_NUMBER > 1" }
+      detail height=10 { field expr="n" left=0 right=0 }
+    }
+  }
+}`
+	var rows []map[string]any
+	for _, group := range []string{"A", "B"} {
+		for index := 0; index < 6; index++ {
+			rows = append(rows, map[string]any{
+				"g": group, "n": group + string(rune('0'+index)),
+			})
+		}
+	}
+	doc := buildString(test, src, rows)
+	if len(doc.Pages) != 2 {
+		test.Fatalf("pages = %d, want one per group", len(doc.Pages))
+	}
+	for index, letter := range []string{"A", "B"} {
+		page := &Printout{Pages: doc.Pages[index : index+1]}
+		want := letter + "0@10,10," + letter + "1@10,20," + letter + "2@10,30," +
+			letter + "3@155,10," + letter + "4@155,20," + letter + "5@155,30"
+		if got := joined(placements(page)); got != want {
+			test.Errorf("page %d = %q, want %q", index+1, got, want)
+		}
+	}
+}
+
+// An inline subreport's own columns balance, and its engine leaves the host's
+// frames to the host: the child ends its invocation, not the host's page.
+func TestBalanceInsideAnInlineSubreport(test *testing.T) {
+	src := `report name="host" {
+  records { member "n" type="string"; member "items" type="list" }
+  font "body" file="Go-Regular.ttf" size=8
+  layout width=300 height=200 leftmargin=10 rightmargin=10 topmargin=10 bottommargin=10 {
+    style font="body" color="black"
+    embedded "lines" {
+      records { member "sku" type="string" }
+      columns count=2 gap=10 balance=#true { }
+      detail height=10 { field expr="sku" left=0 right=0 }
+    }
+    detail height=10 {
+      field expr="n" left=0 right=0
+      subreport embedded="lines" seq=1 data="items" inline=#true
+    }
+  }
+}`
+	var rows []map[string]any
+	for _, name := range []string{"A", "B"} {
+		var items []any
+		for index := 1; index <= 5; index++ {
+			items = append(items, map[string]any{"sku": name + string(rune('0'+index))})
+		}
+		rows = append(rows, map[string]any{"n": name, "items": items})
+	}
+	// Each invocation spreads its five rows three and two from the graft
+	// position, and the host resumes below the deeper of the two columns.
+	if got, want := joined(placements(buildString(test, src, rows))),
+		"A@10,10,A1@10,20,A2@10,30,A3@10,40,A4@155,20,A5@155,30,"+
+			"B@10,50,B1@10,60,B2@10,70,B3@10,80,B4@155,60,B5@155,70"; got != want {
+		test.Errorf("balanced = %q", got)
+	}
+}
+
+// A subreport that prints nothing still stops the frame it prints into
+// from being balanced by the child, whose frames are not the host's.
+func TestBalanceIgnoresAnEmptyInlineSubreport(test *testing.T) {
+	source := func(balance bool) string {
+		return fmt.Sprintf(`report name="t" {
+  records { member "n" type="string"; member "items" type="list" }
+  font "body" file="Go-Regular.ttf" size=8
+  layout width=300 height=120 leftmargin=10 rightmargin=10 topmargin=10 bottommargin=10 {
+    style font="body" color="black"
+    embedded "lines" { records { member "sku" type="string" }
+      detail height=10 { field expr="sku" left=0 right=0 } }
+    columns count=2 gap=10 balance=#%t { }
+    detail height=10 { field expr="n" left=0 right=0 }
+    summary height=10 {
+      field text="SUM" left=0 right=0
+      subreport embedded="lines" seq=-1 data="items" inline=#true
+    }
+  }
+}`, balance)
+	}
+	var rows []map[string]any
+	for index := 0; index < 6; index++ {
+		rows = append(rows, map[string]any{
+			"n": "r" + string(rune('0'+index)), "items": []any{},
+		})
+	}
+	if got, want := joined(placements(buildString(test, source(false), rows))),
+		"r0@10,10,r1@10,20,r2@10,30,r3@10,40,r4@10,50,r5@10,60,SUM@10,70"; got != want {
+		test.Fatalf("unbalanced = %q", got)
+	}
+	// The host's own pass balances the rows; the child's touches nothing.
+	if got, want := joined(placements(buildString(test, source(true), rows))),
+		"r0@10,10,r1@10,20,r2@10,30,r3@155,10,r4@155,20,r5@155,30,SUM@10,40"; got != want {
+		test.Errorf("balanced = %q", got)
+	}
+}
+
+// Two balanced columns blocks, one inside the other. The inner one
+// holds the detail rows; the outer sees only the group titles between
+// its runs, so it leaves them where they are.
+func TestBalanceRefusesAnInnerBalancedBlock(test *testing.T) {
+	source := func(balance bool) string {
+		return fmt.Sprintf(`report name="t" {
+  records { member "g" type="string"; member "n" type="string" }
+  font "body" file="Go-Regular.ttf" size=8
+  layout width=300 height=120 leftmargin=10 rightmargin=10 topmargin=10 bottommargin=10 {
+    style font="body" color="black"
+    columns count=2 gap=10 balance=#%t { }
+    group "g" expr="g" {
+      title height=10 { field expr="'T'+g" left=0 right=0 }
+      columns count=2 gap=5 balance=#true { }
+      detail height=10 { field expr="n" left=0 right=0 }
+    }
+  }
+}`, balance)
+	}
+	var rows []map[string]any
+	for _, group := range []string{"A", "B"} {
+		for index := 0; index < 3; index++ {
+			rows = append(rows, map[string]any{
+				"g": group, "n": group + string(rune('0'+index)),
+			})
+		}
+	}
+	plain := joined(placements(buildString(test, source(false), rows)))
+	asked := joined(placements(buildString(test, source(true), rows)))
+	if plain != asked {
+		test.Errorf("outer balanced = %q, want it left as %q", asked, plain)
+	}
+}
+
+// A header inside the balanced frame keeps a column closed just as
+// the frame's own does: balancing has no context to place a second one in.
+func TestBalanceWillNotOpenAColumnUnderANestedHeader(test *testing.T) {
+	source := func(balance bool) string {
+		return fmt.Sprintf(`report name="t" {
+  records { member "n" type="string" }
+  font "body" file="Go-Regular.ttf" size=8
+  layout width=300 height=120 leftmargin=10 rightmargin=10 topmargin=10 bottommargin=10 {
+    style font="body" color="black"
+    columns count=2 gap=10 balance=#%t { }
+    group "g" expr="'one'" {
+      columns count=1 { header height=10 { field text="IH" left=0 right=0 } }
+      detail height=10 { field expr="n" left=0 right=0 }
+    }
+  }
+}`, balance)
+	}
+	rows := letters(4)
+	plain := joined(placements(buildString(test, source(false), rows)))
+	asked := joined(placements(buildString(test, source(true), rows)))
+	if plain != asked {
+		test.Errorf("balanced = %q, want it left as %q", asked, plain)
+	}
+	if want := "IH@10,10,a@10,20,b@10,30,c@10,40,d@10,50"; plain != want {
+		test.Errorf("layout = %q, want %q", plain, want)
 	}
 }

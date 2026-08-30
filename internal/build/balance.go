@@ -1,6 +1,8 @@
 package build
 
 import (
+	"math"
+
 	"github.com/a1s/sr/internal/geom"
 	"github.com/a1s/sr/internal/tmpl"
 	"github.com/a1s/sr/printout"
@@ -66,20 +68,38 @@ func (fr *frame) recording() bool {
 	return host != nil && movable
 }
 
-// blockBalance refuses to balance the fragment this frame prints into.
+// block refuses to balance this frame's fragment.
 //
 // The fragment is started if it has not been already, because what blocks it
 // is often the reason its first band went where it did. A page break starts
 // a fragment over, so a block reaches no further than the page it was made on.
+func (fr *frame) block() {
+	if fr.fragment == nil {
+		fr.fragment = &fragment{}
+	}
+	fr.fragment.blocked = true
+}
+
+// blockBalance refuses every balanced frame this one prints inside.
 func (fr *frame) blockBalance() {
-	host, _ := fr.balanced()
-	if host == nil {
-		return
+	for node := fr; node != nil; node = node.parent {
+		if node.balance {
+			node.block()
+		}
 	}
-	if host.fragment == nil {
-		host.fragment = &fragment{}
+}
+
+// blockAbove refuses every balanced frame outside the one that holds a band.
+//
+// The outer frame sees only what is placed between the inner one's runs,
+// which is a sequence with holes where the inner content sits. Packing it by
+// height would close those holes over content the outer frame never recorded.
+func blockAbove(host *frame) {
+	for node := host.parent; node != nil; node = node.parent {
+		if node.balance {
+			node.block()
+		}
 	}
-	host.fragment.blocked = true
 }
 
 // blockEnclosed refuses to balance every started fragment below this frame,
@@ -95,7 +115,7 @@ func (fr *frame) blockEnclosed() {
 }
 
 // record adds a committed band to the fragment of the frame it prints into,
-// or blocks the fragments underneath when it prints outside them.
+// or blocks the fragments it cannot be moved by.
 func (fr *frame) record(sec *tmpl.Section, marks []printout.Mark, top, height float64) {
 	// A header and a footer belong to the frame rather than to its fill:
 	// both are placed against a column edge and stay where that column is.
@@ -107,12 +127,13 @@ func (fr *frame) record(sec *tmpl.Section, marks []printout.Mark, top, height fl
 		fr.blockEnclosed()
 		return
 	}
+	blockAbove(host)
+	if !movable {
+		host.block()
+		return
+	}
 	if host.fragment == nil {
 		host.fragment = &fragment{}
-	}
-	if !movable {
-		host.fragment.blocked = true
-		return
 	}
 	host.fragment.bands = append(host.fragment.bands, placedBand{
 		marks:  marks,
@@ -122,13 +143,21 @@ func (fr *frame) record(sec *tmpl.Section, marks []printout.Mark, top, height fl
 	})
 }
 
-// balanceFrames spreads every balanced frame's last fragment.
+// balanceOwn spreads the last fragment of every balanced frame this engine
+// built, which for an inline subreport leaves the host's frames alone:
+// the host is still filling them, and ends them itself.
 //
-// It runs once the frames have all the content they are going to get
-// and before anything is placed below them, so that what follows
-// starts at the balanced bottom rather than at the ragged one.
-func (eng *engine) balanceFrames() {
-	eng.frames.walk(func(fr *frame) {
+// It runs once the frames have all the content they are going to get and
+// before anything is placed below them, so that what follows starts at
+// the balanced bottom rather than at the ragged one.
+func (eng *engine) balanceOwn() { balanceFrames(eng.frames.walkOwned) }
+
+// balancePage spreads the last fragment of every balanced frame
+// printing on the page that is ending, whichever engine built it.
+func (eng *engine) balancePage() { balanceFrames(eng.frames.walk) }
+
+func balanceFrames(walk func(func(*frame))) {
+	walk(func(fr *frame) {
 		if fr.balance {
 			fr.balanceFragment()
 		}
@@ -146,18 +175,18 @@ func (fr *frame) balanceFragment() {
 		return
 	}
 
-	// What the frame did is reproduced by filling the same columns
-	// to the same bottom. If it is not, something other than the room left
-	// decided where a band went -- an eject node, a keep-together lookahead --
-	// and packing by height alone would undo it.
-	if !sameColumns(packColumns(frag.bands, starts[:reached], fr.bottom), frag.bands, first) {
+	// What the frame did is reproduced by filling the same columns to the
+	// same bottom. If it is not -- a different column, or the same one at
+	// a different height -- then something other than the room left decided
+	// where a band went, and packing by height alone would undo it.
+	if !reproduces(packColumns(frag.bands, starts[:reached], fr.bottom), frag.bands, first) {
 		return
 	}
 
 	// The shallowest bottom the same bands still reach in these columns.
 	// Feasibility only improves as the bottom drops away, so it bisects.
 	// The unit is the third decimal place, which is what geom.Round keeps.
-	low, high := int64(lowest(starts)*1000), int64(geom.Round(fr.bottom*1000))
+	low, high := millipoints(lowest(starts)), millipoints(fr.bottom)
 	for low < high {
 		mid := low + (high-low)/2
 		if packColumns(frag.bands, starts, float64(mid)/1000) != nil {
@@ -166,25 +195,23 @@ func (fr *frame) balanceFragment() {
 		}
 		low = mid + 1
 	}
-	assigned := packColumns(frag.bands, starts, float64(high)/1000)
-	if assigned == nil {
+	slots := packColumns(frag.bands, starts, float64(high)/1000)
+	if slots == nil {
 		return
 	}
-	if used := assigned[len(assigned)-1] + 1; used < reached {
-		// A column the frame already opened would be left empty,
-		// and its header is printed in it. Leaving the fragment alone
-		// is the honest answer.
-		return
-	}
-	fr.applyBalance(assigned, starts, first)
+	fr.applyBalance(slots, first)
 }
+
+// millipoints is a length as the whole thousandths geom.Round keeps it to.
+func millipoints(value float64) int64 { return int64(math.Round(value * 1000)) }
 
 // columnStarts is where each column open to the fragment begins.
 //
 // The columns the fragment reached begin where its first band in each of them
-// was placed. The ones it never reached are open to it only when the frame
-// has no header and no footer: both are placed as a column opens, against the
-// context of the moment, and balancing has no way to place them afterwards.
+// was placed. The ones it never reached are open to it only when neither the
+// frame nor anything under it places a header or a footer as a column opens:
+// those are measured against the context of that moment, and balancing has
+// no such moment to place one in afterwards.
 //
 // The bands are in the order they were placed, so the columns they name run
 // from the first upwards without a gap; anything else -- a column skipped
@@ -206,12 +233,26 @@ func (fr *frame) columnStarts(bands []placedBand) (
 		}
 	}
 	reached = len(starts)
-	if fr.header == nil && fr.footer == nil {
+	if !fr.hasFurniture() {
 		for column := first + reached; column < fr.columnCount; column++ {
 			starts = append(starts, fr.top)
 		}
 	}
 	return starts, reached, first, true
+}
+
+// hasFurniture reports whether this frame or any under it
+// places a header or a footer as a column opens.
+func (fr *frame) hasFurniture() bool {
+	if fr.header != nil || fr.footer != nil {
+		return true
+	}
+	for _, child := range fr.children {
+		if child.hasFurniture() {
+			return true
+		}
+	}
+	return false
 }
 
 // lowest is the smallest of the column starts.
@@ -225,12 +266,19 @@ func lowest(starts []float64) float64 {
 	return out
 }
 
+// slot is where packing puts a band: a column counted from the first one the
+// fragment used, and the position it takes in it.
+type slot struct {
+	column int
+	top    float64
+}
+
 // packColumns fills each column until the next band would pass bottom.
 //
-// It answers the column index of every band, relative to the first,
-// or nil when the bands need more columns than they started in.
-func packColumns(bands []placedBand, starts []float64, bottom float64) []int {
-	out := make([]int, len(bands))
+// It answers a slot for every band, or nil when the bands need more columns
+// than they have.
+func packColumns(bands []placedBand, starts []float64, bottom float64) []slot {
+	out := make([]slot, len(bands))
 	column, fill := 0, starts[0]
 	for index, band := range bands {
 		if !geom.Fits(band.height, geom.Round(bottom-fill)) {
@@ -243,47 +291,49 @@ func packColumns(bands []placedBand, starts []float64, bottom float64) []int {
 				return nil
 			}
 		}
-		out[index] = column
+		out[index] = slot{column: column, top: fill}
 		fill = geom.Round(fill + band.height)
 	}
 	return out
 }
 
-// sameColumns reports whether an assignment puts every band where it went.
-func sameColumns(assigned []int, bands []placedBand, first int) bool {
-	if assigned == nil {
+// reproduces reports whether a packing puts every band exactly where it went.
+func reproduces(slots []slot, bands []placedBand, first int) bool {
+	if slots == nil {
 		return false
 	}
 	for index, band := range bands {
-		if assigned[index]+first != band.column {
+		if slots[index].column+first != band.column || slots[index].top != band.top {
 			return false
 		}
 	}
 	return true
 }
 
-// applyBalance moves the fragment's bands to the columns they were assigned
+// applyBalance moves the fragment's bands to the slots they were given
 // and leaves the frame filled to the deepest of them.
-func (fr *frame) applyBalance(assigned []int, starts []float64, first int) {
-	fill := make([]float64, len(starts))
-	copy(fill, starts)
-	deepest := starts[0]
-	for index, band := range fr.fragment.bands {
-		column := assigned[index]
-		top := fill[column]
-		across := (fr.width + fr.columnGap) * float64(column+first-band.column)
-		down := geom.Round(top - band.top)
+//
+// The fragment is rewritten as it moves, so that what it holds is where the
+// bands now are: a page that ends twice -- balanced, and then again when a
+// summary that would not fit ejects it -- must not move them a second time.
+func (fr *frame) applyBalance(slots []slot, first int) {
+	deepest := slots[0].top
+	for index := range fr.fragment.bands {
+		band := &fr.fragment.bands[index]
+		column := slots[index].column + first
+		across := (fr.width + fr.columnGap) * float64(column-band.column)
+		down := geom.Round(slots[index].top - band.top)
 		if across != 0 || down != 0 {
 			for _, mark := range band.marks {
 				translate(mark, geom.Round(across), down)
 			}
 		}
-		fill[column] = geom.Round(top + band.height)
-		if fill[column] > deepest {
-			deepest = fill[column]
+		band.column, band.top = column, slots[index].top
+		if bottom := geom.Round(band.top + band.height); bottom > deepest {
+			deepest = bottom
 		}
 	}
-	if last := first + assigned[len(assigned)-1]; last != fr.column {
+	if last := fr.fragment.bands[len(fr.fragment.bands)-1].column; last != fr.column {
 		// The fragment spread into a column the frame had not opened,
 		// which is where the frame now stands.
 		fr.setColumn(last)

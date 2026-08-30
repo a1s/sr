@@ -421,10 +421,16 @@ lines, its elements re-placed from the tail's top.
 
 Non-splittable elements below the cut move to the tail whole.
 
+The tail is carried over the eject rather than measured again: it is already
+wrapped, and measuring it a second time would ask its expressions a second
+question. So its marks were built against the column the band started in, and
+are moved horizontally to the column it continues in as they are committed --
+the columns of a frame are all one width, so there is nothing else to change.
+
 A band that does not fit even an empty frame is split at the last available **cut
 point**, giving up `orphans`, `widows`, and the requirement that both sides carry
-marks — see [placing a band](#placing-a-band). If it has no cut point at all, it is an
-[error](#errors).
+marks — see [placing a band](#placing-a-band). If it has no cut point at all, it is
+an [error](#errors).
 
 ## Ejects
 
@@ -481,23 +487,27 @@ somewhere it has room".
 
 A frame fills each column before starting the next, so content that stops
 part way down the last one leaves it short: twenty rows on the left and two
-on the right. `columns balance=#true` spreads that last run of bands over
-the columns so that they end at similar heights.
+on the right. `columns balance=#true` spreads that run of bands over the columns
+so that they end at similar heights.
 
-What balances is the **fragment**: what the frame has been given since the
-current page opened. A page the content filled is even already, so only the
-last page a frame prints on can change.
+What balances is the **fragment**: what the frame was given since the current
+page opened. Every page balances as it ends -- at the page break, before the
+footers are placed, and at the end of the report before the summary -- so a
+frame that prints on several pages is not laid out one way on the page a group
+happens to end on and another way on the page before it. A page the content
+filled is even already, and comes out of the pass unchanged.
 
 ### What it does
 
-1. Each column of the fragment begins where its first band was placed.
-   Columns the fragment never reached begin at the frame's `top`, and are
-   open to it only when the frame has neither a header nor a footer -- both
-   are placed as a column opens, measured against the context of that moment,
-   and balancing has no context to place one in afterwards.
-2. The fill is reproduced by packing the bands into the same columns to the
-   same bottom. If that does not put every band where it actually went,
-   something other than the room left decided it, and the fragment is left alone.
+1. Each column of the fragment begins where its first band was placed. Columns
+   the fragment never reached begin at the frame's `top`, and are open to it
+   only when neither the frame nor anything under it has a header or a footer:
+   those are placed as a column opens, measured against the context of that
+   moment, and balancing has no such moment to place one in afterwards.
+2. The fill is reproduced by packing the bands into the same columns to the same
+   bottom. If that does not put every band exactly where it went -- a different
+   column, or the same one at a different height -- then something other than
+   the room left decided it, and the fragment is left alone.
 3. The shallowest bottom the same bands still reach in those columns is found by
    bisection, and every band is moved to the column and position it is assigned.
 4. The frame is left filled to the deepest of the balanced columns, so that
@@ -515,8 +525,10 @@ they were painted in.
 The whole fragment stays exactly as it was placed when any of these happens
 in it:
 
-- **An `eject` node, or an eject that keeps a group together.** The band
-  was moved for a reason that packing by height would not reproduce.
+- **An `eject` node, or an eject that keeps a group together**, that stays
+  on the page. The band was moved for a reason that packing by height would
+  not reproduce. An eject that starts a new page decides nothing about the
+  fragment it starts, so that one leaves it alone.
 - **A band split.** Its two halves belong at the column edge they were cut on.
 - **A subreport.** Its bands are the child engine's rather than a band of the
   host's, and the frame has no way to carry them along when it moves one.
@@ -525,8 +537,11 @@ in it:
 - **A band placed outside the frame after the fragment's first one.**
   It interleaves with the columns and would be left behind by anything that moved.
   A group `summary` outside that group's own `columns` block is the usual case.
-- **A column the fill opened being left empty** by the new distribution,
-  because its header is already printed in it.
+- **Another `columns` block inside it.** The inner block fills side by side
+  rather than one band after another, so what reaches the outer frame is not
+  in the order the page reads it. The band belongs to the innermost balanced
+  frame above it, and every balanced frame outside that one is left alone --
+  it holds only what sits between the inner block's runs.
 
 ## Keeping content together
 
@@ -768,12 +783,15 @@ is published under distinct names.
   page size and inherits its margins. `inline` and `ownpageno` are mutually
   exclusive.
 
-A subreport may not appear inside a `columns` block, and it may not sit on a
-`header`, a `footer`, a `swapheader` title or a `swapfooter` summary. Those five
-are the same rule from five sides: a subreport takes frame space of its own, and
-each of those bands is placed outside the ordinary fill of the frame it belongs
-to -- a header and a footer are measured and reserved before the page they bound
-is filled, and a swapped band sits beyond that reservation.
+A subreport belongs on a `detail` band, on a `title` without `swapheader`, or on
+a `summary` without `swapfooter`. Nowhere else: a subreport takes frame space of
+its own, and every other band is placed outside the ordinary fill of the frame
+it belongs to. A `header` and a `footer` -- the frame's own or a `columns`
+block's -- are measured and reserved before the page they bound is filled, and
+a swapped band sits beyond that reservation. Which frame the host band belongs to
+does not come into it: a band inside a `columns` block carries a subreport like
+any other, and the subreport's bands fill the column and eject to the next one
+with it.
 
 Nesting is bounded at 32. A subreport may name the layout it is written in,
 which is how a template walks a tree, and the data normally ends that walk;
@@ -829,8 +847,17 @@ the host's current fill position. It shares the host's `PAGE_NUMBER` and
 `COLUMN_NUMBER`, and an eject inside it is the host's eject: the host's
 footers are placed, the host's page-scoped variables reset, and the host's
 header is reserved on the next page, all alongside the child's own. An inline
-subreport therefore has no frame of its own to attach a header, a footer or
-a `columns` block to, and defines none.
+subreport therefore has no page of its own to attach a header or a footer to,
+and defines none.
+
+It may open a `columns` block. That reserves a frame inside the host's rather
+than one of its own, so it is grafted onto the host frame for the length of the
+invocation and removed again at the end of it. The frames begin where the host
+is filled -- the space above belongs to the host -- and stay there for the rest
+of that page, so a column the child opens on the page it started on begins
+beside the first, not above it. A page break puts them back at the top of
+the host's frame. The child's own `columns` header and footer are placed and
+measured in the child's context, which is live for as long as the frames are.
 
 **Its own pages.** The host's current page is closed -- footers placed, page
 and column deferrals resolved -- the child builds complete pages, and the host
@@ -841,7 +868,7 @@ that page was full.
 
 The child may run at a page size and margins of its own. Its pages carry
 whatever differs from the document's own geometry, which is what the
-printout's [per-page overrides](printout.md#pages) are for.
+printout's [per-page overrides](printout.md#page-lines) are for.
 
 Without `ownpageno` the child continues the host's numbering and the host
 resumes after it: a host on page 3 whose subreport takes three pages resumes
@@ -886,15 +913,18 @@ host's, because there both are printing in the scope that ended.
 
 Only a paginating report has them. A **non-inline** subreport builds its own pages
 and so uses its own `header` and `footer`. An **inline** subreport shares the
-parent's pages, whose header and footer are already reserved, so it has no frames
+parent's pages, whose header and footer are already reserved, so it has no page
 of its own to attach them to: an inline subreport must not define `header`,
-`footer`, `columns`, a `swapheader` title or a `swapfooter` summary, and doing so
-is a [validation error](template.md#validation).
+`footer`, a `swapheader` title or a `swapfooter` summary, and doing so is a
+[validation error](template.md#validation).
 
 For a heading that prints once per invocation — column labels above a line-item
 table, say — use `title` and `summary`, which are per-report bands and work in
 both modes. Under `inline` they print once at the start and end of each
-invocation, in the parent's frame.
+invocation, in the parent's frame. For one that repeats down the invocation,
+put a `header` on a `columns` block of the child's own -- a block of one column
+is a frame with nothing else to it -- and it is re-placed on every page and
+column the invocation reaches.
 
 ## Errors
 

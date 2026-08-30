@@ -171,8 +171,13 @@ func splitAt(measured *measurement, cut float64) (head, tail *measurement) {
 		printed: true,
 		height:  cut,
 		outline: measured.outline,
+		left:    measured.left,
 	}
-	tail = &measurement{section: measured.section, printed: true}
+	tail = &measurement{
+		section: measured.section,
+		printed: true,
+		left:    measured.left,
+	}
 
 	tailBottom := 0.0
 	for _, dft := range measured.drafts {

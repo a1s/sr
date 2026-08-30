@@ -23,6 +23,11 @@ type measurement struct {
 	drafts  []*draft
 	outline *printout.Outline
 	defers  []*deferral
+	// left is the column the band was laid out against. A mark's horizontal
+	// position is absolute from the moment it is built, so a measurement
+	// carried across a column eject -- the tail of a split band is the only
+	// one -- has to be moved to the column it is finally committed in.
+	left float64
 }
 
 // draft is one mark at band-relative coordinates, with what splitting needs.
@@ -114,7 +119,7 @@ func (eng *engine) measureDecided(
 	available float64,
 	prints *bool,
 ) (*measurement, error) {
-	measured := &measurement{section: sec}
+	measured := &measurement{section: sec, left: fr.left}
 	if sec == nil {
 		return measured, nil
 	}

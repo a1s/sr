@@ -336,6 +336,58 @@ func TestBandSplitting(test *testing.T) {
 	}
 }
 
+// A band split across a column continues in the column it lands in.
+//
+// The tail is carried over the eject rather than measured again --
+// it is already wrapped, and re-evaluating it would ask its expressions
+// a second question -- so the marks it carries were built against the column
+// the band started in and have to be moved to the one it continues in.
+func TestBandSplittingAcrossColumns(test *testing.T) {
+	const src = `report name="t" {
+  records { member "n" type="string" }
+  font "body" file="Go-Regular.ttf" size=8
+  layout width=300 height=80 leftmargin=10 rightmargin=10 topmargin=20 bottommargin=20 {
+    style font="body" color="black"
+    columns count=2 gap=10 { }
+    detail split=#true {
+      field expr="n" stretch=#true align="justified" left=0 width=60
+    }
+  }
+}`
+	// The frame is 40 pt tall and holds four 9.6 pt lines; the text wraps to
+	// ten in a 60 pt box, so it fills both columns and runs onto a second page.
+	long := strings.TrimSpace(strings.Repeat("alpha beta gamma delta ", 5))
+	out := buildString(test, src, []map[string]any{{"n": long}})
+	if len(out.Pages) != 2 {
+		test.Fatalf("pages = %d, want 2", len(out.Pages))
+	}
+	// The frame is 280 wide; two columns with a 10 pt gap are 135 each,
+	// the second starting at x = 10 + 135 + 10 = 155.
+	var all []string
+	for index, want := range []float64{10, 155, 10} {
+		page := out.Pages[0]
+		mark := index
+		if index == 2 {
+			page, mark = out.Pages[1], 0
+		}
+		marks := texts(page)
+		if mark >= len(marks) {
+			test.Fatalf("fragment %d is missing", index+1)
+		}
+		if got := marks[mark].Box.Left; got != want {
+			test.Errorf("fragment %d at x = %g, want %g", index+1, got, want)
+		}
+		if got := marks[mark].Box.Top; got != 20 {
+			test.Errorf("fragment %d at y = %g, want 20", index+1, got)
+		}
+		all = append(all, marks[mark].Lines...)
+	}
+	// Moving the fragments across changes nothing about what they say.
+	if got := strings.Join(all, " "); got != long {
+		test.Errorf("splitting lost text:\n got %q\nwant %q", got, long)
+	}
+}
+
 // A cut with all the band's marks on one side of it is not a legal split point:
 // splitting there would move whitespace and nothing else, so the band
 // ejects whole instead.

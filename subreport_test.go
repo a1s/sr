@@ -413,6 +413,8 @@ func TestSubreportCycleIsRefused(test *testing.T) {
 
 // What an inline subreport cannot have, each reported at load with the layout
 // named. All of them are the same rule: it does not own the pages it prints on.
+// A columns block is not among them -- it opens a frame inside the host's,
+// which is the one thing an inline subreport does own.
 func TestInlineSubreportRestrictions(test *testing.T) {
 	cases := []struct {
 		name  string
@@ -421,8 +423,6 @@ func TestInlineSubreportRestrictions(test *testing.T) {
 	}{
 		{"header", `header height=10 { field text="h" left=0 right=0 }`, "header and footer"},
 		{"footer", `footer height=10 { field text="f" left=0 right=0 }`, "header and footer"},
-		{"columns", `columns count=2 { }
-      detail height=10 { field text="d" left=0 right=0 }`, "columns block"},
 		{"swapheader", `title swapheader=#true height=10 { field text="t" left=0 right=0 }`, "swapheader"},
 		{"swapfooter", `summary swapfooter=#true height=10 { field text="s" left=0 right=0 }`, "swapfooter"},
 	}
@@ -1006,5 +1006,57 @@ func TestSharedSubreportTemplateIsReadOnce(test *testing.T) {
 	warnings := tpl.Warnings()
 	if len(warnings) != 1 {
 		test.Errorf("warnings = %v, want the referenced template's one, once", warnings)
+	}
+}
+
+// An inline subreport may open a columns block. Its frames hang off the host's
+// for the length of the invocation, beginning where the host is filled rather
+// than where its frame begins, and its column header is measured in the child's
+// own context -- here reading a parameter the host passed and the column it is
+// opening.
+func TestInlineSubreportColumns(test *testing.T) {
+	const src = `report name="host" {
+  records { member "n" type="string"; member "items" type="list" }
+  font "body" file="Go-Regular.ttf" size=8
+  layout width=300 height=120 leftmargin=10 rightmargin=10 topmargin=10 bottommargin=10 {
+    style font="body" color="black"
+    embedded "lines" {
+      records { member "sku" type="string" }
+      parameter "who" type="string"
+      columns count=2 gap=10 {
+        header height=10 { field expr="who + '/' + str(COLUMN_NUMBER)" left=0 right=0 }
+      }
+      detail height=10 { field expr="sku" left=0 right=0 }
+    }
+    detail height=10 {
+      field expr="n" left=0 right=0
+      subreport embedded="lines" seq=1 data="items" inline=#true { arg "who" value="n" }
+    }
+  }
+}`
+	var rows []map[string]any
+	for _, name := range []string{"A", "B"} {
+		var items []any
+		for index := 1; index <= 5; index++ {
+			items = append(items, map[string]any{"sku": name + string(rune('0'+index))})
+		}
+		rows = append(rows, map[string]any{"n": name, "items": items})
+	}
+	doc := buildString(test, src, rows)
+	if len(doc.Pages) != 2 {
+		test.Fatalf("pages = %d, want 2", len(doc.Pages))
+	}
+	// A's five rows follow the host's band at 20 under a header of their own.
+	// B starts at 80, so its columns start there too and the second one opens
+	// at 90 rather than at the top of the host's frame, which is the host's.
+	if got, want := joined(placements(&Printout{Pages: doc.Pages[:1]})),
+		"A@10,10,A/1@10,20,A1@10,30,A2@10,40,A3@10,50,A4@10,60,A5@10,70,"+
+			"B@10,80,B/1@10,90,B1@10,100,B/2@155,90,B2@155,100"; got != want {
+		test.Errorf("page 1 = %q", got)
+	}
+	// The page break puts the child's frames back at the top of the host's.
+	if got, want := joined(placements(&Printout{Pages: doc.Pages[1:]})),
+		"B/1@10,10,B3@10,20,B4@10,30,B5@10,40"; got != want {
+		test.Errorf("page 2 = %q", got)
 	}
 }

@@ -28,6 +28,7 @@ can state what is true without also arguing for it.
 - [What building the command line settled](#what-building-the-command-line-settled)
 - [What building subreports settled](#what-building-subreports-settled)
 - [Balancing columns after the fact](#balancing-columns-after-the-fact)
+- [An inline subreport may open a columns block](#an-inline-subreport-may-open-a-columns-block)
 
 ## Relationship to PythonReports
 
@@ -2090,17 +2091,12 @@ loaded through the host's base directory and so resolves it absolutely. Compared
 as written, one file looked like two faces and the reference example embedded
 every font twice.
 
-### An inline subreport is refused a frame of its own
+### An inline subreport is refused the page furniture
 
 The specification already refused it a `header` and a `footer`, on the grounds
 that it does not own the pages it prints on. Building it found three more of the
-same thing, and they are the same rule:
+same kind, of which two turned out to be the same rule:
 
-- **`columns`.** A columns block reserves a frame that spans page breaks, with
-  its own header and footer re-placed on each. An inline subreport's frames are
-  grafted onto the host's for the length of one invocation, and a frame that
-  outlives the invocation has nobody left to measure its bands in the right
-  context. Refused.
 - **`swapheader` and `swapfooter`.** Both place a band outside the frame's
   ordinary fill -- above the page header, below the page footer on the last page.
   There is no fill position there for a subreport's bands to follow.
@@ -2110,6 +2106,10 @@ same thing, and they are the same rule:
 
 Each is a load-time error naming the node, so none of them is something a build
 discovers half way through.
+
+The third was `columns`, refused here on the same grounds and wrongly --
+see [an inline subreport may open a columns
+block](#an-inline-subreport-may-open-a-columns-block).
 
 ### Splicing needs no splice
 
@@ -2251,18 +2251,26 @@ whole of the price.
 
 ### The fragment, not the frame
 
-What balances is what the frame holds on one page. A page the content filled
-is even already; the ragged one is always the last, which is also the only one
-whose bands are all still in hand when the content ends. So the record of
-placements is cleared at every page start, and balancing runs once -- when
-the frames have everything they are going to get, and before the summary
-that goes below them.
+What balances is what the frame holds on one page, and every page balances
+as it ends. The first cut of this ran once, at the end of the report, on the
+grounds that the ragged page is always the last one. That is true of a columns
+block running to the end of the report and of nothing else: a group whose title
+ejects a page leaves a ragged page behind for every group but the final one,
+and two identical groups came out laid out differently. So the record of
+placements is cleared as each page opens and spread as it closes -- at the
+page break, before the footers go against the frame bottoms, and at the end
+of the report, before the summary.
 
-That is also what makes the frame's fill position afterwards a real answer
-rather than an approximation: the balanced columns end where they end, the frame
-is left filled to the deepest of them, and the summary starts immediately below.
-The alternative -- leaving the fill at the bottom the ragged columns reached --
-would have kept the whitespace that balancing exists to remove.
+Closing before the summary is also what makes the frame's fill position a real
+answer rather than an approximation: the balanced columns end where they end,
+the frame is left filled to the deepest of them, and what follows starts
+immediately below. The alternative -- leaving the fill at the bottom the
+ragged columns reached -- would have kept the whitespace that balancing
+exists to remove.
+
+The fragment is rewritten as its bands move, so a page that ends twice -- once
+balanced, and again when a summary that will not fit ejects it -- does not move
+them a second time from positions they no longer have.
 
 ### Not re-evaluating is the cost, and the guards are where it shows
 
@@ -2290,6 +2298,67 @@ it is the ragged one. Stated in the layout document rather than refused.
 Content that never reaches the second column is the emptiest case of all,
 and spreading into it is what balancing is for. But a column header is placed
 as its column opens, measured against the context of that moment, and there is
-no such context afterwards. So a frame with a header or a footer balances only
-between the columns the fill opened, and a frame with neither balances across
-them all.
+no such context afterwards. So a frame balances across every column only when
+neither it nor anything under it has a header or a footer, and otherwise only
+between the columns the fill opened. Under it counts as much as on it: a
+`columns` block nested inside the balanced one has its header re-placed
+as the outer frame opens each of its columns, and a column balancing opened
+would have none.
+
+### Balancing stops at the next balanced frame
+
+Two balanced columns blocks, one inside the other, are two claims on the same
+bands. A band belongs to the inner one, whose columns it actually fills. The
+outer sees the bands placed between the inner block's runs -- a sequence with
+holes in it where the inner content sits -- and packing that by height would
+close the holes over content it never recorded. So a band is recorded in the
+innermost balanced frame above it and refuses every balanced frame outside
+that one, which is the rule that already refused an unbalanced `columns` block
+between a band and the frame balancing it.
+
+## An inline subreport may open a columns block
+
+[Building subreports](#an-inline-subreport-is-refused-the-page-furniture)
+refused `columns` to an inline subreport on the same grounds as its `header`
+and `footer`: it does not own the pages it prints on. The grounds do not carry.
+A header and a footer are page furniture -- reserved before the page is filled,
+re-placed on every page -- and the child starts part way down one page and ends
+part way down another, so it has no page to attach them to. A `columns` block
+is not page furniture. It reserves a frame *inside* the frame the child is
+already printing in, and that frame is the one thing an inline subreport does own.
+
+The reasoning that was written down -- "a frame that outlives the invocation has
+nobody left to measure its bands in the right context" -- described something
+that does not happen. The grafted frames are cut off the host's in a `defer`
+at the end of the invocation, so they live exactly as long as the child engine
+does, which is exactly as long as anything can ask them to measure a band.
+
+What the refusal stood in for was a set of things the engine could not yet do,
+each of which had to be built before lifting it:
+
+- **The frames were never opened.** `buildFramesIn` created them and nothing
+  reserved their furniture or set a fill position, so every invocation drew from
+  the top of the page and the second one printed over the first. They are opened
+  at the graft, once the child's own names are bound, because a header inside
+  the block may read them.
+- **They begin where the host is filled**, not where the host's frame begins,
+  and they stay there for the rest of that page -- otherwise the second column
+  of a block grafted half way down a page would open above the host's own
+  content. A page break puts them back at the frame's top, where the whole frame
+  is the child's to use. The height a band is compared against when deciding
+  whether *any* frame could hold it is the full one either way, or a tall band
+  on the starting page would be reported as too tall for the report.
+- **A frame now carries the engine its furniture is measured in.** The page
+  machinery belongs to the host -- it opens and closes every frame on the page,
+  the child's grafted ones included -- but a child's column header has to be
+  measured against the child's context and its styles, and registered in the
+  child's deferrals. Reading both off the frame rather than out of the engine's
+  own tree is what lets one engine open another's frames. The style scopes were
+  already on the frame and unused; they were also wrong, missing the band's own
+  styles, which is what the tree's map had and they did not.
+
+The visible gain is the repeating heading an inline subreport had no way to ask
+for. `title` and `summary` print once per invocation, and a page header belongs
+to the host. A `columns` block of one column with a header in it is a frame with
+nothing else to it, and its header is re-placed on every page and column the
+invocation reaches -- which is what a line-item table wanted all along.

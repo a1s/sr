@@ -35,12 +35,33 @@ type frame struct {
 	footerScopes   styleScopes
 	footerHeight   float64
 
+	// eng is the engine whose context the frame's header and footer are
+	// measured in. A frame an inline subreport grafted on belongs to the child,
+	// and the host's page machinery opens and closes it on the child's behalf.
+	eng *engine
+
+	// graftTop is where an inline subreport's frames begin on the page its
+	// invocation started on, because the host had already been filled that far.
+	// A page break puts them back at the top of the host's frame, so this is
+	// cleared as each page opens.
+	graftTop float64
+
 	// fillY is where the next band goes.
 	fillY float64
 }
 
 // emptyHeight is the most a band could ever get in this frame.
-func (fr *frame) emptyHeight() float64 { return geom.Round(fr.bottom - fr.top) }
+//
+// For a frame grafted part way down a host's, that is what it gets on the next
+// page rather than what is left of the page it started on -- otherwise a band
+// too tall for the remainder would be reported as too tall for any frame.
+func (fr *frame) emptyHeight() float64 {
+	top := fr.top
+	if fr.graftTop > 0 && fr.parent != nil {
+		top = geom.Round(fr.parent.top + (fr.top - fr.outerTop))
+	}
+	return geom.Round(fr.bottom - top)
+}
 
 // available is the space remaining for a band.
 func (fr *frame) available() float64 { return geom.Round(fr.bottom - fr.fillY) }
@@ -113,16 +134,33 @@ type frameTree struct {
 	nonColumn *frame
 	frameOf   map[*tmpl.Section]*frame
 	scopesOf  map[*tmpl.Section]styleScopes
+	// graft is the host frame a grafted tree was built on, and grafted
+	// the number of children it already had. Together they say which frames
+	// the tree owns; both are zero for a tree with a page frame of its own.
+	graft   *frame
+	grafted int
 	// release detaches a grafted tree from the host frame it was built on,
 	// and is nil for a tree with a page frame of its own.
 	release func()
 }
 
+// walkOwned visits every frame the tree built, which for a grafted tree
+// leaves the host's own frames out.
+func (tree *frameTree) walkOwned(fn func(*frame)) {
+	if tree.graft == nil {
+		tree.walk(fn)
+		return
+	}
+	for _, child := range tree.graft.children[tree.grafted:] {
+		walkFrom(child, fn)
+	}
+}
+
 // buildFrames constructs the frame tree for a layout of its own pages.
 //
 // This happens once, before any data is read.
-func buildFrames(layout *tmpl.Layout) *frameTree {
-	return buildFramesIn(layout, nil)
+func buildFrames(eng *engine, layout *tmpl.Layout) *frameTree {
+	return buildFramesIn(eng, layout, nil)
 }
 
 // buildFramesIn constructs the frame tree, optionally grafted
@@ -130,12 +168,13 @@ func buildFrames(layout *tmpl.Layout) *frameTree {
 //
 // An inline subreport prints in the host's frame rather than on pages
 // of its own, so its bands attach there: root is that frame, and it
-// stands in for the page frame the layout would otherwise get.
-// An inline layout defines no header and no footer -- validation refuses
-// them -- so the grafted root reserves nothing, and the frames a `columns`
-// inside it adds are the host's for as long as the invocation lasts.
-// release removes them again.
-func buildFramesIn(layout *tmpl.Layout, root *frame) *frameTree {
+// stands in for the page frame the layout would otherwise get. An inline
+// layout defines no header and no footer -- validation refuses them -- so
+// the grafted root reserves nothing; the frames a `columns` inside it adds
+// hang off the host's for as long as the invocation lasts, and release
+// removes them again. eng is the engine those frames belong to, which is
+// what the host's page machinery opens and closes them in the context of.
+func buildFramesIn(eng *engine, layout *tmpl.Layout, root *frame) *frameTree {
 	tree := &frameTree{
 		frameOf:  map[*tmpl.Section]*frame{},
 		scopesOf: map[*tmpl.Section]styleScopes{},
@@ -153,11 +192,13 @@ func buildFramesIn(layout *tmpl.Layout, root *frame) *frameTree {
 			columnCount:  1,
 			header:       layout.Body.Header,
 			footer:       layout.Body.Footer,
-			headerScopes: layoutScopes,
-			footerScopes: layoutScopes,
+			headerScopes: bandScopes(layout.Body.Header, layoutScopes),
+			footerScopes: bandScopes(layout.Body.Footer, layoutScopes),
+			eng:          eng,
 		}
 	} else {
 		grafted := len(page.children)
+		tree.graft, tree.grafted = page, grafted
 		tree.release = func() { page.children = page.children[:grafted] }
 	}
 	tree.page = page
@@ -170,6 +211,7 @@ func buildFramesIn(layout *tmpl.Layout, root *frame) *frameTree {
 			left:        parent.left,
 			width:       parent.width,
 			columnCount: 1,
+			eng:         eng,
 		}
 		if columns != nil {
 			child.columnCount = columns.Count
@@ -177,8 +219,8 @@ func buildFramesIn(layout *tmpl.Layout, root *frame) *frameTree {
 			child.balance = columns.Balance
 			child.width = columnWidth(parent.width, columns.Count, columns.Gap)
 			child.header, child.footer = columns.Header, columns.Footer
-			child.headerScopes = scopes
-			child.footerScopes = scopes
+			child.headerScopes = bandScopes(columns.Header, scopes)
+			child.footerScopes = bandScopes(columns.Footer, scopes)
 		}
 		parent.children = append(parent.children, child)
 		return child
@@ -285,14 +327,22 @@ func buildFramesIn(layout *tmpl.Layout, root *frame) *frameTree {
 	return tree
 }
 
-// walk visits every frame from the page down.
-func (tree *frameTree) walk(fn func(*frame)) {
-	var down func(*frame)
-	down = func(fr *frame) {
-		fn(fr)
-		for _, child := range fr.children {
-			down(child)
-		}
+// bandScopes is the style search a header or footer is measured under:
+// its own styles, then the ones the frame was built with.
+func bandScopes(section *tmpl.Section, scopes styleScopes) styleScopes {
+	if section == nil {
+		return scopes
 	}
-	down(tree.page)
+	return append(styleScopes{section.Styles}, scopes...)
+}
+
+// walk visits every frame from the page down.
+func (tree *frameTree) walk(fn func(*frame)) { walkFrom(tree.page, fn) }
+
+// walkFrom visits a frame and everything under it.
+func walkFrom(fr *frame, fn func(*frame)) {
+	fn(fr)
+	for _, child := range fr.children {
+		walkFrom(child, fn)
+	}
 }

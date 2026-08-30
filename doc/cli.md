@@ -305,7 +305,7 @@ and each padded like the [check's](#sr-validate).
 
 Every length is a number of points, as the printout holds it. A mark's `box` is
 `left,top widthxheight`. A page line names the size the page runs at; a page that
-[differs from the document](printout.md#pages) -- which a subreport paginating
+[differs from the document](printout.md#page-lines) -- which a subreport paginating
 itself produces -- names its margins too, since those are what a mark outside the
 printable area was judged against. An [xref](printout.md#xref)'s nested marks are indented
 under it, which is the only nesting a printout has. Text lines are quoted, one
