@@ -1360,9 +1360,9 @@ Validation runs once, at load, before any data is read. It checks:
 - `subreport` has exactly one of `template` / `embedded`, sits on a `detail`,
   on a `title` without `swapheader` or on a `summary` without `swapfooter`,
   and does not combine `inline` with `ownpageno`.
-- An `inline` subreport's layout defines no `header`, no `footer`, no `columns`,
-  no `swapheader` title and no `swapfooter` summary, and runs at the page size
-  of the report that invokes it.
+- An `inline` subreport's layout defines no `header`, no `footer`, no `swapheader`
+  title and no `swapfooter` summary, and runs at the page size of the report that
+  invokes it.
 - No `subreport template=` chain reaches the template it started from.
 - Every `subreport embedded=` names a layout in scope where it is written, and
   no two embedded layouts in one scope chain share a name.
