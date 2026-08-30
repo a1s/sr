@@ -970,8 +970,14 @@ func (psr *parser) checkBarcodeContrast(node *kdl.Node, barcode *Barcode) {
 	if barcode.Paper != nil {
 		paper = *barcode.Paper
 	}
+	// Anchor the diagnostic on the half that has to change.
+	// A background that even black bars could not be read on is the
+	// paper's fault whatever the ink is; anything else is the ink's.
 	key := "ink"
-	if barcode.Ink == nil {
+	switch {
+	case barcode.Ink == nil:
+		key = "paper"
+	case barcode.Paper != nil && barcodes.CheckContrast(0x00, paper.Red) != nil:
 		key = "paper"
 	}
 	if err := barcodes.CheckContrast(ink.Red, paper.Red); err != nil {

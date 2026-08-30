@@ -433,8 +433,9 @@ func (ren *renderer) drawMatrix(con *pdfw.Content, mark *printout.Barcode) {
 
 // parseColor reads a #RRGGBB string into components in 0..1.
 //
-// An unreadable colour is black, which is what a printout's own
-// validation makes unreachable.
+// An unreadable colour is black. Nothing validates the spelling of
+// a colour in a printout, so a hand-written one can arrive malformed;
+// black is the reading that keeps text legible and a barcode dark.
 func parseColor(text string) (red, green, blue float64) {
 	if len(text) != 7 || text[0] != '#' {
 		return 0, 0, 0

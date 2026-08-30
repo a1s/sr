@@ -1,7 +1,9 @@
 package sr
 
 import (
+	"math"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/a1s/sr/printout"
@@ -159,5 +161,30 @@ func TestBarcodeSurvivesBothEncodings(test *testing.T) {
 		if len(mark.Rows) != len(before.Rows) {
 			test.Errorf("%s: %d rows, want %d", name, len(mark.Rows), len(before.Rows))
 		}
+	}
+}
+
+// A deferred 2-D barcode whose resolved value encodes to a smaller matrix
+// than its placeholder must shrink on both axes. Only the coding direction
+// used to be updated, which left the mark claiming a cross extent its rows
+// no longer filled -- and, once `paper` existed, painting a background past
+// the symbol.
+func TestDeferredMatrixShrinksOnBothAxes(test *testing.T) {
+	placeholder := strings.Repeat("9", 130)
+	out := buildString(test, barcodeTemplate(
+		`barcode type="QR-L" expr="FINAL.REPORT_COUNT" format="%04d" `+
+			`text="`+placeholder+`" evaltime="report" `+
+			`paper="white" left=0 width=150 height=150`), rowsOf(1, 2, 3))
+	mark := onlyBarcode(test, out)
+	if mark.Value != "0003" {
+		test.Fatalf("value = %q, want the resolved 0003", mark.Value)
+	}
+	want := float64(len(mark.Rows)) * mark.Module
+	if math.Abs(mark.Box.Height-want) > 0.001 {
+		test.Errorf("box is %g across and %d rows at %g measure %g",
+			mark.Box.Height, len(mark.Rows), mark.Module, want)
+	}
+	if math.Abs(mark.Box.Width-want) > 0.001 {
+		test.Errorf("box is %g along and the symbol measures %g", mark.Box.Width, want)
 	}
 }

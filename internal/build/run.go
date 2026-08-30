@@ -1147,10 +1147,23 @@ func (eng *engine) resolveDeferral(deferred *deferral, final *expr.Namespace) er
 	deferred.barcode.Stripes = sym.Stripes
 	deferred.barcode.Rows = sym.Rows
 	deferred.barcode.Module = metrics.Module
+	// A matrix shrinks on both axes: its cross extent is the symbol's, not
+	// the box's, so leaving the placeholder's would have the mark claim room
+	// its rows no longer fill and have `paper` painted past the symbol. It
+	// can only shrink here -- a symbol needing more than the placeholder
+	// reserved is rejected above -- so this never reaches outside the space
+	// the band already set aside. A 1-D symbol's cross extent is its bar
+	// height, which the placeholder settled and the value does not change.
 	if deferred.vertical {
 		deferred.barcode.Box.Height = extent
+		if sym.TwoD {
+			deferred.barcode.Box.Width = metrics.Cross
+		}
 	} else {
 		deferred.barcode.Box.Width = extent
+		if sym.TwoD {
+			deferred.barcode.Box.Height = metrics.Cross
+		}
 	}
 	return nil
 }

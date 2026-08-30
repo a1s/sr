@@ -1,6 +1,7 @@
 package barcodes
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -253,33 +254,48 @@ func TestQuietZonesMatchTheStandards(test *testing.T) {
 	}
 }
 
+// redOf reads the red component out of a "#RRGGBB" string,
+// which is the only part of a colour the contrast check consults.
+func redOf(test *testing.T, hex string) uint8 {
+	test.Helper()
+	value, err := strconv.ParseUint(hex[1:3], 16, 8)
+	if err != nil {
+		test.Fatalf("bad colour %q: %v", hex, err)
+	}
+	return uint8(value)
+}
+
 func TestCheckContrast(test *testing.T) {
-	// Judged by red light, so what matters is the red component alone:
-	// dark blue, brown and purple bars read, and yellow ones do not;
-	// yellow and pink backgrounds read, and navy ones do not.
+	// Whole colours, so the table shows what it is judging. Several of these
+	// share a red component and therefore a verdict -- black, navy and dark
+	// green are all simply "no red" to a scanner -- which is the point the
+	// function makes rather than a gap in the table.
 	cases := []struct {
-		name             string
-		inkRed, paperRed uint8
-		wantOK           bool
+		ink, paper string
+		wantOK     bool
 	}{
-		{"black on white", 0x00, 0xFF, true},
-		{"navy bars on white", 0x00, 0xFF, true},
-		{"brown bars on white", 0x65, 0xFF, true},
-		{"purple bars on white", 0x80, 0xFF, true},
-		{"black on yellow", 0x00, 0xFF, true},
-		{"black on pink", 0x00, 0xFF, true},
-		{"yellow bars on white", 0xFF, 0xFF, false},
-		{"red bars on white", 0xFF, 0xFF, false},
-		{"light grey bars on white", 0xD3, 0xFF, false},
-		{"black on navy", 0x00, 0x00, false},
-		{"white bars on black", 0xFF, 0x00, false},
-		{"navy bars on brown", 0x00, 0x65, false},
+		{"#000000", "#FFFFFF", true},  // black on white
+		{"#000080", "#FFFFFF", true},  // navy bars
+		{"#654321", "#FFFFFF", true},  // brown bars
+		{"#800080", "#FFFFFF", true},  // purple bars
+		{"#006400", "#FFFFFF", true},  // dark green bars
+		{"#000000", "#FFFF00", true},  // yellow paper
+		{"#000000", "#FFC0CB", true},  // pink paper
+		{"#000000", "#FFA500", true},  // orange paper
+		{"#000000", "#FF0000", true},  // red paper reflects red light fully
+		{"#FFFF00", "#FFFFFF", false}, // yellow bars reflect it as fully
+		{"#FF0000", "#FFFFFF", false}, // and so do red ones
+		{"#D3D3D3", "#FFFFFF", false}, // light grey: too little difference
+		{"#000000", "#000080", false}, // navy paper absorbs red
+		{"#000000", "#006400", false}, // so does dark green
+		{"#FFFFFF", "#000000", false}, // inverted
+		{"#000080", "#654321", false}, // dark bars on a dark background
 	}
 	for _, testCase := range cases {
-		err := CheckContrast(testCase.inkRed, testCase.paperRed)
+		err := CheckContrast(redOf(test, testCase.ink), redOf(test, testCase.paper))
 		if (err == nil) != testCase.wantOK {
-			test.Errorf("%s: error = %v, want ok = %v",
-				testCase.name, err, testCase.wantOK)
+			test.Errorf("ink %s on paper %s: error = %v, want ok = %v",
+				testCase.ink, testCase.paper, err, testCase.wantOK)
 		}
 	}
 }

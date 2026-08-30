@@ -1,6 +1,7 @@
 package tmpl
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -478,5 +479,36 @@ func TestBarcodeInkAloneIsJudgedAgainstWhite(test *testing.T) {
 	msg := mustFail(test, wrap(`detail { barcode type="Code128" text="x" ink="orange" }`))
 	if !strings.Contains(msg, "will not scan") {
 		test.Errorf("diagnostic = %q", msg)
+	}
+}
+
+// The diagnostic points at the property that has to change:
+// a background even black bars could not be read on is the paper's fault,
+// and anything else the ink's.
+func TestBarcodeContrastBlamesTheRightProperty(test *testing.T) {
+	cases := []struct {
+		name, declaration, want string
+	}{
+		{"the ink reflects red", `ink="yellow" paper="white"`, "ink"},
+		{"the paper absorbs red", `ink="black" paper="navy"`, "paper"},
+		{"only the paper is named", `paper="navy"`, "paper"},
+		{"only the ink is named", `ink="yellow"`, "ink"},
+	}
+	for _, testCase := range cases {
+		test.Run(testCase.name, func(test *testing.T) {
+			_, err := LoadString(wrap(
+				`detail { barcode type="Code128" text="x" `+testCase.declaration+` }`),
+				"test.kdl")
+			if err == nil {
+				test.Fatal("want a validation error")
+			}
+			var diags DiagnosticList
+			if !errors.As(err, &diags) {
+				test.Fatalf("error is %T, want a diagnostic list", err)
+			}
+			if got := diags[0].Prop; got != testCase.want {
+				test.Errorf("blamed %q, want %q", got, testCase.want)
+			}
+		})
 	}
 }
