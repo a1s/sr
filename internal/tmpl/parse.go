@@ -492,9 +492,10 @@ func (psr *parser) parseColumns(node *kdl.Node) *Columns {
 	psr.noArgs(node)
 	pr := psr.props(node)
 	columns := &Columns{
-		Count: pr.integer("count", 0),
-		Gap:   pr.dimDefault("gap", 0),
-		Node:  node,
+		Count:   pr.integer("count", 0),
+		Gap:     pr.dimDefault("gap", 0),
+		Balance: pr.boolean("balance", false),
+		Node:    node,
 	}
 	pr.done()
 	psr.allowChildren(node, "style", "header", "footer")
@@ -507,6 +508,10 @@ func (psr *parser) parseColumns(node *kdl.Node) *Columns {
 	}
 	if columns.Count < 1 {
 		psr.errf(node, "count", "required, and at least 1")
+	}
+	if columns.Balance && columns.Count == 1 {
+		psr.errf(node, "balance",
+			"balancing spreads the content between columns, and there is only one")
 	}
 	return columns
 }

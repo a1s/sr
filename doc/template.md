@@ -17,6 +17,31 @@ and paginated are in [layout.md](layout.md). Expressions are specified in
 - [Geometry](#geometry)
 - [Ordering rules](#ordering-rules)
 - [Element reference](#element-reference)
+  - [`report`](#report)
+  - [`parameter`](#parameter)
+  - [`records`](#records)
+  - [Data input](#data-input)
+  - [`variable`](#variable)
+  - [`font`](#font)
+  - [`data`](#data)
+  - [`layout`](#layout)
+  - [`style`](#style)
+  - [`printwhen`](#printwhen)
+  - [Content sources](#content-sources)
+  - [`eject`](#eject)
+  - [Sections: `title`, `summary`, `header`, `footer`, `detail`](#sections-title-summary-header-footer-detail)
+  - [`columns`](#columns)
+  - [`group`](#group)
+  - [`field`](#field)
+  - [`line`](#line)
+  - [`rectangle`](#rectangle)
+  - [`image`](#image)
+  - [`barcode`](#barcode)
+  - [`xref`](#xref)
+  - [`outline`](#outline)
+  - [`subreport`](#subreport)
+  - [`arg`](#arg)
+  - [`embedded`](#embedded)
 - [Font resolution](#font-resolution)
 - [Validation](#validation)
 
@@ -729,12 +754,17 @@ columns count=2 gap="5mm" {
 |---|---|---|
 | `count` | integer | required |
 | `gap` | dimension | 0 |
+| `balance` | boolean | `#false` |
 
 Children: `style*`, `header?`, `footer?`.
 
 Column width is `(frame width - (count - 1) × gap) / count`.
 
-A `subreport` may not appear inside a column.
+`balance=#true` spreads the run of bands the frame holds on each page over its
+columns, so that they end at similar heights instead of the last one running
+short. It needs more than one column to spread between. Some content cannot
+be moved once it is placed and is left where the fill put it; see
+[layout.md](layout.md#balanced-columns) for the list.
 
 ### `group`
 
@@ -1047,13 +1077,16 @@ the section's box and takes nothing from its height — see
 
 `inline=#true` places the subreport's bands into the current frame instead of
 starting fresh pages; an inline subreport must match the parent's page size,
-inherits its margins, and defines no `header`, `footer`, `columns`, `swapheader`
-title or `swapfooter` summary of its own. `ownpageno=#true` restarts page
+inherits its margins, and defines no `header`, `footer`, `swapheader` title
+or `swapfooter` summary of its own -- it does not own the pages it prints on.
+It may open a `columns` block: that reserves a frame inside the host's, which
+is the one thing an inline subreport does own. `ownpageno=#true` restarts page
 numbering inside the subreport, and is incompatible with `inline`.
 
-A `subreport` may not appear inside a `columns` block, nor on a `header`, a
-`footer`, a `swapheader` title or a `swapfooter` summary -- see
+A `subreport` belongs on a `detail` band, on a `title` without `swapheader`,
+or on a `summary` without `swapfooter`, and nowhere else -- see
 [where a subreport's bands go](layout.md#where-a-subreports-bands-go).
+Any of those three carries one wherever it sits, a `columns` block included.
 
 A host band suppressed by `printwhen` runs none of its subreports.
 
@@ -1324,12 +1357,12 @@ Validation runs once, at load, before any data is read. It checks:
 - Every `arg` names a `parameter` of the subreport it belongs to, once.
 - Every deferred `stretch` field and every deferred `barcode` has a placeholder.
 - Every `parameter` a subreport's layout requires has an `arg` or a default.
-- `subreport` has exactly one of `template` / `embedded`, is not inside `columns`,
-  is not on a `header`, a `footer`, a `swapheader` title or a `swapfooter`
-  summary, and does not combine `inline` with `ownpageno`.
-- An `inline` subreport's layout defines no `header`, no `footer`, no `columns`,
-  no `swapheader` title and no `swapfooter` summary, and runs at the page size
-  of the report that invokes it.
+- `subreport` has exactly one of `template` / `embedded`, sits on a `detail`,
+  on a `title` without `swapheader` or on a `summary` without `swapfooter`,
+  and does not combine `inline` with `ownpageno`.
+- An `inline` subreport's layout defines no `header`, no `footer`, no `swapheader`
+  title and no `swapfooter` summary, and runs at the page size of the report that
+  invokes it.
 - No `subreport template=` chain reaches the template it started from.
 - Every `subreport embedded=` names a layout in scope where it is written, and
   no two embedded layouts in one scope chain share a name.

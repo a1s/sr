@@ -274,7 +274,7 @@ func TestValidationRejects(test *testing.T) {
   }
 }`,
 			"cannot restart numbering"},
-		{"a subreport inside a columns block",
+		{"a subreport on a columns header",
 			`report name="t" {
   font "body" file="f.ttf" size=9
   layout pagesize="A4" {
@@ -288,7 +288,7 @@ func TestValidationRejects(test *testing.T) {
     detail { field text="x" }
   }
 }`,
-			"may not appear inside a columns block"},
+			"put it on a title, summary or detail band"},
 		{"an arg naming no parameter",
 			`report name="t" {
   font "body" file="f.ttf" size=9

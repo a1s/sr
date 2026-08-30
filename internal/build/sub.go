@@ -96,6 +96,11 @@ func (eng *engine) runSubreport(sub *tmpl.Subreport, fr *frame) error {
 		return fmt.Errorf("%s: %w", node, err)
 	}
 
+	// A subreport emits bands of its own into this frame, and they are the
+	// child engine's rather than a band of the host's, so a balanced frame
+	// has no way to carry them along when it moves one.
+	fr.blockBalance()
+
 	child := eng.newChild(sub, item, fr)
 	// Attaching the child's unit pointed the resolver's way back to the data
 	// blobs at the child's context. This puts it back, however this returns.
@@ -116,6 +121,15 @@ func (eng *engine) runSubreport(sub *tmpl.Subreport, fr *frame) error {
 	}
 	child.records = records
 	child.ctx.dataCount = len(records)
+
+	// The frames the child grafted on are opened once its own names are bound,
+	// because a columns header inside it may read them. They begin where the
+	// host is filled: everything above that is the host's.
+	if child.frames != nil && child.frames.graft != nil {
+		if err := openGrafted(child.frames.graft, child.frames.grafted); err != nil {
+			return fmt.Errorf("%s: %w", node, err)
+		}
+	}
 
 	if err := eng.runChild(child, sub); err != nil {
 		return fmt.Errorf("%s: %w", node, err)
@@ -161,7 +175,7 @@ func (eng *engine) newChild(sub *tmpl.Subreport, item *unit, fr *frame) *engine 
 	case sub.Inline:
 		// The host's pages, so the host's pagination and the host's frame.
 		child.ctx.pages = eng.ctx.pages
-		child.frames = buildFramesIn(item.report.Layout, fr)
+		child.frames = buildFramesIn(child, item.report.Layout, fr)
 	case !sub.OwnPageNo:
 		// Its own pages, numbered on from the host's.
 		child.ctx.pages = eng.ctx.pages
@@ -268,16 +282,6 @@ func checkInlineLayout(sub *tmpl.Subreport, layout *tmpl.Layout) error {
 	if layout.Body.Header != nil || layout.Body.Footer != nil {
 		return fmt.Errorf(
 			"an inline subreport prints on the host's pages, whose header and footer are already reserved, so its layout must define neither")
-	}
-	if layout.Body.Columns != nil {
-		return fmt.Errorf(
-			"an inline subreport prints in the host's frame, and a columns block reserves a frame across the pages it spans, so an inline layout cannot open one")
-	}
-	for group := layout.Body.Group; group != nil; group = group.Group {
-		if group.Columns != nil {
-			return fmt.Errorf(
-				"an inline subreport prints in the host's frame, and a columns block reserves a frame across the pages it spans, so an inline layout cannot open one")
-		}
 	}
 	return nil
 }

@@ -21,6 +21,13 @@ side of this one.
 - [Header line](#header-line)
 - [Page lines](#page-lines)
 - [Marks](#marks)
+  - [`text`](#text)
+  - [`line`](#line)
+  - [`rectangle`](#rectangle)
+  - [`image`](#image)
+  - [`barcode`](#barcode)
+  - [`outline`](#outline)
+  - [`xref`](#xref)
 - [Invariants](#invariants)
 - [Example](#example)
 
