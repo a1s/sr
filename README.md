@@ -198,9 +198,9 @@ them as a reference does not mislead:
 
 | | |
 |---|---|
-| Properties | `layout width` / `height` / `landscape`, `font typeface` / `data` / `bold` / `italic`, `line backslant`, `rectangle opaque`, `image type`, `barcode data`, `data expr`, `maxheight`, `format` as a date-parse layout on either `parameter` or `member`, `subreport ownpageno`, `columns balance` |
+| Properties | `layout width` / `height` / `landscape`, `font typeface` / `data` / `bold` / `italic`, `line backslant`, `image type`, `barcode data`, `data expr`, `maxheight`, `format` as a date-parse layout on either `parameter` or `member`, `subreport ownpageno`, `columns balance` |
 | Spellings | the `x` / `y` aliases for `left` / `top` — both examples use `left` and `top` throughout |
-| Enumerations | barcode types `Code93`, `DataMatrix`, `QR-M`, `QR-H`; `image scale="cut"` and `"grow"`; `dash="dash"` |
+| Enumerations | barcode types `Code93`, `DataMatrix`, `QR-M`; `image scale="cut"` and `"grow"`; `dash="dash"` |
 | Scopes | `iter="report"` / `"page"` / `"column"`; `reset="detail"` / `"item"` |
 
 Both reference the [committed fonts](example/fonts/) by path, so they build

@@ -387,21 +387,33 @@ The template's `scale` and `proportional` do not appear — both are resolved aw
   "value": "Code 128",
   "module": 10,
   "vertical": false,
-  "stripes": [2, 1, 2, 2, 2, 2, 1, 1, 4]
+  "ink": "#000000",
+  "paper": "#FFFF00",
+  "stripes": [10, 2, 1, 2, 2, 2, 2, 1, 1, 4, 10]
 }
 ```
 
-`stripes` is the encoded geometry, in modules:
+`stripes` is the encoded geometry, in modules. Both arrays alternate **light
+and dark starting with light**, so index 0 is a light run, index 1 a dark one,
+and so on. Polarity is positional, and nothing records it separately:
 
-- **1-D types**: a flat array of alternating bar and space widths, starting with
-  a bar. Quiet zones are included as leading and trailing spaces, ten modules at
-  each end, so the array opens with a **zero-width bar** followed by the leading
-  quiet zone — that is how a run starting with a space is expressed without
-  breaking the alternation.
-- **2-D types**: an array of rows, each an array of alternating dark and light
-  run lengths, starting with dark, and opening with a zero-length dark run where
-  the row starts light. A 2-D symbol carries whatever quiet zone its own encoding
-  requires and none is added.
+- **1-D types**: a flat array of alternating space and bar widths. The leading
+  quiet zone is simply the first element and the trailing one the last.
+- **2-D types**: an array of rows, each an array of alternating light and dark
+  run lengths. A row that opens dark opens with a **zero-length light run**,
+  which keeps the alternation unambiguous while letting the runs still sum to
+  the whole extent. Only a symbology that asks for no quiet zone produces one.
+
+Quiet zones are part of the geometry for every type, because a symbol drawn
+without its margin does not scan. Each side carries what its standard requires:
+ten modules for the 1-D types, four for QR, one for Data Matrix, and none for
+Aztec. `box`, `module`, and the run sums all describe the symbol **including**
+that margin.
+
+`ink` is the bar colour and is always present. `paper` is optional: present, it
+is filled over the whole box before the bars, so the quiet zone carries that
+colour too; absent, nothing is laid down and whatever is beneath the mark shows
+through.
 
 A 1-D symbol's extent across the coding direction — its bar height — is fifteen
 per cent of the symbol's length or a quarter of an inch, whichever is greater,
@@ -468,8 +480,11 @@ produced in the test suite.
 8. Every `text` mark has at least one line, and `lines` count times `leading` does
    not exceed the box height by more than the rounding tolerance.
 9. `stripes` sums, times `module`, equal the box extent along the coding
-   direction, within tolerance.
+   direction, within tolerance. For a 2-D symbol every row sums alike, and
+   the row count times `module` equals the extent across that direction.
 10. Outline `level` never jumps by more than one from the previous entry.
+11. Every `image` mark carries exactly one of `data` and `file`.
+12. Every `barcode` mark carries an `ink` colour.
 
 ## Example
 

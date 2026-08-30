@@ -1,6 +1,7 @@
 package barcodes
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -47,6 +48,7 @@ func TestEveryTypeEncodes(test *testing.T) {
 						test.Errorf("row %d runs sum to %d, want %d", index, total, sym.Modules)
 					}
 				}
+				checkTwoDQuietZone(test, testCase.kind, sym)
 				return
 			}
 			if len(sym.Stripes) == 0 {
@@ -59,10 +61,10 @@ func TestEveryTypeEncodes(test *testing.T) {
 			if total != sym.Modules {
 				test.Errorf("stripes sum to %d, want Modules = %d", total, sym.Modules)
 			}
-			// A one-dimensional symbol opens with a quiet zone, which the
-			// alternation expresses as a zero-width bar followed by a space.
-			if sym.Stripes[0] != 0 || sym.Stripes[1] != QuietModules {
-				test.Errorf("leading quiet zone = %v", sym.Stripes[:2])
+			// Runs start light, so a one-dimensional symbol opens
+			// with its quiet zone and needs nothing in front of it.
+			if sym.Stripes[0] != QuietModules {
+				test.Errorf("leading quiet zone = %d", sym.Stripes[0])
 			}
 			if sym.Stripes[len(sym.Stripes)-1] != QuietModules {
 				test.Errorf("trailing quiet zone = %d", sym.Stripes[len(sym.Stripes)-1])
@@ -108,10 +110,13 @@ func TestRunsFromBits(test *testing.T) {
 		quiet int
 		want  []int
 	}{
-		{"opens dark", []bool{true, true, false, true}, 0, []int{2, 1, 1}},
-		{"opens light", []bool{false, true}, 0, []int{0, 1, 1}},
-		{"with a quiet zone", []bool{true, false, true}, 10, []int{0, 10, 1, 1, 1, 10}},
-		{"ending light with a quiet zone", []bool{true, false}, 10, []int{0, 10, 1, 11}},
+		// Index 0 is light, so a pattern that opens dark spends a
+		// zero-length light run saying so, and one that opens light
+		// does not have to.
+		{"opens dark", []bool{true, true, false, true}, 0, []int{0, 2, 1, 1}},
+		{"opens light", []bool{false, true}, 0, []int{1, 1}},
+		{"with a quiet zone", []bool{true, false, true}, 10, []int{10, 1, 1, 1, 10}},
+		{"ending light with a quiet zone", []bool{true, false}, 10, []int{10, 1, 11}},
 	}
 	for _, testCase := range cases {
 		test.Run(testCase.name, func(test *testing.T) {
@@ -191,5 +196,106 @@ func TestStripeSumMatchesTheExtent(test *testing.T) {
 	}
 	if got := float64(total) * metrics.Module; got != metrics.Length {
 		test.Errorf("stripes x module = %v, extent = %v", got, metrics.Length)
+	}
+}
+
+// checkTwoDQuietZone asserts the margin a two-dimensional symbology
+// requires is actually there, on all four sides.
+//
+// The encoder this package wraps returns the bare symbol, so nothing
+// but Encode puts these modules in and nothing but this notices if they
+// stop arriving.
+func checkTwoDQuietZone(test *testing.T, kind string, sym *Symbol) {
+	test.Helper()
+	quiet := quietZone(kind)
+	if quiet == 0 {
+		// Aztec asks for no margin, so its rows may legitimately begin
+		// and end dark and there is nothing here to assert.
+		return
+	}
+	if len(sym.Rows) < 2*quiet+1 {
+		test.Fatalf("%d rows cannot hold a quiet zone of %d", len(sym.Rows), quiet)
+	}
+	// The top and bottom bands are wholly light, which one run says.
+	for index := 0; index < quiet; index++ {
+		for _, row := range [][]int{sym.Rows[index], sym.Rows[len(sym.Rows)-1-index]} {
+			if len(row) != 1 || row[0] != sym.Modules {
+				test.Errorf("quiet row %d = %v, want one light run of %d",
+					index, row, sym.Modules)
+			}
+		}
+	}
+	// Every data row opens and closes light, by at least the margin.
+	for index := quiet; index < len(sym.Rows)-quiet; index++ {
+		row := sym.Rows[index]
+		if row[0] < quiet {
+			test.Errorf("row %d opens with %d light modules, want %d", index, row[0], quiet)
+		}
+		// A row ends light only when it has an even number of runs,
+		// the last one being the odd-indexed dark run's light successor.
+		last := len(row) - 1
+		if last%2 != 0 || row[last] < quiet {
+			test.Errorf("row %d ends %v, want a light run of at least %d", index, row, quiet)
+		}
+	}
+}
+
+func TestQuietZonesMatchTheStandards(test *testing.T) {
+	// Four modules for QR, one for Data Matrix, none for Aztec.
+	cases := map[string]int{
+		"QR-L": 4, "QR-M": 4, "QR-Q": 4, "QR-H": 4,
+		"DataMatrix": 1, "Aztec": 0,
+		"Code128": QuietModules, "Code39": QuietModules,
+	}
+	for kind, want := range cases {
+		if got := quietZone(kind); got != want {
+			test.Errorf("quietZone(%q) = %d, want %d", kind, got, want)
+		}
+	}
+}
+
+// redOf reads the red component out of a "#RRGGBB" string,
+// which is the only part of a colour the contrast check consults.
+func redOf(test *testing.T, hex string) uint8 {
+	test.Helper()
+	value, err := strconv.ParseUint(hex[1:3], 16, 8)
+	if err != nil {
+		test.Fatalf("bad colour %q: %v", hex, err)
+	}
+	return uint8(value)
+}
+
+func TestCheckContrast(test *testing.T) {
+	// Whole colours, so the table shows what it is judging. Several of these
+	// share a red component and therefore a verdict -- black, navy and dark
+	// green are all simply "no red" to a scanner -- which is the point the
+	// function makes rather than a gap in the table.
+	cases := []struct {
+		ink, paper string
+		wantOK     bool
+	}{
+		{"#000000", "#FFFFFF", true},  // black on white
+		{"#000080", "#FFFFFF", true},  // navy bars
+		{"#654321", "#FFFFFF", true},  // brown bars
+		{"#800080", "#FFFFFF", true},  // purple bars
+		{"#006400", "#FFFFFF", true},  // dark green bars
+		{"#000000", "#FFFF00", true},  // yellow paper
+		{"#000000", "#FFC0CB", true},  // pink paper
+		{"#000000", "#FFA500", true},  // orange paper
+		{"#000000", "#FF0000", true},  // red paper reflects red light fully
+		{"#FFFF00", "#FFFFFF", false}, // yellow bars reflect it as fully
+		{"#FF0000", "#FFFFFF", false}, // and so do red ones
+		{"#D3D3D3", "#FFFFFF", false}, // light grey: too little difference
+		{"#000000", "#000080", false}, // navy paper absorbs red
+		{"#000000", "#006400", false}, // so does dark green
+		{"#FFFFFF", "#000000", false}, // inverted
+		{"#000080", "#654321", false}, // dark bars on a dark background
+	}
+	for _, testCase := range cases {
+		err := CheckContrast(redOf(test, testCase.ink), redOf(test, testCase.paper))
+		if (err == nil) != testCase.wantOK {
+			test.Errorf("ink %s on paper %s: error = %v, want ok = %v",
+				testCase.ink, testCase.paper, err, testCase.wantOK)
+		}
 	}
 }

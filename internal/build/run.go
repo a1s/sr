@@ -1126,6 +1126,14 @@ func (eng *engine) resolveDeferral(deferred *deferral, final *expr.Namespace) er
 				deferred.node, text, height, deferred.reserved)
 		}
 		deferred.text.Lines = lines
+		// The box describes the resolved text, not the placeholder that
+		// reserved room for it: it shrinks to the lines actually set,
+		// and valign re-anchors it in the room reserved. A field's box
+		// always spans the slot horizontally, so only the vertical can drift.
+		settled := geom.Round(height)
+		deferred.text.Box.Top = geom.AlignV(
+			deferred.text.Box.Top, deferred.text.Box.Height, settled, deferred.valign)
+		deferred.text.Box.Height = settled
 		return nil
 	}
 
@@ -1147,10 +1155,34 @@ func (eng *engine) resolveDeferral(deferred *deferral, final *expr.Namespace) er
 	deferred.barcode.Stripes = sym.Stripes
 	deferred.barcode.Rows = sym.Rows
 	deferred.barcode.Module = metrics.Module
+	// A matrix shrinks on both axes: its cross extent is the symbol's,
+	// not the box's, so leaving the placeholder's would have the mark claim
+	// room its rows no longer fill and have `paper` painted past the symbol.
+	// A 1-D symbol's cross extent is its bar height, which the placeholder
+	// settled and the value does not change.
+	//
+	// Both extents can only shrink -- a symbol needing more than the
+	// placeholder reserved is rejected above -- so re-anchoring inside
+	// the old box keeps the mark within the space the band already set aside,
+	// and halign and valign mean the resolved symbol rather than the placeholder.
+	box := deferred.barcode.Box
+	width, height := box.Width, box.Height
 	if deferred.vertical {
-		deferred.barcode.Box.Height = extent
+		height = extent
+		if sym.TwoD {
+			width = metrics.Cross
+		}
 	} else {
-		deferred.barcode.Box.Width = extent
+		width = extent
+		if sym.TwoD {
+			height = metrics.Cross
+		}
+	}
+	deferred.barcode.Box = printout.Box{
+		Left:   geom.AlignH(box.Left, box.Width, width, deferred.halign),
+		Top:    geom.AlignV(box.Top, box.Height, height, deferred.valign),
+		Width:  width,
+		Height: height,
 	}
 	return nil
 }

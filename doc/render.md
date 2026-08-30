@@ -205,17 +205,30 @@ array that is easy to get wrong.
 A [`barcode` mark](printout.md#barcode) carries its geometry in modules.
 The renderer draws filled rectangles and encodes nothing.
 
-Bars are **black**. A printout records no colour for a barcode,
-because a symbol that is not dark on light does not scan.
+Both run arrays start with a **light** run, so index 0 is light, index 1 dark,
+and so on. Nothing records where the alternation starts because nothing has to.
+Where a symbol genuinely opens dark -- possible only for a symbology that asks
+for no quiet zone -- the array opens with a **zero-length light run**.
 
-- **1-D**: the `stripes` alternate bar and space along the coding direction,
-  starting with a bar, each spanning the whole extent across it.
-  The coding direction is rightward, or downward when `vertical` is set.
-- **2-D**: each row of `rows` alternates dark and light along the coding
-  direction, starting with dark, and each row is one module deep across it.
+- **1-D**: the `stripes` alternate space and bar along the coding direction,
+  starting with the leading quiet zone, each spanning the whole extent
+  across it. The coding direction is rightward, or downward when `vertical`
+  is set.
+- **2-D**: each row of `rows` alternates light and dark along the coding
+  direction, starting with light, and each row is one module deep across it.
+  The quiet zone is part of the geometry: the outermost rows are wholly
+  light, and every other row opens and closes light.
   With `vertical` set the symbol is turned a **quarter turn clockwise**:
   the coding direction runs down the page and the rows advance leftward
   from the box's right edge.
+
+Bars are painted in `ink`, which is always present and is `#000000` unless
+the template asked otherwise. When `paper` is present it is filled over the
+whole box **first**, quiet zones included, and the bars go on top of it; when
+it is absent nothing is laid down and whatever is underneath shows through.
+
+A renderer that prints in one colour -- a label printer driver, say --
+may ignore both and print the symbol in the only ink it has.
 
 ## Outline and links
 

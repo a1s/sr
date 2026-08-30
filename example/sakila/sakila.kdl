@@ -68,8 +68,16 @@ report name="DVD rental payments" \
     title swapheader=#true {
       outline title="'DVD rental payments'" name="'top'" closed=#true
 
-      barcode type="Code128" text="Code 128" valign="top"
-      barcode type="Code39"  text="CODE 39" top=".4in" valign="top"
+      // Bars need not be black. A scanner reads in red light, so what
+      // decides whether a symbol scans is how much red a colour reflects:
+      // navy, brown and purple bars absorb it and read, while yellow and
+      // pink backgrounds reflect it and are perfectly good paper. `paper`
+      // fills the whole box, quiet zone included, so the symbol carries
+      // its own margin instead of borrowing whatever the band left there.
+      // A pair a scanner could not read is refused when the template loads.
+      barcode type="Code128" text="Code 128" valign="top" ink="navy"
+      barcode type="Code39"  text="CODE 39" top=".4in" valign="top" \
+              ink="#4B0082" paper="#FFE9B0"
 
       // FINAL.PAGE_COUNT is the row count this page ends with,
       // so the barcode is deferred to page scope. Its size depends on its content,

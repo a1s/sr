@@ -278,9 +278,17 @@ type Barcode struct {
 	Value    string  `json:"value"`
 	Module   float64 `json:"module"`
 	Vertical bool    `json:"vertical"`
+	// Ink is the bar colour. Always present, and "#000000" unless the
+	// template asked for another.
+	Ink string `json:"ink"`
+	// Paper is the fill painted behind the whole symbol, quiet zones
+	// included. Absent leaves whatever is underneath showing, which
+	// is what a template that says nothing about the background gets.
+	Paper *string `json:"paper,omitempty"`
 	// Stripes is a flat array for a 1-D type;
 	// Rows is an array of rows for a 2-D one.
-	// Exactly one is present.
+	// Exactly one is present. Both alternate light and dark
+	// starting with light, so index 0 is a light run in every case.
 	Stripes []int   `json:"stripes,omitempty"`
 	Rows    [][]int `json:"rows,omitempty"`
 }
@@ -330,8 +338,9 @@ func NewRectangle() *Rectangle { return &Rectangle{Kind: "rectangle"} }
 // NewImage builds an image mark with its kind set.
 func NewImage() *Image { return &Image{Kind: "image"} }
 
-// NewBarcode builds a barcode mark with its kind set.
-func NewBarcode() *Barcode { return &Barcode{Kind: "barcode"} }
+// NewBarcode builds a barcode mark with its kind set and black ink,
+// which is what a template that names no colour means.
+func NewBarcode() *Barcode { return &Barcode{Kind: "barcode", Ink: "#000000"} }
 
 // NewOutline builds an outline mark with its kind set.
 func NewOutline() *Outline { return &Outline{Kind: "outline"} }

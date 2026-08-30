@@ -7,6 +7,7 @@ package barcodes
 import (
 	"fmt"
 	"image/color"
+	"math"
 	"strings"
 
 	"github.com/boombuler/barcode"
@@ -21,10 +22,27 @@ import (
 
 // QuietModules is the quiet zone added to each end of a one-dimensional
 // symbol, in modules. Ten is the usual minimum for the symbologies here.
-//
-// Two-dimensional symbols carry whatever quiet zone their own encoding
-// requires, so none is added to them.
 const QuietModules = 10
+
+// quietZone is the margin a symbology requires on every side of the symbol,
+// in modules.
+//
+// The encoder this package wraps returns the bare symbol and adds no
+// margin of its own, so every one of these has to be applied here.
+// The two-dimensional values are what each standard asks for: four modules
+// for QR (ISO/IEC 18004), one for Data Matrix (ISO/IEC 16022), and none for
+// Aztec (ISO/IEC 24778), whose bullseye finder needs no margin to be found.
+func quietZone(kind string) int {
+	switch kind {
+	case "QR-L", "QR-M", "QR-Q", "QR-H":
+		return 4
+	case "DataMatrix":
+		return 1
+	case "Aztec":
+		return 0
+	}
+	return QuietModules
+}
 
 // MinHeightRatio is a one-dimensional symbol's minimum bar height
 // as a fraction of its length, and MinHeightPt the floor under that.
@@ -44,12 +62,13 @@ type Symbol struct {
 	Value string
 	// TwoD reports whether the symbol is a matrix rather than a bar pattern.
 	TwoD bool
-	// Stripes for a one-dimensional symbol: alternating bar and space widths,
-	// starting with a bar. A leading quiet zone therefore opens with a
-	// zero-width bar.
+	// Stripes for a one-dimensional symbol: alternating space and bar widths,
+	// starting with a space, which is the leading quiet zone.
 	Stripes []int
-	// Rows for a two-dimensional symbol: per row, alternating dark and light
-	// run lengths, starting with dark.
+	// Rows for a two-dimensional symbol: per row, alternating light and dark
+	// run lengths, starting with light. A row that opens dark -- which only
+	// a symbology with no quiet zone can do -- opens with a zero-length
+	// light run.
 	Rows [][]int
 	// Modules is the symbol's extent along the coding direction,
 	// in modules, quiet zones included.
@@ -73,13 +92,14 @@ func Encode(kind, value string) (*Symbol, error) {
 	}
 	bounds := code.Bounds()
 	sym := &Symbol{Type: kind, Value: value}
+	quiet := quietZone(kind)
 
 	if bounds.Dy() <= 1 {
 		bits := make([]bool, 0, bounds.Dx())
 		for col := bounds.Min.X; col < bounds.Max.X; col++ {
 			bits = append(bits, isDark(code.At(col, bounds.Min.Y)))
 		}
-		sym.Stripes = runsFromBits(bits, QuietModules)
+		sym.Stripes = runsFromBits(bits, quiet)
 		for _, stripe := range sym.Stripes {
 			sym.Modules += stripe
 		}
@@ -88,53 +108,56 @@ func Encode(kind, value string) (*Symbol, error) {
 	}
 
 	sym.TwoD = true
+	sym.Modules = bounds.Dx() + 2*quiet
+	sym.CrossModules = bounds.Dy() + 2*quiet
+	// The quiet zone runs round all four sides, so it is a band of wholly
+	// light rows above and below as well as a margin within every data row.
+	for count := 0; count < quiet; count++ {
+		sym.Rows = append(sym.Rows, []int{sym.Modules})
+	}
 	for row := bounds.Min.Y; row < bounds.Max.Y; row++ {
 		bits := make([]bool, 0, bounds.Dx())
 		for col := bounds.Min.X; col < bounds.Max.X; col++ {
 			bits = append(bits, isDark(code.At(col, row)))
 		}
-		sym.Rows = append(sym.Rows, runsFromBits(bits, 0))
+		sym.Rows = append(sym.Rows, runsFromBits(bits, quiet))
 	}
-	sym.Modules = bounds.Dx()
-	sym.CrossModules = bounds.Dy()
+	for count := 0; count < quiet; count++ {
+		sym.Rows = append(sym.Rows, []int{sym.Modules})
+	}
 	return sym, nil
 }
 
 // runsFromBits converts a bit pattern into alternating run lengths starting
-// with a dark run, adding a quiet zone at each end when one is asked for.
+// with a light run, adding a quiet zone at each end when one is asked for.
 //
-// A pattern that opens light gets a zero-length dark run first, which is what
-// keeps the alternation unambiguous while letting the runs sum to the whole
-// extent.
+// Polarity is positional: index 0 is light, index 1 dark, and so on,
+// so nothing has to record where the alternation starts. A quiet zone
+// is light and so is the first run, which is why the two fold together
+// and why the common case costs no extra element. A pattern that opens
+// dark -- possible only where the symbology asks for no quiet zone --
+// opens with a zero-length light run, which keeps the alternation unambiguous
+// while letting the runs still sum to the whole extent.
 func runsFromBits(bits []bool, quiet int) []int {
-	var runs []int
-	// dark is the polarity of the next run to emit.
-	dark := true
-	if quiet > 0 {
-		runs = append(runs, 0, quiet)
-	}
-	for index := 0; index < len(bits); {
-		if bits[index] != dark {
-			runs = append(runs, 0)
-			dark = !dark
+	runs := []int{0}
+	// dark is the polarity of the run being accumulated, the last in runs.
+	dark := false
+	for _, bit := range bits {
+		if bit == dark {
+			runs[len(runs)-1]++
 			continue
 		}
-		runLen := 0
-		for index < len(bits) && bits[index] == dark {
-			runLen++
-			index++
-		}
-		runs = append(runs, runLen)
+		runs = append(runs, 1)
 		dark = !dark
 	}
-	if quiet > 0 {
-		if dark {
-			// The next run would be dark, so the last one emitted was light:
-			// fold the trailing quiet zone into it.
-			runs[len(runs)-1] += quiet
-		} else {
-			runs = append(runs, quiet)
-		}
+	runs[0] += quiet
+	switch {
+	case !dark:
+		// The pattern ended light, so the trailing quiet zone folds into
+		// the run already there.
+		runs[len(runs)-1] += quiet
+	case quiet > 0:
+		runs = append(runs, quiet)
 	}
 	return runs
 }
@@ -212,6 +235,63 @@ func checkContent(kind, value string) error {
 		}
 	}
 	return nil
+}
+
+// Scan contrast thresholds, as fractions of full reflectance.
+//
+// A barcode is read in red light -- around 660 nm for a laser scanner and
+// for most linear imagers, and 670 nm is where ISO/IEC 15416 measures the
+// contrast it grades. So what decides whether a symbol scans is how little
+// red it reflects, not how dark a colour looks. Blue, green, brown and
+// purple bars absorb red and read as bars; red, orange and yellow ones
+// reflect it and are very nearly invisible. The same fact in reverse
+// makes yellow, orange and pink perfectly good backgrounds, and blue
+// or green ones unusable.
+const (
+	// MinSymbolContrast is the reflectance difference between paper
+	// and ink that a symbol needs. ISO/IEC 15416 grades this parameter,
+	// and forty per cent is its grade C, the usual floor for retail.
+	MinSymbolContrast = 0.40
+	// MaxInkFraction is the most of the paper's own reflectance that the
+	// ink may reflect, which is the standard's minimum-reflectance rule.
+	MaxInkFraction = 0.5
+)
+
+// CheckContrast reports whether bars of one colour on paper of another
+// can be read, judging both by the red light a scanner uses. Only the
+// red component of each colour is consulted, for the reason above.
+//
+// The judgement is deliberately coarse. It works from the colours a
+// template names and cannot know what the ink, the substrate, or the
+// printer will do to them, so it catches the combinations that cannot work
+// in principle -- yellow bars, a navy background -- and nothing subtler.
+// A symbol going into production still wants verifying off a printed label.
+func CheckContrast(inkRed, paperRed uint8) error {
+	ink, paper := redReflectance(inkRed), redReflectance(paperRed)
+	if paper-ink < MinSymbolContrast {
+		return fmt.Errorf(
+			"the bars reflect %.0f%% of red light and the background %.0f%%, "+
+				"a difference of %.0f%% where a scanner needs %.0f%%",
+			ink*100, paper*100, (paper-ink)*100, MinSymbolContrast*100)
+	}
+	if ink > paper*MaxInkFraction {
+		return fmt.Errorf(
+			"the bars reflect %.0f%% of red light against the background's %.0f%%, "+
+				"and a scanner needs them under %.0f%%",
+			ink*100, paper*100, paper*MaxInkFraction*100)
+	}
+	return nil
+}
+
+// redReflectance is how much red light a colour returns, from its sRGB
+// red component. Reflectance is a linear quantity and sRGB is not, so
+// the component is linearised first by the sRGB transfer function.
+func redReflectance(component uint8) float64 {
+	value := float64(component) / 255
+	if value <= 0.04045 {
+		return value / 12.92
+	}
+	return math.Pow((value+0.055)/1.055, 2.4)
 }
 
 // Metrics is a symbol placed at a module width.

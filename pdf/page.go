@@ -347,14 +347,23 @@ func (ren *renderer) drawImage(con *pdfw.Content, mark *printout.Image) error {
 // drawBarcode paints a symbol as filled rectangles from the
 // stripe geometry the printout carries. No encoding happens here.
 //
-// Bars are black: a printout records no colour for a barcode,
-// because a symbol that is not dark on light does not scan.
+// The paper goes down first and covers the whole box, quiet zones
+// included, so the margin a scanner needs is the colour the template
+// asked for rather than whatever the band left underneath. A printout
+// with no paper leaves that showing, which is the older behaviour.
 func (ren *renderer) drawBarcode(con *pdfw.Content, mark *printout.Barcode) {
 	if mark.Module <= 0 {
 		return
 	}
 	con.Save()
-	con.FillColor(0, 0, 0)
+	if mark.Paper != nil {
+		red, green, blue := parseColor(*mark.Paper)
+		con.FillColor(red, green, blue)
+		con.Rect(mark.Box.Left, mark.Box.Top, mark.Box.Width, mark.Box.Height)
+		con.Fill()
+	}
+	red, green, blue := parseColor(mark.Ink)
+	con.FillColor(red, green, blue)
 	before := con.Len()
 	if len(mark.Rows) > 0 {
 		ren.drawMatrix(con, mark)
@@ -371,15 +380,15 @@ func (ren *renderer) drawBarcode(con *pdfw.Content, mark *printout.Barcode) {
 
 // drawStripes paints a one-dimensional symbol.
 //
-// The symbol is a sequence of alternating bar and space widths
-// along the coding direction, starting with a bar, spanning
-// the whole extent across it.
+// The symbol is a sequence of alternating space and bar widths
+// along the coding direction, starting with the leading quiet zone,
+// spanning the whole extent across it.
 func (ren *renderer) drawStripes(con *pdfw.Content, mark *printout.Barcode) {
 	along := mark.Box.Left
 	if mark.Vertical {
 		along = mark.Box.Top
 	}
-	dark := true
+	dark := false
 	for _, stripe := range mark.Stripes {
 		extent := float64(stripe) * mark.Module
 		if dark && extent > 0 {
@@ -403,7 +412,7 @@ func (ren *renderer) drawMatrix(con *pdfw.Content, mark *printout.Barcode) {
 	for index, row := range mark.Rows {
 		cross := float64(index) * mark.Module
 		along := 0.0
-		dark := true
+		dark := false
 		for _, run := range row {
 			extent := float64(run) * mark.Module
 			if dark && extent > 0 {
@@ -424,8 +433,9 @@ func (ren *renderer) drawMatrix(con *pdfw.Content, mark *printout.Barcode) {
 
 // parseColor reads a #RRGGBB string into components in 0..1.
 //
-// An unreadable colour is black, which is what a printout's own
-// validation makes unreachable.
+// An unreadable colour is black. Nothing validates the spelling of
+// a colour in a printout, so a hand-written one can arrive malformed;
+// black is the reading that keeps text legible and a barcode dark.
 func parseColor(text string) (red, green, blue float64) {
 	if len(text) != 7 || text[0] != '#' {
 		return 0, 0, 0

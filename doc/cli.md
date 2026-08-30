@@ -290,7 +290,7 @@ data
   swatch        base64  92 bytes
   thelarch.jpg  base64  2415 bytes
 page 1  595.276 x 841.89  138 marks
-  barcode  box 70.866,42.52 102.96x18  Code128  "Code 128"  module 0.72  70 stripes
+  barcode  box 70.866,42.52 102.96x18  Code128  "Code 128"  module 0.72  ink #000080  69 stripes
   rectangle  box 70.866,210.413 226.772x16  stroke #F3EDE7  width 0  dash solid  fill #000900
   text  box 79.37,213.613 90.709x9.6  font bold  color #F3EDE7  align left  leading 9.6
     "Film title"
@@ -311,8 +311,9 @@ printable area was judged against. An [xref](printout.md#xref)'s nested marks ar
 under it, which is the only nesting a printout has. Text lines are quoted, one
 per line, under the mark that carries them, so a wrapped paragraph reads as the
 lines the engine actually broke it into. A field a mark does not carry is left
-out rather than written empty: a rectangle with no `stroke` has no `width`, and
-an unrotated barcode does not say so.
+out rather than written empty: a rectangle with no `stroke` has no `width`,
+an unrotated barcode does not say so, and a barcode with no `paper` shows only
+its `ink`.
 
 ## `sr version`
 

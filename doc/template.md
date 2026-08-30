@@ -956,6 +956,8 @@ barcode type="QR-Q" expr="FINAL.PAGE_COUNT" evaltime="page" text="1000" grow=#tr
 | `module` | dimension, narrow bar width | `"10mil"` |
 | `vertical` | boolean | `#false` |
 | `grow` | boolean | `#false` |
+| `ink` | colour, the bars | `"black"` |
+| `paper` | colour, the background | — |
 
 Plus geometry, alignment, `printwhen`, and `style*`.
 
@@ -992,6 +994,72 @@ rather than being padded. Use `format` to fix the width:
 ```kdl
 barcode type="2of5i" expr="PAGE_COUNT" format="%04d"
 ```
+
+Every symbol carries the quiet zone its standard requires: ten modules
+at each end of a 1-D symbol, four all round a QR, one round a Data Matrix,
+none round an Aztec; and the box is sized to include it. A symbol without
+its margin is not read, so this is not something a template can turn off.
+
+#### Colour
+
+`ink` and `paper` are the barcode's own and are **not** taken from the enclosing
+`style`. A style's `color` falls through from every scope outside the element,
+so honouring it here would let a layout that colours its text quietly recolour
+every symbol under it, and change what scans.
+
+`paper` fills the whole box, quiet zone included, before the bars go down.
+Without it nothing is painted and whatever the band left underneath shows
+through -- which is fine over a white page and is the reason `paper` exists
+anywhere else.
+
+Colour is constrained by how a scanner sees. It reads in red light,
+around 660 nm, so what matters is not how dark a colour looks but
+how little red it reflects:
+
+| | Reads | Does not |
+|---|---|---|
+| Bars | black, navy, dark green, brown, purple | red, orange, yellow, light grey |
+| Background | white, yellow, orange, pink, red | navy, dark green, black |
+
+A pair that cannot be read is a **load error**, not a warning:
+
+```kdl
+barcode type="Code128" text="7350053850019" ink="navy" paper="#FFE9B0"
+barcode type="QR-H" text="https://example.invalid/" ink="yellow"
+//                                                  ^ refused: yellow reflects
+//                                                    red light as fully as the
+//                                                    white behind it does
+```
+
+Naming only `ink` measures it against white, because that is what an unprinted
+background is. The check is deliberately coarse: it works from the colours the
+template names and cannot know what ink, paper stock, or printer will do to
+them, so it catches what cannot work in principle and nothing subtler.
+A symbol going into production still wants verifying off a printed label.
+
+#### Drawing over a symbol
+
+Nothing in `barcode` places a logo, and nothing needs to: document order
+is paint order, so an element declared after a barcode lands on top of it.
+A QR code with a logo in the middle is a `barcode`, then a filled `rectangle`,
+then an `image`:
+
+```kdl
+barcode type="QR-H" text="https://example.invalid/" grow=#true paper="white" \
+        right=0 width="18mm" top="2mm" height="18mm"
+rectangle stroke=#false left="165mm" right="6mm" top="8mm" height="6mm" {
+  style bgcolor="white"
+}
+image file="logo.png" right="6.75mm" width="4.5mm" top="8.75mm" height="4.5mm"
+```
+
+What keeps it readable is the error-correction level (`QR-H` recovers about
+30% of the symbol) and covering well inside that budget, centrally, where only
+data and error-correction modules live. The white rectangle matters too:
+without it the logo's own edges read as modules. `grow` with an explicit square
+box is what makes the overlay's position predictable enough to write down.
+
+See [invoices.kdl](../example/invoices/invoices.kdl) for the worked example.
 
 Barcodes are always embedded in the printout, as stripe geometry
 rather than a bitmap; see [printout.md](printout.md#barcode).
