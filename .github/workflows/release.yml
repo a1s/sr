@@ -1,0 +1,238 @@
+name: Release
+
+# A release is published by pushing a version tag.
+#
+# The pattern below is the glob GitHub understands; the verify job re-checks
+# the tag as a real regexp and refuses anything the glob lets through.
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # A tag only releases when its commit is on this branch.
+  RELEASE_BRANCH: main
+
+jobs:
+  verify:
+    name: Verify tag
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+      date: ${{ steps.check.outputs.date }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The branch check needs the branch, not just the tagged commit.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Check the tag against the branch and the changelog
+        id: check
+        run: |
+          set -euo pipefail
+          tag="$GITHUB_REF_NAME"
+
+          if ! printf '%s' "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::$tag is not a vMAJOR.MINOR.PATCH release tag"
+            exit 1
+          fi
+          version="${tag#v}"
+
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" "origin/$RELEASE_BRANCH"; then
+            echo "::error::$tag points at a commit that is not on $RELEASE_BRANCH"
+            exit 1
+          fi
+
+          changelog_version="$(make -s version)"
+          if [ "$changelog_version" != "$version" ]; then
+            echo "::error::CHANGELOG.md heads with $changelog_version, but the tag says $version"
+            exit 1
+          fi
+
+          # Both the binary and the archive around it are stamped with
+          # the tagged commit's timestamp rather than the time of the run,
+          # which is what lets a rebuild of one tag produce the same files.
+          date="$(TZ=UTC0 git log -1 --format=%cd --date=format-local:%Y-%m-%dT%H:%M:%SZ)"
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "date=$date" >> "$GITHUB_OUTPUT"
+
+      - name: Extract the release notes
+        run: |
+          bash .github/scripts/changelog-section.sh '${{ steps.check.outputs.version }}' \
+            > release-notes.md
+          cat release-notes.md
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-notes
+          path: release-notes.md
+          if-no-files-found: error
+
+  # Font enumeration is per-platform and build-tagged, so the tests
+  # have to run on each platform the release ships a binary for --
+  # that code compiles everywhere and works in one place.
+  test:
+    name: Test ${{ matrix.os }}
+    needs: verify
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # Report every platform, rather than letting the first failure hide
+      # what the others would have said.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      # Called directly rather than through `make vet` and `make test`: the
+      # makefile wants a POSIX shell, which the Windows runner does not give
+      # it by default.  The targets run the same two commands.
+      - run: go vet ./...
+      - run: go test ./...
+
+  lint:
+    name: Lint
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      # The test matrix runs each platform's code, but vet only inspects
+      # the files its own GOOS selects, so point it at each one in turn.
+      - run: GOOS=linux go vet ./...
+      - run: GOOS=darwin go vet ./...
+      - run: GOOS=windows go vet ./...
+      # Pinned: an unpinned linter turns a new upstream check
+      # into a release that cannot be cut.
+      - name: Install golangci-lint
+        run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.11.3
+      - run: make lint
+
+  source:
+    name: Source archive
+    needs: [verify, test, lint]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the source archive
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: make dist-source
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-source
+          path: dist/*
+          if-no-files-found: error
+
+  build:
+    name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
+    needs: [verify, test, lint]
+    runs-on: ubuntu-latest
+    strategy:
+      # The binaries are one release: if any platform fails, none ship.
+      fail-fast: true
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+          - goos: windows
+            goarch: amd64
+          - goos: windows
+            goarch: arm64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build the binary archive
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          # The tree has no cgo, so every platform cross-compiles from here
+          # and the binaries stay static.
+          CGO_ENABLED: '0'
+          RELEASE: '1'
+          VERSION: ${{ needs.verify.outputs.version }}
+          DATE: ${{ needs.verify.outputs.date }}
+        run: make dist-binary
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    name: Publish release
+    needs: [verify, source, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      # `make checksums` reaches the makefile's `go env` probe.
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: staging
+
+      - name: Collect the archives and checksum them
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          find staging -type f \
+            \( -name '*.tar.gz' -o -name '*.zip' \) \
+            -exec cp -t dist -- {} +
+          make checksums
+          ls -l dist
+          cat dist/SHA256SUMS
+
+      - name: Create or update the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          NOTES: staging/release-notes/release-notes.md
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" \
+              --title "$TAG" \
+              --notes-file "$NOTES" \
+              --draft=false \
+              --prerelease=false
+            gh release upload "$TAG" dist/* --clobber
+          else
+            gh release create "$TAG" dist/* \
+              --title "$TAG" \
+              --notes-file "$NOTES"
+          fi
