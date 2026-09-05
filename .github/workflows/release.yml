@@ -1,0 +1,193 @@
+name: Release
+
+# A release is published by pushing a version tag.
+#
+# The pattern below is the glob GitHub understands; the verify job re-checks
+# the tag as a real regexp and refuses anything the glob lets through.
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # A tag only releases when its commit is on this branch.
+  RELEASE_BRANCH: main
+
+jobs:
+  verify:
+    name: Verify tag
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+      date: ${{ steps.check.outputs.date }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The branch check needs the branch, not just the tagged commit.
+          fetch-depth: 0
+
+      - name: Check the tag against the branch and the changelog
+        id: check
+        run: |
+          set -euo pipefail
+          tag="$GITHUB_REF_NAME"
+
+          if ! printf '%s' "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::$tag is not a vMAJOR.MINOR.PATCH release tag"
+            exit 1
+          fi
+          version="${tag#v}"
+
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" "origin/$RELEASE_BRANCH"; then
+            echo "::error::$tag points at a commit that is not on $RELEASE_BRANCH"
+            exit 1
+          fi
+
+          changelog_version="$(make -s version)"
+          if [ "$changelog_version" != "$version" ]; then
+            echo "::error::CHANGELOG.md heads with $changelog_version, but the tag says $version"
+            exit 1
+          fi
+
+          # Every artifact carries the tagged commit's timestamp rather than
+          # the time of the run, so rebuilding a tag yields the same files.
+          date="$(TZ=UTC0 git log -1 --format=%cd --date=format-local:%Y-%m-%dT%H:%M:%SZ)"
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "date=$date" >> "$GITHUB_OUTPUT"
+
+      - name: Extract the release notes
+        run: |
+          bash .github/scripts/changelog-section.sh '${{ steps.check.outputs.version }}' \
+            > release-notes.md
+          cat release-notes.md
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-notes
+          path: release-notes.md
+          if-no-files-found: error
+
+  test:
+    name: Test
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: make vet
+      - run: make test
+
+  source:
+    name: Source archive
+    needs: [verify, test]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the source archive
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: make dist-source
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-source
+          path: dist/*
+          if-no-files-found: error
+
+  build:
+    name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
+    needs: [verify, test]
+    runs-on: ubuntu-latest
+    strategy:
+      # The binaries are one release: if any platform fails, none ship.
+      fail-fast: true
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+          - goos: windows
+            goarch: amd64
+          - goos: windows
+            goarch: arm64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build the binary archive
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          # The tree has no cgo, so every platform cross-compiles from here
+          # and the binaries stay static.
+          CGO_ENABLED: '0'
+          RELEASE: '1'
+          VERSION: ${{ needs.verify.outputs.version }}
+          DATE: ${{ needs.verify.outputs.date }}
+        run: make dist-binary
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    name: Publish release
+    needs: [verify, source, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: staging
+
+      - name: Collect the archives and checksum them
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          find staging -type f \
+            \( -name '*.tar.gz' -o -name '*.zip' \) \
+            -exec cp -t dist -- {} +
+          make checksums
+          ls -l dist
+          cat dist/SHA256SUMS
+
+      - name: Create or update the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          NOTES: staging/release-notes/release-notes.md
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" \
+              --title "$TAG" \
+              --notes-file "$NOTES" \
+              --draft=false \
+              --prerelease=false
+            gh release upload "$TAG" dist/* --clobber
+          else
+            gh release create "$TAG" dist/* \
+              --title "$TAG" \
+              --notes-file "$NOTES"
+          fi
