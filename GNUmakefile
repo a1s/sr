@@ -6,7 +6,7 @@ DATE      ?= $(shell date -u '+%Y-%m-%dT%H:%M:%SZ')
 
 BUILD_DIR ?= out
 DIST_DIR  ?= dist
-TARBALL   := $(DIST_DIR)/$(NAME)-$(VERSION).tar.gz
+TARBALL   := $(DIST_DIR)/$(NAME)-$(VERSION)-source.tar.gz
 
 ### Build settings
 GO ?= go
@@ -35,6 +35,14 @@ ifeq ($(GOOS),windows)
 else
 	ARCHIVE := $(STAGE_DIR).tar.gz
 endif
+
+# Reproducible archives need GNU tar 1.28 or newer, for --sort and
+# --mtime.  macOS ships bsdtar as tar, so set TAR=gtar there.
+TAR ?= tar
+
+# Flags that leave GNU tar output depending on the file contents alone:
+# a fixed entry order, no owner names, and one pinned timestamp.
+TAR_REPRO := --sort=name --owner=0 --group=0 --numeric-owner --mtime='$(DATE)'
 
 # macOS ships shasum where Linux ships sha256sum.
 SHA256 ?= $(shell command -v sha256sum >/dev/null 2>&1 && echo sha256sum || echo shasum -a 256)
@@ -101,22 +109,33 @@ dist-source: dist-dir
 
 # One binary archive for the current GOOS/GOARCH,
 # carrying the docs a user needs to make sense of the binary.
+#
+# Everything that would otherwise vary between runs is pinned:
+# the staged files take DATE for their mtime, the entries go in
+# sorted order, and gzip -n keeps its own timestamp out of the header.
+# Two runs of one tag then produce byte-identical archives.
 dist-binary: build dist-dir
+	@$(TAR) --version | head -1 | grep -q 'GNU tar' \
+		|| { echo 'dist-binary needs GNU tar 1.28+; set TAR=gtar' >&2; exit 1; }
 	rm -rf $(STAGE_DIR)
 	mkdir -p $(STAGE_DIR)
 	cp $(BINARY) README.md LICENSE CHANGELOG.md $(STAGE_DIR)/
 	cp -r doc $(STAGE_DIR)/doc
+	find $(STAGE_DIR) -exec touch -d '$(DATE)' {} +
 	rm -f $(ARCHIVE)
 ifeq ($(GOOS),windows)
-	cd $(DIST_DIR) && zip -q -r $(notdir $(ARCHIVE)) $(notdir $(STAGE_DIR))
+	cd $(DIST_DIR) && find $(notdir $(STAGE_DIR)) | sort | zip -q -X -@ $(notdir $(ARCHIVE))
 else
-	tar -czf $(ARCHIVE) -C $(DIST_DIR) $(notdir $(STAGE_DIR))
+	$(TAR) $(TAR_REPRO) -C $(DIST_DIR) -cf - $(notdir $(STAGE_DIR)) | gzip -n > $(ARCHIVE)
 endif
 	rm -rf $(STAGE_DIR)
 
 dist: dist-source dist-binary
 
 # SHA-256 over every archive present, so a download can be checked.
+#
+# grep exiting 1 on an empty dist breaks the && chain and fails the
+# recipe, rather than leaving sha256sum to read stdin and hash nothing.
 checksums:
-	rm -f $(DIST_DIR)/SHA256SUMS
-	cd $(DIST_DIR) && $(SHA256) $$(ls -1 | grep -E '\.(tar\.gz|zip)$$') > SHA256SUMS
+	cd $(DIST_DIR) && archives=$$(ls -1 | grep -E '\.(tar\.gz|zip)$$') \
+		&& $(SHA256) $$archives > SHA256SUMS

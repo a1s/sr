@@ -33,6 +33,11 @@ jobs:
           # The branch check needs the branch, not just the tagged commit.
           fetch-depth: 0
 
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
       - name: Check the tag against the branch and the changelog
         id: check
         run: |
@@ -56,8 +61,9 @@ jobs:
             exit 1
           fi
 
-          # Every artifact carries the tagged commit's timestamp rather than
-          # the time of the run, so rebuilding a tag yields the same files.
+          # Both the binary and the archive around it are stamped with
+          # the tagged commit's timestamp rather than the time of the run,
+          # which is what lets a rebuild of one tag produce the same files.
           date="$(TZ=UTC0 git log -1 --format=%cd --date=format-local:%Y-%m-%dT%H:%M:%SZ)"
 
           echo "version=$version" >> "$GITHUB_OUTPUT"
@@ -75,8 +81,33 @@ jobs:
           path: release-notes.md
           if-no-files-found: error
 
+  # Font enumeration is per-platform and build-tagged, so the tests
+  # have to run on each platform the release ships a binary for --
+  # that code compiles everywhere and works in one place.
   test:
-    name: Test
+    name: Test ${{ matrix.os }}
+    needs: verify
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # Report every platform, rather than letting the first failure hide
+      # what the others would have said.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      # Called directly rather than through `make vet` and `make test`: the
+      # makefile wants a POSIX shell, which the Windows runner does not give
+      # it by default.  The targets run the same two commands.
+      - run: go vet ./...
+      - run: go test ./...
+
+  lint:
+    name: Lint
     needs: verify
     runs-on: ubuntu-latest
     steps:
@@ -85,12 +116,20 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - run: make vet
-      - run: make test
+      # The test matrix runs each platform's code, but vet only inspects
+      # the files its own GOOS selects, so point it at each one in turn.
+      - run: GOOS=linux go vet ./...
+      - run: GOOS=darwin go vet ./...
+      - run: GOOS=windows go vet ./...
+      # Pinned: an unpinned linter turns a new upstream check
+      # into a release that cannot be cut.
+      - name: Install golangci-lint
+        run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.11.3
+      - run: make lint
 
   source:
     name: Source archive
-    needs: [verify, test]
+    needs: [verify, test, lint]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -106,7 +145,7 @@ jobs:
 
   build:
     name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
-    needs: [verify, test]
+    needs: [verify, test, lint]
     runs-on: ubuntu-latest
     strategy:
       # The binaries are one release: if any platform fails, none ship.
@@ -156,6 +195,12 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+
+      # `make checksums` reaches the makefile's `go env` probe.
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
 
       - uses: actions/download-artifact@v4
         with:
