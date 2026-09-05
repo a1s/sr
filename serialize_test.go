@@ -101,9 +101,30 @@ func TestCBORRoundTrip(test *testing.T) {
 // Check that it is written relative to wherever the printout is being written;
 // and one printout serialized to two directories carries two different values, both right.
 func TestFontPathIsRelativeToThePrintout(test *testing.T) {
-	out := buildString(test, minimal, rowsOf(1))
+	// A relative path exists only between two paths on one Windows volume;
+	// across drives the format writes the font absolute, by design.
+	// A temporary directory need not be on the drive the checkout is on --
+	// the GitHub runner puts TEMP on C: and the working copy on D: --
+	// so the font is copied next to the destination, and the case under test
+	// is the case that runs.
+	root := test.TempDir()
+	fonts := filepath.Join(root, "fonts")
+	if err := os.MkdirAll(fonts, 0o755); err != nil {
+		test.Fatal(err)
+	}
+	face, err := os.ReadFile(filepath.Join("example", "fonts", "Go-Regular.ttf"))
+	if err != nil {
+		test.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(fonts, "Go-Regular.ttf"), face, 0o644); err != nil {
+		test.Fatal(err)
+	}
 
-	dir := test.TempDir()
+	out := buildStringAt(test, filepath.Join(fonts, "test.kdl"), minimal, rowsOf(1))
+
+	// The printout goes in a directory of its own, so the last check below
+	// sees only what writing it put there.
+	dir := filepath.Join(root, "out")
 	deep := filepath.Join(dir, "a", "b")
 	if err := os.MkdirAll(deep, 0o755); err != nil {
 		test.Fatal(err)

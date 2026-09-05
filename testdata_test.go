@@ -18,7 +18,21 @@ var fixedTime = time.Date(2026, 8, 4, 9, 12, 44, 0, time.UTC)
 // no outcome depends on what is installed on the machine.
 func buildString(test *testing.T, source string, rows []map[string]any, options ...Option) *Printout {
 	test.Helper()
-	tpl, err := ParseTemplate("example/fonts/test.kdl", source)
+	return buildStringAt(test, "example/fonts/test.kdl", source, rows, options...)
+}
+
+// buildStringAt is buildString with the template's path given.
+//
+// The path fixes the directory a `font file=` name resolves against.
+// The font tests have to place font files relative to this path.
+func buildStringAt(
+	test *testing.T,
+	path, source string,
+	rows []map[string]any,
+	options ...Option,
+) *Printout {
+	test.Helper()
+	tpl, err := ParseTemplate(path, source)
 	if err != nil {
 		test.Fatalf("loading the template:\n%v", err)
 	}
