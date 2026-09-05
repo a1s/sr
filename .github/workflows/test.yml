@@ -1,7 +1,8 @@
 name: Test
 
-# Every change gets the same checks the release runs, so a tag
-# never discovers a problem a pull request could have caught.
+# The one definition of what "the code is in good shape" means.
+# Pull requests run it, and the release calls it through workflow_call,
+# so a tag cannot enforce a different bar than the PR that was merged.
 #
 # Pushes to main are covered too: a PR is tested against its own merge
 # commit, which is not what ends up on the branch after other PRs land.
@@ -10,12 +11,15 @@ on:
   push:
     branches:
       - main
+  # Called by the release workflow, which gates the build on these jobs.
+  workflow_call:
 
 permissions:
   contents: read
 
 # A new push to a pull request makes the previous run's answer stale,
-# so drop it.  Runs on main are kept: each one reports its own commit.
+# so drop it.  Runs on main are kept: each one reports its own commit,
+# and so are release runs, which must not cancel a half-finished build.
 concurrency:
   group: test-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -80,8 +84,8 @@ jobs:
       - run: GOOS=linux go vet ./...
       - run: GOOS=darwin go vet ./...
       - run: GOOS=windows go vet ./...
-      # Pinned to the version the release uses, so a new upstream check
-      # surfaces here on a deliberate bump instead of on a release day.
+      # Pinned: an unpinned linter turns a new upstream check
+      # into a release that cannot be cut.
       - name: Install golangci-lint
         run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.11.3
       - run: make lint
