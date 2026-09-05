@@ -28,12 +28,12 @@ jobs:
       version: ${{ steps.check.outputs.version }}
       date: ${{ steps.check.outputs.date }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # The branch check needs the branch, not just the tagged commit.
           fetch-depth: 0
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
@@ -75,69 +75,30 @@ jobs:
             > release-notes.md
           cat release-notes.md
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: release-notes
           path: release-notes.md
           if-no-files-found: error
 
-  # Font enumeration is per-platform and build-tagged, so the tests
-  # have to run on each platform the release ships a binary for --
-  # that code compiles everywhere and works in one place.
-  test:
-    name: Test ${{ matrix.os }}
+  # The same vet, test, lint and format checks a pull request gets,
+  # run here from their own file rather than copied into this one.
+  checks:
+    name: Checks
     needs: verify
-    runs-on: ${{ matrix.os }}
-    strategy:
-      # Report every platform, rather than letting the first failure hide
-      # what the others would have said.
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-          cache: true
-      # Called directly rather than through `make vet` and `make test`: the
-      # makefile wants a POSIX shell, which the Windows runner does not give
-      # it by default.  The targets run the same two commands.
-      - run: go vet ./...
-      - run: go test ./...
-
-  lint:
-    name: Lint
-    needs: verify
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-          cache: true
-      # The test matrix runs each platform's code, but vet only inspects
-      # the files its own GOOS selects, so point it at each one in turn.
-      - run: GOOS=linux go vet ./...
-      - run: GOOS=darwin go vet ./...
-      - run: GOOS=windows go vet ./...
-      # Pinned: an unpinned linter turns a new upstream check
-      # into a release that cannot be cut.
-      - name: Install golangci-lint
-        run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.11.3
-      - run: make lint
+    uses: ./.github/workflows/test.yml
 
   source:
     name: Source archive
-    needs: [verify, test, lint]
+    needs: [verify, checks]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Build the source archive
         env:
           VERSION: ${{ needs.verify.outputs.version }}
         run: make dist-source
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist-source
           path: dist/*
@@ -145,7 +106,7 @@ jobs:
 
   build:
     name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
-    needs: [verify, test, lint]
+    needs: [verify, checks]
     runs-on: ubuntu-latest
     strategy:
       # The binaries are one release: if any platform fails, none ship.
@@ -165,8 +126,8 @@ jobs:
           - goos: windows
             goarch: arm64
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
@@ -181,7 +142,7 @@ jobs:
           VERSION: ${{ needs.verify.outputs.version }}
           DATE: ${{ needs.verify.outputs.date }}
         run: make dist-binary
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist-${{ matrix.goos }}-${{ matrix.goarch }}
           path: dist/*
@@ -194,15 +155,15 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # `make checksums` reaches the makefile's `go env` probe.
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: staging
 
