@@ -78,6 +78,16 @@ type shared struct {
 	glyphWarned map[string]bool
 	groupRuns   map[string]int
 	groupKeys   map[string]map[string]bool
+	// outlineXrefs is every xref of type "outline" the document built,
+	// in build order. Whether a target exists is only known when the
+	// document ends, since the entry may be on a later page.
+	outlineXrefs []xrefSite
+	// bands is every band committed to a page, for the margin check,
+	// which runs when the coordinates are final.
+	bands []bandSite
+	// overflowed is the bands already reported for fitting no frame,
+	// which are not reported a second time for leaving the page.
+	overflowed map[string]bool
 }
 
 // unit is one template's state, kept between the invocations of a subreport:
@@ -172,6 +182,13 @@ func Build(report *tmpl.Report, rows []map[string]any, opts Options) (*printout.
 	}
 
 	eng.finish()
+	if err := eng.settleOutline(); err != nil {
+		return nil, err
+	}
+	if err := eng.checkMargins(); err != nil {
+		return nil, err
+	}
+	eng.pruneBlobs()
 	return eng.out, nil
 }
 
@@ -198,6 +215,7 @@ func newEngine(report *tmpl.Report, opts Options) *engine {
 		glyphWarned: map[string]bool{},
 		groupRuns:   map[string]int{},
 		groupKeys:   map[string]map[string]bool{},
+		overflowed:  map[string]bool{},
 	}
 	eng := &engine{
 		report:  report,
@@ -458,10 +476,11 @@ func (eng *engine) face(name string) (*fontres.Face, error) {
 	}
 	def, ok := eng.report.FontByName[name]
 	if !ok {
-		return nil, fmt.Errorf("no font named %q", name)
+		return nil, fmt.Errorf("no font named '%s'", name)
 	}
 	face, err := eng.resolver.Resolve(fontres.Request{
 		Name:      def.Name,
+		Node:      fontNodePath(def),
 		Typeface:  def.Typeface,
 		File:      def.File,
 		Data:      def.Data,
@@ -691,13 +710,23 @@ func (eng *engine) finish() {
 		}
 		eng.out.Header.GroupKeys = keys
 	}
+	// A name the format does not define is a document warning:
+	// it was found while the template was read, before any data,
+	// so it carries no record. The other load diagnostics are
+	// about the template rather than the document, and stay
+	// out of the printout.
+	for _, diag := range eng.report.Warnings {
+		if diag.Unknown {
+			eng.out.AddLoadWarning(printout.WarnUnknown, diag.Path, diag.Message)
+		}
+	}
 	// A typeface that reached the substitute is a document warning;
 	// a font file on the machine that this report did not use is not.
 	// Every template in the document resolves through a resolver of its own,
 	// so a subreport's substituted typeface is reported here too.
 	for _, resolver := range eng.doc.resolvers {
 		for _, warning := range resolver.Warnings {
-			eng.out.AddWarning(printout.WarnFont, "", 0, warning)
+			eng.out.AddLoadWarning(printout.WarnFont, warning.Node, warning.Message)
 		}
 		if eng.opts.Diagnostics != nil {
 			for _, diag := range resolver.Diagnostics {
@@ -710,9 +739,28 @@ func (eng *engine) finish() {
 // overflow reports an oversized band, or records a warning
 // when the caller has asked for overflow to be tolerated.
 func (eng *engine) overflow(node, message string) error {
+	eng.doc.overflowed[overflowKey(node, eng.index)] = true
+	return eng.overflowAt(node, eng.index, message)
+}
+
+// overflowAt reports an oversized band or a band outside the printable area,
+// for a record that may not be the one being built: the margin check runs
+// when the document ends.
+func (eng *engine) overflowAt(node string, record int, message string) error {
 	if !eng.opts.AllowOverflow {
 		return fmt.Errorf("%s: %s", node, message)
 	}
-	eng.out.AddWarning(printout.WarnOverflow, node, eng.index, message)
+	eng.out.AddWarning(printout.WarnOverflow, node, record, message)
 	return nil
+}
+
+// fontNodePath is the node path a font's warning names.
+//
+// A font resolved for a subreport belongs to that subreport's document,
+// and its node carries the path within it.
+func fontNodePath(def *tmpl.Font) string {
+	if def == nil || def.Node == nil {
+		return ""
+	}
+	return def.Node.Path()
 }

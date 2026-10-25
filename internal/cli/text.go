@@ -88,8 +88,8 @@ func describeSize(page printout.PageGeometry) string {
 // The kind, then the record and the node when they are known, then the message.
 func describeWarning(warning printout.Warning) string {
 	parts := []string{warning.Kind}
-	if warning.Record > 0 {
-		parts = append(parts, fmt.Sprintf("record %d", warning.Record))
+	if warning.Record != nil {
+		parts = append(parts, fmt.Sprintf("record %d", *warning.Record))
 	}
 	if warning.Node != "" {
 		parts = append(parts, warning.Node)

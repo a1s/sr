@@ -198,7 +198,7 @@ func TestSubreportRequiredParameterIsALoadError(test *testing.T) {
 	if err == nil {
 		test.Fatal("want the unsupplied parameter reported")
 	}
-	if !strings.Contains(err.Error(), `"label"`) {
+	if !strings.Contains(err.Error(), `'label'`) {
 		test.Errorf("diagnostic = %v", err)
 	}
 }
@@ -406,7 +406,7 @@ func TestSubreportCycleIsRefused(test *testing.T) {
 	if err == nil {
 		test.Fatal("want the cycle reported")
 	}
-	if !strings.Contains(err.Error(), "includes itself") {
+	if !strings.Contains(err.Error(), "reaches the template it came from") {
 		test.Errorf("diagnostic = %v", err)
 	}
 }
@@ -421,10 +421,16 @@ func TestInlineSubreportRestrictions(test *testing.T) {
 		bands string
 		want  string
 	}{
-		{"header", `header height=10 { field text="h" left=0 right=0 }`, "header and footer"},
-		{"footer", `footer height=10 { field text="f" left=0 right=0 }`, "header and footer"},
-		{"swapheader", `title swapheader=#true height=10 { field text="t" left=0 right=0 }`, "swapheader"},
-		{"swapfooter", `summary swapfooter=#true height=10 { field text="s" left=0 right=0 }`, "swapfooter"},
+		{"header", `header height=10 { field text="h" left=0 right=0 }`,
+			"defines no header and no footer"},
+		{"footer", `footer height=10 { field text="f" left=0 right=0 }`,
+			"defines no header and no footer"},
+		{"swapheader",
+			`title swapheader=#true height=10 { field text="t" left=0 right=0 }`,
+			"swapheader"},
+		{"swapfooter",
+			`summary swapfooter=#true height=10 { field text="s" left=0 right=0 }`,
+			"cannot swap with a page footer it does not own"},
 	}
 	for _, item := range cases {
 		test.Run(item.name, func(test *testing.T) {
@@ -555,8 +561,8 @@ func TestSubreportOnAHeaderIsRefused(test *testing.T) {
 	}
 }
 
-// A layout that names itself recurses on the data, and stops at a fixed depth
-// rather than at the stack.
+// A layout that names itself recurses on the data,
+// and stops at a fixed depth rather than at the stack.
 func TestSubreportNestingIsBounded(test *testing.T) {
 	const src = `report name="host" {
   records { member "sku" type="string" }
@@ -644,7 +650,7 @@ func TestSubreportOnASwappedBandIsRefused(test *testing.T) {
 		if err == nil {
 			test.Fatalf("want a subreport on %s refused", band[:7])
 		}
-		if !strings.Contains(err.Error(), "outside the frame") {
+		if !strings.Contains(err.Error(), "beyond the frame's own reservation") {
 			test.Errorf("diagnostic = %v", err)
 		}
 	}
@@ -923,7 +929,7 @@ func TestDuplicateEmbeddedSiblingsAreRefused(test *testing.T) {
 	if err == nil {
 		test.Fatal("want the duplicate nested name refused")
 	}
-	if !strings.Contains(err.Error(), "duplicate embedded layout") {
+	if !strings.Contains(err.Error(), "is declared twice here") {
 		test.Errorf("diagnostic = %v", err)
 	}
 }

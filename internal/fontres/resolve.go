@@ -16,7 +16,9 @@ import (
 
 // Request is one `font` node: what the template asked for.
 type Request struct {
-	Name      string
+	Name string
+	// Node is the font node's path, for a warning to name.
+	Node      string
 	Typeface  string
 	File      string
 	Data      string
@@ -48,7 +50,7 @@ type Resolver struct {
 	Diagnostics []string
 	// Warnings describe the document: a typeface that reached the substitute,
 	// or a candidate substitute that is not in fact monospaced.
-	Warnings []string
+	Warnings []Warning
 
 	table   map[faceKey]*FaceInfo
 	scanned bool
@@ -183,10 +185,12 @@ func (resolver *Resolver) resolve(req Request) (*Face, error) {
 		return nil, fmt.Errorf("font %q: typeface %q: %w", req.Name, req.Typeface, err)
 	}
 	face.Requested = req.Typeface
-	resolver.Warnings = append(resolver.Warnings,
-		fmt.Sprintf(
+	resolver.Warnings = append(resolver.Warnings, Warning{
+		Node: req.Node,
+		Message: fmt.Sprintf(
 			"typeface %q was not found; text is set in the substitute face %q and may overflow or overlap",
-			req.Typeface, face.ResolvedFace))
+			req.Typeface, face.ResolvedFace),
+	})
 	return face, nil
 }
 
@@ -212,9 +216,12 @@ func (resolver *Resolver) checkDeclaredStyle(req Request, actual Style, source s
 	if len(wrong) == 0 {
 		return
 	}
-	resolver.Warnings = append(resolver.Warnings, fmt.Sprintf(
-		"font %q declares %s, and the face taken from %s is not; no weight or slant is synthesized, and the printout records the declaration as it stands",
-		req.Name, strings.Join(wrong, " and "), source))
+	resolver.Warnings = append(resolver.Warnings, Warning{
+		Node: req.Node,
+		Message: fmt.Sprintf(
+			"font %q declares %s, and the face taken from %s is not; no weight or slant is synthesized, and the printout records the declaration as it stands",
+			req.Name, strings.Join(wrong, " and "), source),
+	})
 }
 
 // lookupHost matches a family against the enumerated table, case-insensitively.
@@ -414,9 +421,11 @@ func (resolver *Resolver) checkMonospaced(face *Face) {
 			continue
 		}
 		if adv != width {
-			resolver.Warnings = append(resolver.Warnings, fmt.Sprintf(
-				"the substitute face %q is not monospaced over Latin-1 (%g against %g units), so text set in it may overlap rather than overflow visibly",
-				face.ResolvedFace, adv, width))
+			resolver.Warnings = append(resolver.Warnings, Warning{
+				Message: fmt.Sprintf(
+					"the substitute face %q is not monospaced over Latin-1 (%g against %g units), so text set in it may overlap rather than overflow visibly",
+					face.ResolvedFace, adv, width),
+			})
 			return
 		}
 	}
@@ -445,3 +454,17 @@ func (resolver *Resolver) HostFamilies() []string {
 	sort.Strings(out)
 	return out
 }
+
+// Warning is a diagnostic about the document rather than the machine.
+//
+// Node is the font node it is about, as a printout warning names one;
+// a warning about the substitute face itself has none, since it describes
+// what the machine offered rather than what a template asked for.
+type Warning struct {
+	Node    string
+	Message string
+}
+
+// String is the message, so that a report listing warnings reads them
+// without knowing where each came from.
+func (warning Warning) String() string { return warning.Message }

@@ -21,19 +21,19 @@ type Printout struct {
 
 // Header is the printout's first line.
 type Header struct {
-	SR          int              `json:"sr"`
-	Kind        string           `json:"kind"`
-	Report      *ReportMeta      `json:"report,omitempty"`
-	Built       string           `json:"built"`
-	Engine      string           `json:"engine"`
-	StrictFonts bool             `json:"strictFonts"`
-	Pages       int              `json:"pages"`
-	GroupRuns   map[string]int   `json:"groupRuns,omitempty"`
-	GroupKeys   map[string]int   `json:"groupKeys,omitempty"`
-	Page        PageGeometry     `json:"page"`
-	Fonts       []FontEntry      `json:"fonts"`
-	Data        map[string]*Blob `json:"data"`
-	Warnings    []Warning        `json:"warnings,omitempty"`
+	SR          int          `json:"sr"`
+	Kind        string       `json:"kind"`
+	Report      *ReportMeta  `json:"report,omitempty"`
+	Built       string       `json:"built"`
+	Engine      string       `json:"engine"`
+	StrictFonts bool         `json:"strictFonts"`
+	Pages       int          `json:"pages"`
+	GroupRuns   CountTable   `json:"groupRuns,omitempty"`
+	GroupKeys   CountTable   `json:"groupKeys,omitempty"`
+	Page        PageGeometry `json:"page"`
+	Fonts       []FontEntry  `json:"fonts"`
+	Data        BlobTable    `json:"data"`
+	Warnings    []Warning    `json:"warnings,omitempty"`
 }
 
 // ReportMeta is what the template's report node carried.
@@ -104,10 +104,17 @@ type Blob struct {
 // Warning is a diagnostic about the document, recorded in the header
 // so an affected printout is identifiable from the artifact.
 type Warning struct {
-	// Kind is "overflow", "glyph", or "font".
-	Kind    string `json:"kind"`
-	Node    string `json:"node,omitempty"`
-	Record  int    `json:"record,omitempty"`
+	// Kind is "overflow", "glyph", "font", or "unknown".
+	Kind string `json:"kind"`
+	Node string `json:"node,omitempty"`
+	// Record is the index of the record the warning was raised for,
+	// and is nil for one no record produced: a font that reached
+	// the substitute is found before any data is read.
+	//
+	// It is a pointer because record 0 is a record like any other,
+	// and a plain int with omitempty would drop the first record's
+	// warnings into the shape of a load diagnostic.
+	Record  *int   `json:"record,omitempty"`
 	Message string `json:"message"`
 }
 
@@ -116,6 +123,9 @@ const (
 	WarnOverflow = "overflow"
 	WarnGlyph    = "glyph"
 	WarnFont     = "font"
+	// WarnUnknown is a node or property the format does not define,
+	// accepted and ignored. See doc/template.md#unknown-names.
+	WarnUnknown = "unknown"
 )
 
 // Page is one page of marks.
@@ -350,8 +360,19 @@ func NewXref() *Xref { return &Xref{Kind: "xref"} }
 
 // AddWarning records a document warning in the header.
 func (doc *Printout) AddWarning(kind, node string, record int, message string) {
+	at := record
 	doc.Header.Warnings = append(doc.Header.Warnings, Warning{
-		Kind: kind, Node: node, Record: record, Message: message,
+		Kind: kind, Node: node, Record: &at, Message: message,
+	})
+}
+
+// AddLoadWarning records a warning that no record produced.
+//
+// Every warning raised while the template is read is one:
+// there is no record yet to name, and naming one would be a guess.
+func (doc *Printout) AddLoadWarning(kind, node, message string) {
+	doc.Header.Warnings = append(doc.Header.Warnings, Warning{
+		Kind: kind, Node: node, Message: message,
 	})
 }
 

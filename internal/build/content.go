@@ -212,9 +212,13 @@ func (eng *engine) emitImage(im *tmpl.Image, slot *elementSlot, measured *measur
 		mark.Box = printout.Box{Left: left, Top: top, Width: width, Height: height}
 	case tmpl.ScaleGrow:
 		// The box expands wherever the image exceeds it, so the image is drawn
-		// at natural size, neither scaled nor clipped.
+		// at natural size, neither scaled nor clipped. Along an axis where
+		// it is smaller the box stays as it was, and the alignment places it
+		// there; along one where the box grew, the box is the image and the
+		// alignment has nothing left to do.
 		left := geom.AlignH(boxX, maxf(boxW, img.width), img.width, slot.el.Base().HAlign)
-		mark.Box = printout.Box{Left: left, Top: boxY, Width: img.width, Height: img.height}
+		top := geom.AlignV(boxY, maxf(boxH, img.height), img.height, slot.el.Base().VAlign)
+		mark.Box = printout.Box{Left: left, Top: top, Width: img.width, Height: img.height}
 	default: // cut
 		// Drawn at natural size and clipped to the box; the retained region
 		// becomes the mark's crop.
@@ -232,7 +236,16 @@ func (eng *engine) emitImage(im *tmpl.Image, slot *elementSlot, measured *measur
 		top := geom.AlignV(boxY, boxH, height, slot.el.Base().VAlign)
 		mark.Box = printout.Box{Left: left, Top: top, Width: width, Height: height}
 		if cropW < img.width || cropH < img.height {
-			mark.Crop = &printout.Box{Left: 0, Top: 0, Width: cropW, Height: cropH}
+			// The bitmap is aligned before it is clipped, so the pixels kept
+			// are the ones the alignment leaves inside the box: an image wider
+			// than its box and aligned right keeps its right side, and one
+			// centred keeps its middle. See doc/layout.md#an-image-in-its-box.
+			cropX := geom.Round(
+				geom.ShareH(slot.el.Base().HAlign) * (img.width - cropW))
+			cropY := geom.Round(
+				geom.ShareV(slot.el.Base().VAlign) * (img.height - cropH))
+			mark.Crop = &printout.Box{
+				Left: cropX, Top: cropY, Width: cropW, Height: cropH}
 		}
 	}
 
@@ -331,6 +344,10 @@ func (eng *engine) emitXref(xref *tmpl.Xref, slot *elementSlot, measured *measur
 	mark.Box = printout.Box{Left: slot.left, Top: slot.top, Width: slot.width, Height: slot.height}
 	mark.Type = xref.Type
 	mark.Target = expr.Str(target)
+	if mark.Type == "outline" {
+		eng.doc.outlineXrefs = append(eng.doc.outlineXrefs,
+			xrefSite{target: mark.Target, record: eng.index})
+	}
 	if xref.Caption != nil {
 		caption, err := eng.ctx.eval(xref.Caption)
 		if err != nil {
@@ -482,7 +499,7 @@ func (eng *engine) noteMissingGlyphs(face *fontres.Face, node string) {
 			continue
 		}
 		eng.glyphWarned[key] = true
-		eng.out.AddWarning(printout.WarnGlyph, node, 0, fmt.Sprintf(
+		eng.out.AddWarning(printout.WarnGlyph, node, eng.index, fmt.Sprintf(
 			"the font %q has no glyph for %q, so an empty box is drawn in its place",
 			face.Name, char))
 	}

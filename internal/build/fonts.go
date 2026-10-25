@@ -1,6 +1,7 @@
 package build
 
 import (
+	"github.com/a1s/sr/internal/fontres"
 	"github.com/a1s/sr/internal/tmpl"
 	"github.com/a1s/sr/printout"
 )
@@ -14,7 +15,7 @@ type FontCheck struct {
 	Failures []string
 	// Warnings are diagnostics about the document: a typeface that reached
 	// the substitute, a face whose style bits contradict the declaration.
-	Warnings []string
+	Warnings []fontres.Warning
 	// Diagnostics describe the machine rather than the document:
 	// a font file that could not be read, two faces claiming one identity.
 	Diagnostics []string

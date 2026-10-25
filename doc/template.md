@@ -18,9 +18,11 @@ and paginated are in [layout.md](layout.md). Expressions are specified in
 - [Ordering rules](#ordering-rules)
 - [Element reference](#element-reference)
   - [`report`](#report)
+  - [`accept`](#accept)
   - [`parameter`](#parameter)
   - [`records`](#records)
   - [Data input](#data-input)
+  - [Records from the library](#records-from-the-library)
   - [`variable`](#variable)
   - [`font`](#font)
   - [`data`](#data)
@@ -51,6 +53,7 @@ A template has a declaration part and a layout part.
 
 ```
 report
+├── accept*           names this template carries on purpose
 ├── parameter*        values supplied by the caller
 ├── records?          declared types of the input record members
 ├── variable*         accumulators evaluated as data is consumed
@@ -126,6 +129,53 @@ The format uses KDL **v2** specifically: `#true` / `#false` / `#null`, raw
 strings `#"…"#`, and triple-quoted multi-line strings. A v1 parser cannot
 read it, and some v1 parsers accept v2 input without reading it correctly.
 
+### Unknown names
+
+A node or a property this format does not define is **accepted, not refused**.
+It carries no meaning -- nothing reads it and it changes nothing about the
+document around it -- so an engine meeting a template written for a newer,
+an older or a different implementation reads the parts it knows and reports
+the rest. What it reports depends on the name, and the first row that matches
+wins:
+
+| The name | |
+|---|---|
+| begins `x-`, in either case | accepted in silence |
+| is named by [`accept`](#accept) or `--accept` | accepted in silence |
+| is one edit from a name legal on that node | **an error** |
+| anything else | accepted, with a warning |
+
+A name is *one edit* from another when one insertion, one deletion, one
+substitution, or one transposition of two adjacent characters turns the first
+into the second, the two compared with upper case folded to lower. The
+comparison is against the names legal **on that node** -- the properties
+it takes, or, for a node, the children its parent accepts -- so `height=`
+on a node that has no height is an ordinary unknown property rather than
+a near miss.
+
+An unknown node is reported once and then not read: its properties and its
+children are part of the thing the format does not define, so nothing inside it
+is examined and nothing inside it is reported. One unknown node yields one
+diagnostic however much it contains.
+
+A near miss is an error because `printwhn=` is a misspelling far more often than
+it is an extension, and the cost of guessing wrong is silent rather than loud:
+the element paints on every record instead of the ones `printwhen` would have
+kept, and the page looks entirely plausible. Nothing in a template marks the
+version of the format it was written against, so there is no way to tell a new
+property from a mistyped one by inspection -- and a name close enough to be
+a typo is therefore treated as one. A name that really is an extension says so,
+by beginning `x-` or by appearing in `accept`.
+
+`--strict-names` makes every unknown name an error, near miss or not.
+An `x-` name and a registered name stay silent under it: each is already
+a statement that the name is deliberate, which is the only question strictness
+asks.
+
+A warning reaches the [printout header](printout.md#header-line) as a warning
+of kind `unknown`. A build also prints it on standard error, and
+[`sr validate`](cli.md#sr-validate) lists it among its `warnings`.
+
 ## Value types
 
 ### Dimension
@@ -133,30 +183,105 @@ read it, and some v1 parsers accept v2 input without reading it correctly.
 A length. Bare numbers are PostScript points (1/72 inch).
 Quoted strings may carry a unit suffix:
 
-| Suffix | Unit |
-|---|---|
-| `pt` | point, 1/72 in (the default) |
-| `mil` | 1/1000 in |
-| `mm` | millimetre |
-| `cm` | centimetre |
-| `in` | inch |
+| Suffix | Unit | Points per unit |
+|---|---|---|
+| `pt` | point, 1/72 in (the default) | 1 |
+| `mil` | 1/1000 in | 0.072 |
+| `mm` | millimetre | 72/25.4 |
+| `cm` | centimetre | 72/2.54 |
+| `in` | inch | 72 |
 
 `width=35` and `width="35pt"` are identical.
+
+A dimension is a KDL integer, a KDL number, or a string. A string is
+whitespace, a number, whitespace, an optional suffix, whitespace --
+so `"12mm"`, `"12 mm"` and `" 12mm "` are one value and `"1 2"` is an error.
+The suffix is lower case: `"12MM"` does not name a unit, and no suffix at
+all means points. An empty string, or one that is nothing but whitespace,
+is an error of its own rather than a zero.
+
+A **number** is
+
+```
+[+-]? ( digit+ [ "." digit* ] | "." digit+ ) [ ("e" | "E") [+-]? digit+ ]
+```
+
+over ASCII digits, where any run of digits may be broken by single
+underscores: `1_000` is a thousand, while `_1`, `1_` and `1__0` are errors.
+Nothing else is a number here.
+
+Spelling the grammar out is deliberate. Host float parsers disagree at
+the edges: Go's takes hexadecimal floats such as `0x1p-2`, Python's takes
+`inf`, `nan` and non-ASCII digit scripts; and a template one engine reads
+and the other refuses is a worse outcome than either rule on its own.
+
+**A dimension is finite**, and that is judged on the points it resolves to
+rather than on what was written, because there are three ways to reach an
+infinity and only one of them is visible in the source text. A string may
+overflow binary64: `"1e400"`. KDL v2 has `#inf`, `#-inf` and `#nan` as
+number keywords, so `width=#inf` is a number the parser accepts. And the
+rounding below multiplies by a thousand, so `1e308`, which is finite, is
+not finite three decimal places later. All three are errors. None of them
+may reach a coordinate: an infinity there propagates through a band
+measurement into a page break, and surfaces as a printout that will not
+serialize rather than as a template that was refused.
+
+Conversion to points is `number × points-per-unit` in binary64, and
+the result is rounded to 3 decimal places immediately, by the rule in
+[layout.md](layout.md#coordinates-and-rounding). So `"12mm"` is 34.016 pt
+and `"0.0005"` is 0.001 pt. The multiplication is by the single factor in
+the table above rather than by a numerator and a denominator in turn; the
+two associations differ in the last bit, and across the range a page spans
+no value has been found where that difference survives the rounding.
 
 Internally all dimensions are points, rounded to 3 decimal places after
 every computation. Rounding is normative: it decides whether a box fits.
 
 ### Color
 
-Any of:
+A string, in any of four spellings. Whitespace around it is ignored;
+an empty string, or one that is nothing but whitespace, is an error.
+A bare KDL integer is not a colour: the single-integer form is written
+`color="16711935"`, quoted like the rest.
 
-- `"#RRGGBB"`
-- a name, case-insensitive: the 16 HTML 4.01 names plus `cyan`, `darkgray`,
-  `lightgray`, `magenta`, `orange`, `pink`
-- three comma-separated integers 0–255, or three floats 0–1: `"0,89,0"`
-- a single integer, red in bits 16–23, green in 8–15, blue in 0–7
+- **`"#RRGGBB"`** — exactly six hexadecimal digits, either case. `"#abc"` is
+  not a short form and `"#aabbccdd"` is not an alpha channel; both are errors.
+- **A name**, ASCII case-insensitive, from the table below.
+- **Three comma-separated components**, whitespace around each ignored.
+  If all three are integers they are channel values 0–255; otherwise all
+  three are numbers in 0–1, scaled by `round_half_away_from_zero(value × 255)`.
+  The reading is decided by the triple as a whole, so `"1,1,1"` is nearly
+  black while `"0,1,0."` is green: one component is carrying a decimal point.
+  A component outside its range is an error, as is one that is not a number
+  at all, and so is any count but three.
+- **A single integer**, red in bits 16–23, green in 8–15, blue in 0–7.
+  Bits above 23 are ignored, so `"16777216"` is black. It must fit in 64 bits
+  unsigned; a longer run of digits is an error rather than a wrapped value.
 
-The canonical form, and what appears in a printout, is always `"#RRGGBB"`.
+An **integer** here is ASCII digits with an optional leading sign and no
+underscores, leading zeros allowed, so `"00255"` is 255. `"1_0"` is a number
+but not an integer, which is why `"1_0,0,0"` takes the fraction reading and
+is then out of range. The single-integer form takes no sign. A number is as
+[Dimension](#dimension) spells it.
+
+The 22 names:
+
+| | | | | |
+|---|---|---|---|---|
+| `black` `#000000` | `silver` `#C0C0C0` | `gray` `#808080` | `white` `#FFFFFF` | `maroon` `#800000` |
+| `red` `#FF0000` | `purple` `#800080` | `fuchsia` `#FF00FF` | `green` `#008000` | `lime` `#00FF00` |
+| `olive` `#808000` | `yellow` `#FFFF00` | `navy` `#000080` | `blue` `#0000FF` | `teal` `#008080` |
+| `aqua` `#00FFFF` | `cyan` `#00FFFF` | `darkgray` `#A9A9A9` | `lightgray` `#D3D3D3` | `magenta` `#FF00FF` |
+| `orange` `#FFA500` | `pink` `#FFC0CB` | | | |
+
+The first 16 are HTML 4.01. The other six are the CSS extended colours
+of the same names, so `cyan` and `aqua` are one colour and `magenta` and
+`fuchsia` are another. There is no `grey`. The list is closed, and a second
+spelling is worth less than the portability it costs: a template that writes
+one an engine does not have is a template that stops moving between them.
+
+The canonical form, and what appears in a printout, is always `"#RRGGBB"`,
+upper case.
 
 ### Boolean
 
@@ -172,6 +297,13 @@ A string holding a Starlark expression. See [expressions.md](expressions.md).
 A string literal inside an expression needs its own quotes: `target="'top'"`,
 not `target="top"`.
 
+KDL reads its own escapes before Starlark reads any. In a quoted KDL string,
+`\\` is one backslash, so each backslash the expression holds is written
+twice: the expression `'C:\\data'` is `expr="'C:\\\\data'"`. A raw KDL
+string reads no escapes, so the expression goes in as Starlark writes it:
+`expr=#"'C:\\data'"#`. That is the easier spelling wherever an expression
+holds a backslash. See [Literals](expressions.md#literals) for the escapes.
+
 ### Enumerations
 
 | Type | Values |
@@ -183,22 +315,54 @@ not `target="top"`.
 | `iter` / `reset` | `report` `page` `column` `group` `detail` `item` |
 | `eject type` | `page` `column` |
 | `barcode type` | `Code128` `Code39` `Code93` `2of5i` `DataMatrix` `Aztec` `QR-L` `QR-M` `QR-Q` `QR-H` |
+| `barcode charset` | `utf-8` `iso-8859-1` |
 | `image scale` | `cut` `fill` `grow` |
 | `xref type` | `outline` `url` |
 | `dash` | `solid` `dot` `dash` `dashdot` |
 | `encoding` | `base64` |
 | `compress` | `zlib` `gzip` |
 
-Page size names accepted by `layout pagesize=`:
-
-- ISO 216: `A1` `A2` `A3` `A4` `A5` `A6` `B3` `B4` `B5` `B6`
-- North American: `Letter` `Legal` `Ledger` `Executive` `Statement` `Quatro`
-  `Royal` `BusinessCard`
-- ISO 269 envelopes: `EnvelopeC3` `EnvelopeC4` `EnvelopeC5` `EnvelopeC6`
-  `EnvelopeDL` `EnvelopeB4` `EnvelopeB5`
-- North American envelopes: `Envelope#10` `EnvelopeA2` `EnvelopeA6` `EnvelopeA7`
-
+Page size names accepted by `layout pagesize=`, with the size each one names.
 All are given portrait (width × height); `landscape=#true` swaps them.
+
+ISO 216, in millimetres:
+
+| | | | | |
+|---|---|---|---|---|
+| `A1` 594 × 841 | `A2` 420 × 594 | `A3` 297 × 420 | `A4` 210 × 297 | `A5` 148 × 210 |
+| `A6` 105 × 148 | `B3` 353 × 500 | `B4` 250 × 353 | `B5` 176 × 250 | `B6` 125 × 176 |
+
+North American, in inches:
+
+| | | | |
+|---|---|---|---|
+| `Letter` 8.5 × 11 | `Legal` 8.5 × 14 | `Ledger` 11 × 17 | `Executive` 7.25 × 10.5 |
+| `Statement` 5.5 × 8.5 | `Quatro` 8 × 10 | `Royal` 20 × 25 | `BusinessCard` 2.125 × 3.37 |
+
+ISO 269 envelopes, in millimetres:
+
+| | | | |
+|---|---|---|---|
+| `EnvelopeC3` 324 × 458 | `EnvelopeC4` 229 × 324 | `EnvelopeC5` 162 × 229 | `EnvelopeC6` 114 × 162 |
+| `EnvelopeDL` 110 × 220 | `EnvelopeB4` 250 × 353 | `EnvelopeB5` 176 × 250 | |
+
+North American envelopes, in inches:
+
+| | | | |
+|---|---|---|---|
+| `Envelope#10` 4.125 × 9.5 | `EnvelopeA2` 4.375 × 5.75 | `EnvelopeA6` 4.75 × 6.5 | `EnvelopeA7` 5.25 × 7.25 |
+
+Each size is stated in the unit its standard states it in, and reaches
+points by the same conversion a [dimension](#dimension) goes through:
+one multiplication by the unit's factor, rounded to 3 decimal places.
+So `A4` is 595.276 × 841.89 pt and `Letter` is 612 × 792 pt exactly.
+Writing the ISO sizes in inches instead would not give the same numbers,
+which is why the unit is part of the table rather than a note under it.
+
+`BusinessCard` is ISO 7810 ID-1, which the standard states on its side
+as 85.60 × 53.98 mm. It is the one entry whose millimetres are the derived
+form: portrait, 2.125 × 3.37 in is exact and 53.975 × 85.598 mm is what
+those inches come to.
 
 ## Geometry
 
@@ -226,11 +390,18 @@ Missing values are filled in a fixed order — `left` then `right`, `top` then
 
 Vertically the same, with `top`/`bottom`/`height`.
 
-A negative `right` or `bottom` means the box extends past the container edge,
-and is legal — for a container in the middle of the page that is perfectly ordinary.
-A mark that ends up outside the *page's* printable area is an
-[overflow](layout.md#errors), judged on the final page coordinates
-rather than on the declaration.
+A size is never negative: a negative `width`, `height`, `maxwidth`,
+or `maxheight` is a [validation](#validation) error, as is a negative
+`height` on a section and a negative stroke `width` on a `line` or
+a `rectangle`. An extent below zero describes no box, and what a
+negative size might have been meant to do, reach past the container,
+is what an offset is for.
+
+A negative `right` or `bottom` means the box extends past the container
+edge, and is legal -- for a container in the middle of the page that is
+perfectly ordinary.  A mark that ends up outside the *page's* printable
+area is an [overflow](layout.md#errors), judged on the final page
+coordinates rather than on the declaration.
 
 `x` and `y` are accepted as aliases for `left` and `top`.
 
@@ -241,13 +412,28 @@ of the two-of-three count:
 field left=10 right=10 maxwidth=50
 ```
 
+A clamped box keeps its `left` or `top` edge, and gives way at the other end.
+The exception is a box whose `left` or `top` the two-of-three rule *derived*,
+from a `right` or `bottom` and a size: that box stays against the far edge
+it was declared from and gives way at the near one. A value the fill order
+supplied counts as given rather than derived, so `right=10 maxwidth=50`,
+which the table resolves as `left=0 right=10`, is 50 wide at the left edge,
+while `right=10 width=100 maxwidth=50` is 50 wide ending 10 from the right.
+
 `maxheight` clamps a declared height and a height derived from the band alike.
 On a `field` it clamps a stretched one too, and the lines beyond the clamped box
 are dropped at a line boundary, exactly as they are for a field without
-`stretch`. It does not clamp a `barcode`, whose box extent along the coding
-direction is fixed by its stripe count and module, nor a `grow` image, which is
-drawn at natural size: shrinking either box would describe a mark that is not
-what gets drawn.
+`stretch`. That holds for a stretch field sized from the band as well,
+even where the band gave it less room than the clamp would have: a
+`maxheight` is what says a stretched field may be cut. It does not
+clamp a `grow` image, which is drawn at natural size: shrinking the box
+would describe a mark that is not what gets drawn.
+
+On a `barcode` the two clamp the box and never the symbol, whose size is
+fixed by its modules. The symbol is placed in the clamped box by `halign`
+and `valign`, overhangs it where it is larger, and `grow` expands it
+only as far as the clamped box reaches; see
+[a barcode in its box](layout.md#a-barcode-in-its-box).
 
 ### Section height
 
@@ -276,6 +462,17 @@ The defaults are `halign="left"` and `valign="top"`.
 
 For an `image` the content is the bitmap and for a `barcode` the symbol,
 so `halign` and `valign` position it inside the resolved box.
+That holds for content larger than the box as well: a symbol overhangs
+the box on the side the alignment does not name, and an image under
+`scale="cut"` is aligned and then clipped to the box, so the alignment
+decides which of its pixels are kept. See
+[an image in its box](layout.md#an-image-in-its-box).
+
+An `xref` accepts both and they position nothing. What it holds is elements,
+each placed by its own geometry inside the xref's box and aligned by its own
+`halign` and `valign`, and there is no one natural size of theirs to move.
+A run of content at one end of an xref is put there by the child's geometry:
+`right=0 width="3cm"`, or no geometry and `align="right"` on a field.
 
 A `field` is the case where the two properties meet. Its text mark carries
 the **resolved box**, not a box shrunk to the widest line — that is what
@@ -293,6 +490,22 @@ field halign="center" align="left" text="…"        // left: align wins
 `valign` is unaffected: it positions the wrapped text's height,
 which is content-sized, within the box's height.
 
+**Content taller than its box is placed by the same arithmetic**,
+and the arithmetic goes negative: a line 12 pt tall in a box of 6 pt
+sits 3 pt above the box under `valign="center"` and 6 pt above it
+under `"bottom"`.  It is drawn there, outside the box and possibly
+outside the band, and the band does not grow to hold it -- a band's
+height comes from the boxes and the marks as
+[layout.md](layout.md#the-bands-height-is-settled-twice) settles them,
+and a mark that starts above its box only moves the top edge it draws from.
+A mark that ends up outside the page's printable area is an
+[overflow](layout.md#errors) like any other; one that merely leaves
+its own box is not, because a box is a placement, not a clip.
+
+This is worth knowing rather than worth relying on. A box too short
+for the text it is given is usually a template to fix, and
+`stretch=#true` is how a field says its height is the text's.
+
 ### Floating elements
 
 `float=#true` on a body element means its vertical position is not fixed: it is
@@ -304,7 +517,15 @@ A floating element's height must come from the element: a declared `height`, or
 content, which includes `stretch=#true` on a `field`. It cannot come from the
 container, since a floating element's own top is not settled until the other
 elements have been placed. In practice that rules out giving a floating element
-`bottom` and nothing else.
+`bottom` and nothing else. A floating element with neither a declared `height`
+nor a content height is a [validation](#validation) error.
+
+A floating element that declares a `bottom` is accepted whenever it has a
+height of its own, whether that is a declared `height` or a content height:
+`field bottom=0 height=12 float=#true` and `field top=3 bottom=0 stretch=#true
+float=#true` both load. Declaring a `bottom` anchors an element to the band's
+bottom edge, so neither floats; `float=#true` has no effect on them.
+See [layout.md](layout.md#what-a-floating-element-may-be).
 
 ## Ordering rules
 
@@ -312,10 +533,13 @@ Node order is significant in three places. Reordering siblings changes output.
 
 1. **Body elements paint in document order.** Later elements draw on top of
    earlier ones. A filled `rectangle` must precede the fields that sit on it.
-2. **`style` matches first-win.** Each section's `style` nodes are tested in
-   document order and the first whose `when` is true supplies the formatting.
-   Search continues outward: the section's own styles, then `columns`, then
-   each enclosing `group`, then `layout`.
+2. **`style` matches first-win, property by property.** The walk starts at
+   the element's own `style` nodes and continues outward: the section's own,
+   then `columns`, then each enclosing `group`, then `layout`, each scope's
+   nodes in document order. The first node whose `when` is true supplies
+   `font`, `color`, and `bgcolor`, and a property it leaves unset comes
+   from the next node whose `when` is true, which may be a later node
+   of the same scope. See [layout.md](layout.md#building-a-band).
 3. **`eject` selects first-win**, in document order: the first node whose
    `when` is true is selected and stops the search, even if its `require`
    then declines to eject. See [`eject`](#eject).
@@ -346,8 +570,35 @@ Root node.
 `basedir` is the base for resolving relative paths in `image file=`,
 `font file=`, and `subreport template=`.
 
-Children: `parameter*`, `records?`, `variable*`, `font*`, `data*`, `layout`
-(exactly one).
+Children: `accept*`, `parameter*`, `records?`, `variable*`, `font*`, `data*`,
+`layout` (exactly one).
+
+### `accept`
+
+Names this template carries deliberately, so that [unknown
+names](#unknown-names) among them are accepted in silence instead of
+being warned about or, for a near miss, refused.
+
+| Argument | Type |
+|---|---|
+| *names* | one or more strings |
+
+```kdl
+accept "wobble" "trapezoid"
+```
+
+The node takes no properties, may appear more than once, and the lists add up.
+
+A registered name is accepted wherever it appears in the document, as a node
+name or as a property name. There is deliberately no way to register one for
+a single node: the list says that a name is meant, and a name is meant or it
+is not. Registering a name the format already defines does nothing, and is not
+an error.
+
+The list belongs to the document that declares it. A `subreport template=` file
+is its own document with its own `accept`, which is what lets a template be
+read on its own terms wherever it is used. `--accept` on the command line adds
+to the list of every template in a build, including those reached that way.
 
 ### `parameter`
 
@@ -406,6 +657,11 @@ A parameter value arriving as text — from `--param NAME=VALUE`, or from
 
 `date` yields a time value with zero time of day.
 
+Each byte of the text that is not part of a valid UTF-8 sequence reads
+as U+FFFD, whatever the type, as it does everywhere a string is made;
+see [strings](expressions.md#strings). A command line on Linux is bytes,
+and can carry such a byte.
+
 Text that does not parse is an error naming the parameter, its declared type, and
 the offending text.
 
@@ -457,12 +713,67 @@ is string repetition rather than arithmetic.
 
 ### Data input
 
-Records come from JSON: either a single array document, or NDJSON with one record
-per line. The engine buffers the whole dataset — `DATA_COUNT`, report-scoped
-aggregates, and [keep-together](layout.md#keeping-content-together) lookahead
-all require the full sequence.
+Records come from JSON: either a single array document, or NDJSON with
+one record per line. The JSON is UTF-8, whether it comes from a file or
+from standard input. A byte that is not part of a valid UTF-8 sequence
+reads as U+FFFD, one per byte, as it does everywhere a string is made.
+Byte order marks at the start are skipped, as many as there are, since
+Windows PowerShell 5.1 can pipe two. So are those at the start of each
+NDJSON line, which is a JSON text of its own, so that files that each
+open with one can be joined. Anywhere else outside a string, a byte
+order mark is a stray character, and refused; inside a string it is
+a character like any other. UTF-16, which Windows PowerShell 5.1 writes
+for a `>`, is refused with a message that says so. A `\u` escape that
+spells half a surrogate pair on its own reads as U+FFFD;
+see [strings](expressions.md#strings). The engine buffers the whole
+dataset: `DATA_COUNT`, report-scoped aggregates, and
+[keep-together](layout.md#keeping-content-together) lookahead all
+require the full sequence.
 
-The library API takes a Go slice directly; JSON is the CLI's front end.
+JSON is the command line's front end. The library also takes the records
+as Go values, [without JSON](#records-from-the-library).
+
+### Records from the library
+
+`Template.Build` takes the records from the program that calls it rather
+than from JSON. It takes a slice or an array, read once, and each element
+is a record: a `map[string]any`, a struct, or a pointer to one. `nil` in
+place of the sequence is no data at all. Anything else is an error naming
+what arrived.
+
+A struct's fields are its **exported** ones, under their own names, or
+under the first component of an `sr` struct tag where it has one; a tag
+of `-` leaves the field out. Unexported fields are where a type keeps its
+bookkeeping, and no method runs, so a value computed by a getter is not
+a field. A struct with no exported field left is not an empty record but
+an error, and so is a nil pointer, since neither is a row the program
+meant to pass.
+
+A field may hold what JSON can, and these Go types too, which become
+values the engine computes with:
+
+| Go | Becomes |
+|---|---|
+| `decimal.Decimal` | a decimal, exactly |
+| `time.Time` | a time, and in a `date` member the start of its day |
+| `string`, `bool`, and the integer and float types | themselves |
+| `json.Number` | the number its digits spell |
+| a map or a struct | a record |
+| a slice or an array | a list |
+
+A `time.Time` keeps its location, and a member declared `date` takes the
+start of that day in it, so a zone the program chose is the zone the
+report reads. Text with no offset is read in UTC, as it is in JSON, so
+that the zone of the machine that runs the build decides nothing.
+
+A declared member is then coerced as the elements of a subreport's data
+are, since its value is one the program computed rather than text. A
+value is written as text and read by the declared type, except that a
+time in a `date` or `datetime` member is kept, a record in an `object`
+member, and a slice in a `list` member. An undeclared member keeps the
+type it arrived with, which JSON could not have given it: a decimal stays
+exact, and a time stays a time. An expression reads such a member as
+`THIS["name"]`.
 
 ### `variable`
 
@@ -538,7 +849,36 @@ the file does not carry is reported: resolution reads the face's own
 naming `Go-Bold.ttf` without `bold=#true` is ordinary use, since the flag
 would only repeat what the file already says.
 
+That warning is about `file` and `data` only. Resolving by `typeface` reaches
+a face of some other style by the rules written down for it ([the style a
+lookup relaxes to](#host-enumeration), or [the substitute face](#the-substitute-face),
+which is regular whatever was asked for), and those rules carry their own
+reporting. A second warning on every one of them would say only that the rule
+above it had applied.
+
 `underline` is drawn by the renderer and does not affect metrics.
+
+Two `font` nodes may describe one face at one size under two names.
+They stay two fonts: each that is used has an
+[entry of its own](printout.md#fonts) in the printout,
+and the text set in it names it there.
+
+**What a face must carry.** Whatever named it, a face is usable only
+with `head`, `hhea`, `hmtx`, `cmap` and `name`: the em, the advances,
+the characters and the family. One of them missing is a refusal naming
+the table, not a face with a default in place of it, because every
+such default is a silently wrong measurement.
+
+`bhed` is **not** accepted in place of `head`. It holds the same twelve fields
+under another tag, and a face that uses it is a bitmap-only font: the strikes
+are the whole of it and there are no outlines to draw. Such a face is refused
+as [an unsupported format](#host-enumeration), named as one, rather than
+reported as missing a table — it is not damaged, it is a kind of font this
+engine does not draw.
+
+A collection may declare at most **2048** faces; a count past that
+is refused as a damaged file rather than enumerated, since the count is four
+bytes of a file that may be damaged and each face it claims costs a parse.
 
 ### `data`
 
@@ -611,7 +951,7 @@ still inherits a `font` from `layout`.
 Every section and every body element accepts `printwhen`, an expression that
 suppresses it when false. A suppressed element produces no marks and contributes
 no height, so a band whose `height="auto"` collapses when everything in it is
-suppressed.
+suppressed. A suppressed band tests none of its [`eject`](#eject) nodes either.
 
 ```kdl
 detail printwhen="amount > 0" {
@@ -631,6 +971,14 @@ detail printwhen="amount > 0" {
 **With `evaltime`**, `expr` is the content and is required — it is what gets
 deferred. `text` or `data` may accompany it as a **placeholder**: the value the
 element is measured from before the real one is known. At most one placeholder.
+It is measured as written, since `format` applies to what `expr` resolves to,
+which is what the placeholder stands in for.
+
+`format` applies to that result and to nothing else. A `text`, or a `data`
+node's content, is always taken as written, whether it is the content or
+a placeholder. An element with no `expr` therefore never applies its `format`
+and never checks it: a conversion its literal would refuse, or a specification
+that would not parse, is not an error.
 
 ```kdl
 // immediate — one source
@@ -694,7 +1042,7 @@ Once a node is selected:
 | `require` | Result |
 |---|---|
 | absent | eject |
-| present | eject only if less than `require` remains in the frame |
+| present | eject only if less than `require` remains in the frame, and the column is not empty |
 
 So the two combine as a conjunction, and `require` is reachable only through a true
 `when`:
@@ -707,6 +1055,12 @@ So the two combine as a conjunction, and `require` is reachable only through a t
 
 The three examples above therefore mean: eject whenever the customer has more than
 20 rows; eject whenever less than 3cm remains; and eject only when both hold.
+
+A `require` is never met by ejecting from an
+[empty](layout.md#extent-and-fill) column, which is as much room as any column
+of the frame offers, so there it does not eject. And a band that does not print
+tests none of its `eject` nodes, whatever their `when`: `printwhen` suppresses
+the band with what it would have asked of the page.
 
 Eject is evaluated at the **beginning** of the section, except in a report's own
 `title` — the band directly under `layout` or `embedded` — where it is evaluated
@@ -760,6 +1114,11 @@ Children: `style*`, `header?`, `footer?`.
 
 Column width is `(frame width - (count - 1) × gap) / count`.
 
+A `layout`, `group` or `embedded` with no `columns` child has one column
+and no gap. One column is what the absence means, not the absence of columns:
+the [frame](layout.md#frames) is built the same way either way, and anything
+that counts columns counts one.
+
 `balance=#true` spreads the run of bands the frame holds on each page over its
 columns, so that they end at similar heights instead of the last one running
 short. It needs more than one column to spread between. Some content cannot
@@ -791,11 +1150,14 @@ so records must arrive ordered by the group key — see
 [layout.md](layout.md#records-must-be-ordered-by-group-key).
 A break invalidates all nested groups.
 
-`keeptogether=#true` places the whole group on one frame if it fits on an empty
-one. `minrows` is the minimum number of detail rows that must follow the group
-title in the same frame; `mintailrows` the minimum that must precede the group
+`keeptogether=#true` places the whole group on one frame if it fits on
+an empty one, and starts it on a fresh frame if it does not. `minrows`
+is the minimum number of detail rows that must follow the group title
+in the same frame; `mintailrows` the minimum that must precede the group
 summary. These are counted in rows, distinct from a section's line-counted
-`orphans` / `widows`.
+`orphans` / `widows`, and the default of 1 for each already keeps a title
+and a summary off a frame of their own.
+See [layout.md](layout.md#keeping-content-together).
 
 Children: `style*`, `title?`, `summary?`, `columns?`, and exactly one of `group?`
 / `detail?`.
@@ -835,12 +1197,19 @@ field expr="(customer.last_name, customer.first_name, customer_amount)"
       format="Total for %s, %s: %.2f"
 ```
 
+It is applied to nothing else: a `text`, or a `data` node's content,
+is printed as written, and a field with no `expr` does not check its
+`format`. See [content sources](#content-sources).
+
 `evaltime` names a scope whose end the expression's [`FINAL`](expressions.md#final)
 names are read at — this is how a page footer prints the final page count.
 See [layout.md](layout.md#deferred-evaluation).
 
 `stretch=#true` grows the box's height to fit wrapped text.
 Without it, text that does not fit is truncated at a line boundary.
+A stretch field that declares a `bottom` takes its height from the
+band instead, and its text runs past that box rather than being cut;
+see [layout.md](layout.md#building-a-band).
 
 ### `line`
 
@@ -902,7 +1271,6 @@ image data="TheLarch" scale="grow"
 |---|---|---|
 | `file` | string, path relative to `basedir` | — |
 | `data` | string, a `data` node name | — |
-| `type` | `png` `jpeg` `gif` | sniffed from content |
 | `scale` | scale enum | `cut` |
 | `proportional` | boolean | `#true` |
 | `embed` | boolean | `#true` |
@@ -925,7 +1293,15 @@ is scaled to fit within the box and then positioned by `halign` / `valign`;
 with `#false` it is stretched to the box exactly.
 
 Only `cut` clips, and the clipped region is what the printout records
-as [`crop`](printout.md#image).
+as [`crop`](printout.md#image). Under `grow` the box expands right and
+down, keeping its left and top edges, so along an axis where it grew
+there is nothing for alignment to do. The arithmetic of all three is
+in [an image in its box](layout.md#an-image-in-its-box).
+
+**The natural size** is what every `scale` starts from:
+the bitmap's pixels along each axis, drawn at one point per pixel.
+Resolution metadata and an EXIF orientation are not read,
+and a GIF's natural size is its logical screen's.
 
 `embed=#true`, the default, copies the image bytes into the printout, so the
 printout is self-contained. `embed=#false` records a file reference instead:
@@ -936,7 +1312,41 @@ on the image still being where the printout expects it.
 `embed=#false` needs `file=`, since a reference is all it writes and only
 `file` supplies a path; `data` and a `content` child are always embedded.
 
-`type` is optional and sniffed from the content; give it to override.
+A `content` child holds the image's bytes in base64, as a `data` node's
+`content` does with `encoding="base64"`. The whitespace a multi-line string
+lays it out with is not part of it, and content that is not base64 is an
+error when the template loads.
+
+**The bytes are read when the report is built**, whatever the `scale`
+and whatever `embed` says, since the natural size is in them. So an
+`embed=#false` file has to be there when the report is built as well as
+when it is rendered, and a file that cannot be read is an error naming
+the element. The engine interprets nothing past the header that states
+the size: decoding the pixels is the renderer's. An embedded file is read
+whole, since its bytes go into the printout, but of an `embed=#false`
+file only the header is read, so a large image referred to costs the
+build no more than a small one.
+
+**The format is sniffed** from the bytes' signature, never from a
+file name, so PNG bytes saved as `logo.jpg` are a PNG. What is read:
+
+| Format | Read | Refused |
+|---|---|---|
+| PNG | the `IHDR` chunk, which must come first | an `IHDR` that fails its CRC, or names a colour type and bit depth PNG does not have |
+| JPEG | the first frame header: baseline, extended sequential, or progressive, with 8-bit samples and 1, 3 or 4 components | lossless, hierarchical, arithmetic-coded, and JPEG-LS frames, other sample precisions, and no frame header before the first scan |
+| GIF | `GIF87a` or `GIF89a`, and the logical screen descriptor | a file cut short before the descriptor ends |
+
+The refused JPEG kinds are ones a renderer is not required to decode.
+Bytes that are none of the three formats are an error, and so is an image
+with no pixels along an axis, since no `scale` has a size to start from.
+A GIF can say that with a logical screen of no size, and a JPEG by leaving
+its height to a marker after the first scan, past the header the engine
+reads; a PNG cannot say it at all.
+
+**Nothing converts an image.** The bytes reach the printout as they are,
+and the format is not recorded there: a renderer sniffs it as the engine does.
+A smaller or differently encoded image is made before the report is built,
+not by it.
 
 ### `barcode`
 
@@ -953,11 +1363,13 @@ barcode type="QR-Q" expr="FINAL.PAGE_COUNT" evaltime="page" text="1000" grow=#tr
 | `data` | string, a `data` node name | — |
 | `evaltime` | as for `field` | — |
 | `format` | string, a `%` format | `"%s"` |
-| `module` | dimension, narrow bar width | `"10mil"` |
+| `module` | dimension, narrow bar width, positive | `"10mil"` |
 | `vertical` | boolean | `#false` |
 | `grow` | boolean | `#false` |
 | `ink` | colour, the bars | `"black"` |
 | `paper` | colour, the background | — |
+| `charset` | barcode charset enum, 2-D types only | `"utf-8"` |
+| `eci` | boolean, 2-D types only | `#false` |
 
 Plus geometry, alignment, `printwhen`, and `style*`.
 
@@ -965,20 +1377,26 @@ Content comes from `expr`, `text`, or `data` — see
 [content sources](#content-sources). A barcode's size is always content-dependent,
 so a deferred barcode always needs a placeholder.
 
-`format` is applied to the `expr` result before encoding, which is how a numeric
-value gets a fixed width:
+`format` is applied to the `expr` result before encoding, and to nothing else:
+a `text`, or a `data` node's content, is encoded as written. `format` is how
+a numeric value gets a fixed width:
 
 ```kdl
 barcode type="2of5i" expr="order_id" format="%08d"
 ```
 
-The box always grows along the coding direction — vertically when
-`vertical=#true`, horizontally otherwise — to at least the symbol's minimum size.
-`grow=#true` additionally expands the symbol to use the available box: for 2-D
-types this recomputes `module`, for 1-D types it grows the bar height.
+The symbol is drawn at the size its modules give it, and never smaller.
+It is placed in the box by `halign` and `valign`: across the page
+a symbol wider than its box overhangs it, and down the page the box
+is at least as tall as the symbol. `grow=#true` additionally expands
+the symbol to use the box: for 2-D types it recomputes `module`, and
+for 1-D types it lengthens the bars. Layout has the arithmetic,
+in [a barcode in its box](layout.md#a-barcode-in-its-box).
 
-Each type constrains what it can encode, and content it cannot encode is an error
-naming the type, the value, and the reason:
+Each type constrains what it can encode, and content it cannot encode is
+an error naming the type, the value, and the reason. An empty value is
+refused by every type. Which symbol a type draws for a value it accepts
+is in [barcode.md](barcode.md).
 
 | Type | Accepts |
 |---|---|
@@ -986,7 +1404,7 @@ naming the type, the value, and the reason:
 | `Code39` | digits, `A`–`Z` upper case, space, and `- . $ / + %` |
 | `Code93` | as `Code39`, plus the full ASCII range through its shift characters |
 | `2of5i` | digits only, and an **even** number of them |
-| `DataMatrix` `Aztec` `QR-*` | any bytes, up to the symbol's capacity, which for the `QR-*` types shrinks as the error-correction level rises |
+| `DataMatrix` `Aztec` `QR-*` | any text in its [`charset`](#character-set), as bytes, up to the largest symbol's capacity, which for the `QR-*` types shrinks as the error-correction level rises |
 
 `2of5i` encodes digits in pairs, so an odd-length value is an error
 rather than being padded. Use `format` to fix the width:
@@ -999,6 +1417,45 @@ Every symbol carries the quiet zone its standard requires: ten modules
 at each end of a 1-D symbol, four all round a QR, one round a Data Matrix,
 none round an Aztec; and the box is sized to include it. A symbol without
 its margin is not read, so this is not something a template can turn off.
+
+#### Character set
+
+A 2-D type encodes bytes, and `charset` says which bytes a value's
+characters become:
+
+| `charset` | |
+|---|---|
+| `utf-8` | every character, in one to four bytes |
+| `iso-8859-1` | U+0000 to U+00FF only, in one byte each |
+
+A character `iso-8859-1` does not have is refused when the band is built,
+as any value a type cannot encode is.
+
+Each 2-D standard reads a symbol's bytes as ISO 8859-1 unless the symbol
+says otherwise. So the default, UTF-8 that says nothing, reads back right
+only on a reader that detects UTF-8 for itself, as phone apps reading QR
+generally do. On a reader that follows the standard, `Café` comes back
+as `CafÃ©`. A value in ASCII is the same bytes in both charsets and reads
+back right everywhere.
+
+`eci=#true` makes the symbol say. It then opens with an Extended Channel
+Interpretation naming its charset, 000026 for UTF-8 or 000003 for
+ISO 8859-1, and a reader that follows the standard decodes by it.
+The ECI is written only for a value with a character outside ASCII,
+so an ASCII value draws the same symbol whatever the two properties say.
+A reader that does not support ECI may show it as data or refuse the symbol,
+which is why it is not the default.
+
+Which to choose depends on the readers that will scan the symbol:
+
+| Readers | |
+|---|---|
+| Phone apps, for a QR | the default |
+| Readers that follow the standard and support ECI | `eci=#true` |
+| Readers that follow the standard and do not support ECI | `charset="iso-8859-1"`, where the text allows it |
+
+The 1-D types encode characters rather than bytes, and take ASCII only,
+so `charset` or `eci` on one is a load error.
 
 #### Colour
 
@@ -1021,7 +1478,25 @@ how little red it reflects:
 | Bars | black, navy, dark green, brown, purple | red, orange, yellow, light grey |
 | Background | white, yellow, orange, pink, red | navy, dark green, black |
 
-A pair that cannot be read is a **load error**, not a warning:
+The check works from each colour's **red reflectance**: its red channel,
+taken out of sRGB's transfer curve into the light it stands for. Green and
+blue play no part, which is why yellow reads as white and navy as black.
+
+```
+c = red / 255
+reflectance = c / 12.92                       where c <= 0.04045
+reflectance = ((c + 0.055) / 1.055) ^ 2.4     otherwise
+```
+
+A pair reads when both of these hold, and is refused on the first that does not:
+
+1. the background reflects at least 0.4 more than the bars, which also
+   refuses light bars on a dark background;
+2. the bars reflect less than half what the background does.
+
+A pair that cannot be read is a **load error**, not a warning. The diagnostic
+names `paper` where the first test failed and the template gave a `paper`,
+and `ink` otherwise:
 
 ```kdl
 barcode type="Code128" text="7350053850019" ink="navy" paper="#FFE9B0"
@@ -1085,12 +1560,19 @@ Plus geometry and body-element children (`field`, `line`, `rectangle`, `image`,
 `barcode`, and nested `xref`).
 
 `type="url"` links to the expression's string result.
-`type="outline"` links to an `outline` whose `name` matches.
+`type="outline"` links to an `outline` whose `name` matches,
+on any page of the document, and one that no entry carries
+when the document ends is an [error](layout.md#errors).
+`target` and `caption` must each evaluate to a string;
+anything else is an error rather than a value converted to text.
 
-An `xref`'s box follows the ordinary [geometry](#geometry) rules, the same as
-a body element's: it is a container for the elements inside it, and with nothing
-specified it fills its section. Use `halign` to put a narrower run of content at
-one end of it.
+An `xref`'s box follows the ordinary [geometry](#geometry) rules,
+the same as a body element's: it is a container for the elements
+inside it, and with nothing specified it fills its section.
+It does not grow to what it holds, and its own `halign` and `valign`
+move nothing; see [alignment](#alignment). To put a narrower run
+of content at one end of it, give the child the geometry that puts it there.
+How an xref is measured is in [layout.md](layout.md#building-a-band).
 
 ### `outline`
 
@@ -1115,6 +1597,16 @@ the entry collapsed.
 A section emits at most one outline entry per print. Where a section has several
 `outline` nodes they are alternatives, resolved first-win by `when` — see
 [ordering](#ordering-rules).
+
+`title` and `name` are evaluated when the band is measured,
+as its elements' expressions are, and converted to text as a `field`'s
+`expr` is with no `format`: `title="ITEM_NUMBER"` is the record's number.
+A `name` that comes out empty gives the entry no name.
+`level` counts from 1, the outermost; a `level` below 1 is a
+[validation](#validation) error. Levels need not follow one another
+without a gap: the printout writes each entry at its depth in the tree,
+as [printout.md](printout.md#outline) describes. Where the entry sits,
+and what it points at, is there too.
 
 ### `subreport`
 
@@ -1156,11 +1648,17 @@ or on a `summary` without `swapfooter`, and nowhere else -- see
 [where a subreport's bands go](layout.md#where-a-subreports-bands-go).
 Any of those three carries one wherever it sits, a `columns` block included.
 
-A host band suppressed by `printwhen` runs none of its subreports.
+A host band suppressed by `printwhen` runs none of its subreports, and
+a subreport whose `when` is false does not run. `data` yields the records
+it runs over, which its own [`records`](#records) coerces; `None` is an
+empty sequence, over which the subreport still runs and prints its title
+and summary -- see [names and values](layout.md#names-and-values).
 
-`template=` is read when this template is read, so one `sr validate` checks the
-whole tree and one load error names whichever file it came from. A template that
-reaches itself, directly or through another, is refused at load.
+`template=` is read when this template is read, so one `sr validate`
+checks the whole tree and one load error names whichever file it came from.
+A template that reaches itself, directly or through another, is refused
+at load. Its fonts are resolved, and its `data` nodes produced, when it
+first runs; see [subreports](layout.md#subreports).
 
 Children: `arg*`.
 
@@ -1174,8 +1672,10 @@ Supplies a value for a subreport `parameter`.
 | `value` | expression | required |
 
 `value` is an expression, not text, so it is not parsed per the parameter's `type`.
-Its result must already match that type. It is evaluated in the **host's**
-context, at the point the subreport runs.
+Its result must already match that type, exactly: an `int` is not a `decimal`,
+and a tuple is not a `list`; the whole rule is in
+[names and values](layout.md#names-and-values). It is evaluated
+in the **host's** context, at the point the subreport runs.
 
 A subreport has no command line, so a parameter of the layout it names that has
 neither an `arg` here nor a `default` or `defaultexpr` of its own is a load-time
@@ -1235,8 +1735,10 @@ use `title` and `summary` for content that prints once per invocation.
 A subreport given by `template=` is an ordinary `report` document and carries
 its own `records`, `font` and `data` definitions, `basedir`, and page geometry.
 It validates on its own, so a layout meant only ever to be run as a subreport
-still passes `sr validate` -- its parameters are simply ones a caller has to
-supply.
+still passes `sr validate` -- its parameters are simply ones a caller
+has to supply. Its `data` nodes are produced, and its fonts resolved,
+when it first runs, against the parameters that invocation was given,
+and are kept for the rest of the build.
 
 ## Font resolution
 
@@ -1244,10 +1746,10 @@ A `font` node naming a `typeface` is resolved by trying, in order:
 
 1. An explicit `file` or `data` on the `font` node. If either is present,
    resolution ends there and failure is an error.
-2. [Host enumeration](#host-enumeration): every font the machine has, matched by
-   family and style.
-3. A built-in table of **family aliases** — `Helvetica` → `Arial`,
-   `Courier` → `Courier New` and the rest — each alias then looked for by step 2.
+2. [Host enumeration](#host-enumeration): every font the machine has,
+   matched by family and style.
+3. The [**family alias** table](#the-family-alias-table),
+   each alias then looked for by step 2.
 4. A last-resort [substitute](#the-substitute-face).
 
 The alias table is consulted **after** the host has been searched, never before: an
@@ -1262,6 +1764,67 @@ the chain produced them — see [printout.md](printout.md#fonts). A font the tem
 named with `file=` is recorded relative to the printout, so it travels with it;
 one the engine found on the host is recorded as it was opened. Under strict mode
 only the first case can arise.
+
+### The family alias table
+
+Step 3 is this table. A `typeface` is looked up **whole**, with case folded
+and nothing else normalised: `helvetica` and `HELVETICA` are the same key,
+`Helvetica Neue` is a key of its own, and `Helvetica ` with a trailing space
+is not a key at all. Each entry is an **ordered list**, and every candidate
+in it is looked for by step 2 in turn; the first the host has wins, and if
+none of them is there the typeface goes on to step 4.
+
+| `typeface` | tried in this order |
+|---|---|
+| `arial` | Helvetica, Liberation Sans, Nimbus Sans |
+| `helvetica` | Arial, Liberation Sans, Nimbus Sans |
+| `helvetica neue` | Arial, Liberation Sans |
+| `times` | Times New Roman, Liberation Serif, Nimbus Roman |
+| `times new roman` | Times, Liberation Serif, Nimbus Roman |
+| `courier` | Courier New, Liberation Mono, Nimbus Mono PS |
+| `courier new` | Courier, Liberation Mono, Nimbus Mono PS |
+| `palatino` | Palatino Linotype, URW Palladio L |
+| `bookman` | Bookman Old Style, URW Bookman L |
+| `avantgarde` | Century Gothic, URW Gothic L |
+| `zapfdingbats` | Zapf Dingbats, Dingbats |
+| `symbol` | OpenSymbol |
+| `sans-serif` | Arial, Helvetica, DejaVu Sans, Liberation Sans |
+| `serif` | Times New Roman, Times, DejaVu Serif, Liberation Serif |
+| `monospace` | Courier New, Consolas, DejaVu Sans Mono, Liberation Mono |
+
+Three things follow from the shape of it, and each is the reason
+an entry is there at all.
+
+**The core three are symmetric.** `arial` names Helvetica and `helvetica`
+names Arial, and likewise for the two Times and the two Couriers.
+A template is written on one machine and built on another, and the name
+its author had is as likely to be the absent one as the present one.
+An asymmetric table would make a report written on Windows fail on macOS
+while the same report written on macOS built everywhere.
+
+**The metric-compatible free families come after the licensed one.**
+Liberation Sans and Nimbus Sans have Helvetica's widths, so a page
+set in one breaks its lines where a page set in the other does.
+They are last because they are a fallback of last resort
+before the substitute, not a preference.
+
+**The CSS generics name a concrete family.** `sans-serif`, `serif` and
+`monospace` are what a template written against a browser-shaped tool
+spells, and they resolve through a list rather than through a query
+to the platform -- which [host enumeration](#host-enumeration) forbids
+for the reason given there.
+
+What is **not** here matters as much. `Arial Narrow`, `Gill Sans`,
+`Lucida Grande`, `Monaco` and `Menlo` are real families that some machines
+have and others do not, and aliasing one to a near neighbour would set
+a report in a face nobody asked for while recording `alias` rather than
+`substitute`. A family that is simply absent reaches step 4 and is warned
+about, which is the honest answer. Nor are `cursive`, `fantasy` and
+`system-ui` here: no family answers to them.
+
+A template that needs a particular face on a particular machine names it
+by `file` rather than hoping this table spells its family the way the
+template does.
 
 ### Host enumeration
 
@@ -1279,6 +1842,39 @@ These are sources for one table, not alternatives tried in turn, and the printou
 records `host` without naming which of them found the face. A directory that does
 not exist is not an error.
 
+**A symbolic link is read, never followed into.** A link to a font file is read
+as that font. A link to a directory is not descended into: it is offered to the
+reader as a file, fails to be one, and is recorded as an enumeration diagnostic
+naming it. The directories walked here include ones the machine's owner writes
+(`~/.fonts` is theirs), so a link pointing back up its own tree is a thing that
+exists, and a walk that followed one would not come back.
+
+**A lookup relaxes the style, never the family.** A `font` node declaring
+a style the family has not got is not a miss. The table is tried for the
+declared style, and then for a style with less in it, stopping at the first
+face found:
+
+1. the declared boldness and slant,
+2. the declared boldness, upright,
+3. regular weight, the declared slant,
+4. regular.
+
+Steps that repeat one already tried are skipped, so a node declaring neither
+style tries one key and a node declaring one tries two.
+
+The order only ever *takes a style away*. A family holding nothing but a bold
+face does not answer a node that declared no style, however plainly a reader
+would say that the family is installed: a report that asked for regular text
+and was given bold is a worse outcome than one told the family is not there,
+because the second can be fixed and the first is not visible until the page
+is printed. Weight outranks slant, so a family with a bold face and an italic
+one answers a request for bold italic with the bold.
+
+The relaxation happens within a family, before the next family is tried.
+A machine with Helvetica in regular only and Arial in bold resolves a bold
+Helvetica to Helvetica regular at step 2, not to Arial bold at step 3:
+the family the template named is the thing it is most important to keep.
+
 **Collections are enumerated face by face.** A `.ttc` holds several faces and every
 one of them is a separate entry. This is not a refinement to add later: on macOS
 two thirds of the installed faces live in collections, `Helvetica`, `Times`,
@@ -1295,6 +1891,13 @@ style bits, in this order:
 
 This ranks **sources, not answers**: the first table the face has decides, and the
 subfamily string is read only when neither table is present — not when it disagrees.
+
+The third rank cannot be reached, and is written down so that nobody adds it
+thinking it was forgotten. It is for a face with neither style table, and `head`
+is one of the tables [every face must have](#font); a face without one is refused
+before its style is asked for. It stays here because the rank is the rule and the
+refusal is a separate rule that happens to subsume it, and an implementation that
+stopped requiring `head` would need this again.
 A face whose bits are wrong is therefore classified wrongly, and the engine has no
 way to tell that case from a face whose subfamily string is merely a weight name it
 could not have classified anyway. Reading a contradicting string as an override
@@ -1321,18 +1924,47 @@ in two directories, or an ornament face declaring its parent's family, will do i
   diagnostic.
 - A file that presents itself as sfnt and then fails to parse is a **warning**.
 
+One unsupported format is not visible in the first bytes: a [bitmap-only
+sfnt](#font), which is an ordinary sfnt carrying `bhed` where a face
+this engine can draw carries `head`. It is classified from its tables instead,
+and belongs to the first case above rather than the second. What it may not
+be reported as is a face missing a required table, which describes
+a broken file and sends the reader looking for damage that is not there.
+
 Neither is decided from the filename extension. Filtering on `.ttf`/`.ttc`/`.otf`
 would satisfy this rule by accident while hiding real faces, which is the defect
 it exists to prevent.
 
+**The table may be kept between builds.** Building it parses every face
+the machine has, which takes seconds, and its answer changes only when a font
+file does. A process that builds one report after another may keep the table
+and enumerate once, provided what it hands out is the table enumeration would
+build now.
+
+That proviso is the whole of the permission, and it is not free. A cache
+has to notice a font installed, removed, renamed, or replaced, a directory
+that would not list, and a read that failed and would now succeed, which
+means comparing every file the sources offer against what the enumeration
+found: its name, its modification time, its size, and whatever else the
+platform records. What no such check sees is a file rewritten in place
+with its size and its times kept, which extracting an archive or a copy
+that preserves times can do, so a caller that rewrites a font in a running
+process has to be able to say so.
+
+This engine enumerates for each build that needs the table and keeps
+nothing between them, so the question does not arise here. The permission
+is written down because it is a property of the specification rather than
+of one engine, and an implementation that takes it is still conforming.
+
 **Enumeration diagnostics are not report warnings.** They describe the machine,
 not the document, so they do not enter the [printout's warning
-list](printout.md#header-line) and are surfaced by `sr validate` and by the library's
-diagnostic hook instead. A stock macOS has three files that can never be parsed
-and cannot be removed, so putting them in the printout would attach a permanent,
-unfixable warning to every report and teach the reader to ignore the list that also
-carries missing glyphs and overflow. A file that *would* have answered a lookup and
-could not be read is a different matter, and is a warning.
+list](printout.md#header-line) and are surfaced by `sr validate`
+and by the library's diagnostic hook instead. A stock macOS has three
+files that can never be parsed and cannot be removed, so putting them
+in the printout would attach a permanent, unfixable warning to every report
+and teach the reader to ignore the list that also carries missing glyphs
+and overflow. A file that *would* have answered a lookup and could not
+be read is a different matter, and is a warning.
 
 ### The substitute face
 
@@ -1375,6 +2007,10 @@ glyph, which is visible as an empty box, and records a warning in the printout
 header naming the character, the font, and the node. Text keeps its metrics, so
 nothing shifts.
 
+The warning is about what is drawn. A deferred field's placeholder is measured
+and never drawn, so it raises none; the value that replaces it raises its own
+when it is set. See [placeholders](layout.md#placeholders).
+
 Under `--strict-fonts` the pinned file is the only one considered, which makes this
 the likelier failure — a template using `…` or `—` needs a font that has them.
 
@@ -1383,6 +2019,9 @@ the likelier failure — a template using `…` or `—` needs a font that has t
 Validation runs once, at load, before any data is read. It checks:
 
 - Node nesting and cardinality.
+- [Unknown names](#unknown-names): a node or property the format does not
+  define is accepted, and is an error only when it is one edit from a name
+  legal on that node, or when `--strict-names` is set.
 - Required properties present; property values in range for their type.
 - Exactly one of `group` / `detail` at each level that takes them.
 - `layout` has `pagesize`, or both `width` and `height`.
@@ -1399,16 +2038,32 @@ Validation runs once, at load, before any data is read. It checks:
   `report`, `page`, `column`, or a defined group.
 - `FINAL` appears **only in the `expr` of a `field` or `barcode` that has
   an `evaltime`**, and such an element's `expr` names `FINAL` at least once.
-  Each without the other is a mistake rather than a no-op — the first has no scope to
-  read from, the second defers an expression that would give the same answer in place.
+  Each without the other is a mistake rather than a no-op: the first
+  has no scope to read from, the second defers an expression that would
+  give the same answer in place. Each diagnostic names the half that is
+  there without the other: the first names `expr`, where `FINAL` is
+  written, and the second names `evaltime`. An `expr` without `FINAL`
+  is the ordinary case, so it is the deferral that is wrong, as it is
+  for an `evaltime` with no `expr`.
 - `FINAL` in any other property is an error, including in the same element's
   `printwhen` or a `style when` beneath it. `expr` is the only property whose
   evaluation is deferred; everything else on the element is evaluated when the band
   is measured, which is before the scope ends, so there would be nothing for `FINAL`
   to bind to.
 - Every name used as `FINAL.`*name* is a predefined variable or a declared
-  `variable`. Parameters and bare record fields are not in `FINAL`.
+  `variable`. Parameters and bare record fields are not in `FINAL`, and
+  nor are `VERTICAL_POSITION`, `VERTICAL_SPACE`, and `FINAL` itself;
+  see [`FINAL`](expressions.md#final).
 - Every `xref type="outline"` has a reachable target `outline name=`.
+  Both are expressions, so this checks a target that is a string literal
+  against the names that are; a target computed from the data is held to
+  the document when it ends, [as printout.md says](printout.md#xref).
+- Every `outline` `level` is at least 1.
+- No `width`, `height`, `maxwidth`, or `maxheight` is negative, on an element,
+  an `xref`, or a section, and no stroke `width` on a `line` or a `rectangle`.
+  A negative `right` or `bottom` is legal; see [geometry](#geometry).
+- Every floating element has a declared `height` or a content height:
+  `stretch=#true` on a `field`, any `barcode`, or `scale="grow"` on an `image`.
 - Per axis, at most two of `left`/`right`/`width` and at most two of
   `top`/`bottom`/`height`.
 - [Content sources](#content-sources) are consistent: on a `field` or `barcode`
@@ -1436,11 +2091,18 @@ Validation runs once, at load, before any data is read. It checks:
   no two embedded layouts in one scope chain share a name.
 - `image` does not combine `embed=#false` with `data` or a `content` child.
 - `columns count` does not make the column width non-positive.
+- A `barcode`'s `ink` and `paper` can be told apart in red light;
+  see [colour](#colour). What its type can encode is not checked here,
+  not even for a `text`: that is an error when the band is built.
+- `charset` and `eci` appear only on a 2-D `barcode`;
+  see [character set](#character-set).
+- A `barcode`'s `module` is positive.
 - Expressions parse. Name resolution is not checked at load, since undeclared
   record fields are reached dynamically.
 
 It warns when a band that declares no `height` contains only elements whose
 vertical extent is [container-dependent](layout.md#building-a-band), since
-such a band collapses to zero height.
+such a band collapses to zero height. It warns about each unknown name that
+is neither reserved nor registered nor a near miss.
 
 Every diagnostic names the file, the node path, and the property.

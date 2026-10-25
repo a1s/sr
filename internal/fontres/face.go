@@ -3,7 +3,6 @@ package fontres
 import (
 	"bytes"
 	"fmt"
-	"sort"
 
 	"github.com/a1s/sr/internal/geom"
 	gofont "github.com/go-text/typesetting/font"
@@ -58,6 +57,9 @@ type Face struct {
 	upem    float64
 	widths  map[rune]float64
 	missing map[rune]bool
+	// missingOrder is the characters of missing in the order they were
+	// first asked for, which is the order their warnings are raised in.
+	missingOrder []rune
 
 	// ascender and descender are the face's own hhea metrics,
 	// in font units, the descender positive downward.
@@ -159,7 +161,10 @@ func (face *Face) Advance(char rune) float64 {
 	}
 	gid, ok := face.face.NominalGlyph(char)
 	if !ok {
-		face.missing[char] = true
+		if !face.missing[char] {
+			face.missing[char] = true
+			face.missingOrder = append(face.missingOrder, char)
+		}
 		gid = 0
 	}
 	width := float64(face.face.HorizontalAdvance(gid)) * float64(face.Size) / face.upem
@@ -189,16 +194,16 @@ func (face *Face) Width(text string) float64 {
 // Leading is the baseline-to-baseline distance.
 func (face *Face) Leading() float64 { return geom.Round(LeadingRatio * float64(face.Size)) }
 
-// MissingRunes lists the characters this face was asked for and does not have.
-// The order is by code point rather than the map's, so that a font missing
-// more than one glyph produces the same warning sequence on every run.
+// MissingRunes lists the characters this face was asked for and does not have,
+// in the order it was first asked for each.
+//
+// That order is the order the warnings are raised in, which is what
+// doc/printout.md#header-line holds the warning array to: the array mixes
+// kinds, so build order is the only order all of them have in common, and
+// sorting the glyph ones among themselves would put them out of step with
+// the rest. It is a stable order either way, since it is the document's.
 func (face *Face) MissingRunes() []rune {
-	out := make([]rune, 0, len(face.missing))
-	for char := range face.missing {
-		out = append(out, char)
-	}
-	sort.Slice(out, func(one, two int) bool { return out[one] < out[two] })
-	return out
+	return append([]rune(nil), face.missingOrder...)
 }
 
 // Key identifies a face for the printout's font table.

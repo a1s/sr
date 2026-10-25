@@ -44,7 +44,9 @@ func (psr *parser) validate(report *Report) {
 			if columns.Count > 0 {
 				each := (width - float64(columns.Count-1)*columns.Gap) / float64(columns.Count)
 				if each <= 0 {
-					psr.errf(columns.Node, "count", "%d columns with a %g pt gap leaves no width in a %g pt frame", columns.Count, columns.Gap, width)
+					psr.errf(columns.Node, "count",
+						"%d columns with a %g pt gap leave no width in a frame of %g pt",
+						columns.Count, columns.Gap, width)
 				}
 			}
 		}
@@ -71,7 +73,8 @@ func (psr *parser) uniqueNames(report *Report) {
 				continue
 			}
 			if seen[name] {
-				psr.errf(nodes[index], "", "duplicate %s %q", kind, name)
+				psr.errf(nodes[index], "",
+					"a %s named '%s' is declared twice", kind, name)
 				continue
 			}
 			seen[name] = true
@@ -138,10 +141,12 @@ func (psr *parser) uniqueEmbedded(list []*Embedded, enclosing map[string]bool) {
 	for _, embedded := range list {
 		switch {
 		case seen[embedded.Name]:
-			psr.errf(embedded.Node, "", "duplicate embedded layout %q", embedded.Name)
+			psr.errf(embedded.Node, "",
+				"an embedded layout named '%s' is declared twice here",
+				embedded.Name)
 		case enclosing[embedded.Name]:
 			psr.errf(embedded.Node, "",
-				"an enclosing layout already defines an embedded layout named %q, and the search for one runs outward, so this would shadow it",
+				"an embedded layout named '%s' is declared in an enclosing layout, and the search for one runs outward, so this would shadow it",
 				embedded.Name)
 		}
 		seen[embedded.Name] = true
@@ -181,7 +186,8 @@ func (psr *parser) namespaceFor(params []*Parameter, vars []*Variable, records *
 func (psr *parser) collectGroups(body *Body, ns *namespace) {
 	for group := body.Group; group != nil; group = group.Group {
 		if _, dup := ns.groups[group.Name]; dup {
-			psr.errf(group.Node, "", "duplicate group %q", group.Name)
+			psr.errf(group.Node, "",
+				"a group named '%s' is declared twice", group.Name)
 			continue
 		}
 		ns.groups[group.Name] = group
@@ -198,7 +204,7 @@ func (psr *parser) validateNamespace(ns *namespace, shared *sharedNames) {
 		}
 		if expr.IsReserved(name) {
 			psr.errf(node, "",
-				"%s %q collides with a predefined name, a module, or a builtin, which resolution puts first",
+				"%s '%s' is a predefined name, a module, or a builtin, which resolution puts first",
 				kind, name)
 		}
 	}
@@ -215,7 +221,7 @@ func (psr *parser) validateNamespace(ns *namespace, shared *sharedNames) {
 		for _, suffix := range []string{"_COUNT", "_PAGE_NUMBER"} {
 			if expr.IsReserved(group.Name + suffix) {
 				psr.errf(group.Node, "",
-					"group %q would derive %s, which already exists",
+					"a group named '%s' derives '%s', which already exists",
 					group.Name, group.Name+suffix)
 			}
 		}
@@ -223,13 +229,14 @@ func (psr *parser) validateNamespace(ns *namespace, shared *sharedNames) {
 	for _, variable := range ns.vars {
 		if variable.Iter == ScopeGroup && variable.IterGrp != "" {
 			if _, ok := ns.groups[variable.IterGrp]; !ok {
-				psr.errf(variable.Node, "itergrp", "no group named %q", variable.IterGrp)
+				psr.errf(variable.Node, "itergrp",
+					"no group named '%s'", variable.IterGrp)
 			}
 		}
 		if variable.Reset == ScopeGroup && variable.ResetGrp != "" {
 			if _, ok := ns.groups[variable.ResetGrp]; !ok {
 				psr.errf(variable.Node, "resetgrp",
-					"no group named %q", variable.ResetGrp)
+					"no group named '%s'", variable.ResetGrp)
 			}
 		}
 	}
@@ -239,7 +246,8 @@ func (psr *parser) validateEmbedded(embedded *Embedded, shared *sharedNames) {
 	seen := map[string]bool{}
 	for _, param := range embedded.Params {
 		if seen[param.Name] {
-			psr.errf(param.Node, "", "duplicate parameter %q", param.Name)
+			psr.errf(param.Node, "",
+				"a parameter named '%s' is declared twice", param.Name)
 			continue
 		}
 		seen[param.Name] = true
@@ -248,7 +256,8 @@ func (psr *parser) validateEmbedded(embedded *Embedded, shared *sharedNames) {
 	seen = map[string]bool{}
 	for _, variable := range embedded.Variables {
 		if seen[variable.Name] {
-			psr.errf(variable.Node, "", "duplicate variable %q", variable.Name)
+			psr.errf(variable.Node, "",
+				"a variable named '%s' is declared twice", variable.Name)
 			continue
 		}
 		seen[variable.Name] = true
@@ -297,7 +306,7 @@ func (psr *parser) validateSection(section *Section, ns *namespace, shared *shar
 	for _, sub := range section.Subreports {
 		if section.Kind == BandHeader || section.Kind == BandFooter {
 			psr.errf(sub.Node, "",
-				"a subreport emits bands of its own, and a %s band is measured and reserved before the page it belongs to is filled; put it on a title, summary or detail band",
+				"a subreport belongs on a detail, a title or a summary: a %s band is measured and reserved before the page it belongs to is filled",
 				section.Kind)
 		}
 		// swapheader and swapfooter place a band outside the frame's ordinary
@@ -309,7 +318,7 @@ func (psr *parser) validateSection(section *Section, ns *namespace, shared *shar
 				swap = "swapfooter"
 			}
 			psr.errf(sub.Node, "",
-				"%s places this band outside the frame's own fill, and a subreport takes frame space of its own, so the two cannot be combined",
+				"%s sits beyond the frame's own reservation, and a subreport takes frame space of its own, so the two cannot be combined",
 				swap)
 		}
 	}
@@ -355,7 +364,8 @@ func (psr *parser) validateElement(el Element, ns *namespace, shared *sharedName
 func (psr *parser) validateContent(node *kdl.Node, content *Content, ns *namespace, shared *sharedNames) {
 	if content.Data != "" {
 		if _, ok := shared.data[content.Data]; !ok {
-			psr.errf(node, "data", "no data blob named %q", content.Data)
+			psr.errf(node, "data",
+				"no data node named '%s'", content.Data)
 		}
 	}
 	if content.EvalTime == "" {
@@ -366,7 +376,8 @@ func (psr *parser) validateContent(node *kdl.Node, content *Content, ns *namespa
 	default:
 		if _, ok := ns.groups[content.EvalTime]; !ok {
 			psr.errf(node, "evaltime",
-				"names neither report, page, column, nor a group defined here")
+				"'%s' is not a scope: name report, page, column, or a group defined here",
+				content.EvalTime)
 		}
 	}
 }
@@ -375,7 +386,7 @@ func (psr *parser) validateStyles(styles []*Style, shared *sharedNames) {
 	for _, style := range styles {
 		if style.HasFont {
 			if _, ok := shared.fonts[style.Font]; !ok {
-				psr.errf(style.Node, "font", "no font named %q", style.Font)
+				psr.errf(style.Node, "font", "no font named '%s'", style.Font)
 			}
 		}
 	}
@@ -421,18 +432,34 @@ func (psr *parser) validateFinalUse(report *Report, ns *namespace) {
 		if !site.deferrable {
 			if site.prog.UsesFinal {
 				psr.errf(site.node, site.prop,
-					"FINAL lives in the expr of a field or barcode with an evaltime, and nowhere else: everything here is evaluated when the band is measured, before the scope ends")
+					"FINAL belongs in the expr of a field or barcode with an evaltime, and nowhere else: everything here is evaluated when the band is measured, before the scope ends")
 			}
 			continue
 		}
 		if !site.prog.UsesFinal {
 			psr.errf(site.node, "evaltime",
-				"this expression never names FINAL, so deferring it would give the same answer in place")
+				"evaltime defers an expr that never names FINAL, so it would give the same answer in place")
 		}
 		for _, name := range site.prog.FinalNames {
+			// Three predefined names are not in FINAL, and each is a
+			// different kind of absence. The two vertical ones describe
+			// a band being measured, and when a scope ends no band is;
+			// FINAL is not a variable at all.
+			// See doc/expressions.md#final.
+			switch name {
+			case "VERTICAL_POSITION", "VERTICAL_SPACE":
+				psr.errf(site.node, "expr",
+					"FINAL holds no %s: it describes a band being measured, and when a scope ends no band is",
+					name)
+				continue
+			case "FINAL":
+				psr.errf(site.node, "expr",
+					"FINAL holds no FINAL: it is the namespace, not a value in it")
+				continue
+			}
 			if !known[name] {
 				psr.errf(site.node, "expr",
-					"FINAL.%s is neither a predefined variable nor a declared variable; a parameter is constant and a record field belongs to a record, so reach one through FINAL.THIS", name)
+					"FINAL holds a predefined variable or a declared variable, and '%s' is neither; a parameter is constant and a record field belongs to a record, so reach one through FINAL.THIS", name)
 			}
 		}
 	}
@@ -473,7 +500,8 @@ func (psr *parser) validateOutlineTargets(report *Report) {
 					continue
 				}
 				if !names[target] {
-					psr.errf(xref.Node, "target", "no outline is named %q", target)
+					psr.errf(xref.Node, "target",
+						"no outline is named '%s'", target)
 				}
 			}
 		}
@@ -542,7 +570,7 @@ func (psr *parser) subreportTarget(sub *Subreport, scope [][]*Embedded) *subTarg
 		found := lookupEmbedded(scope, sub.Embedded)
 		if found == nil {
 			psr.errf(sub.Node, "embedded",
-				"no embedded layout named %q is in scope here", sub.Embedded)
+				"no embedded layout named '%s' is in scope here", sub.Embedded)
 			return nil
 		}
 		sub.EmbeddedLayout = found
@@ -574,7 +602,7 @@ func (psr *parser) checkSubreportTarget(sub *Subreport, target *subTarget, repor
 		body := target.body
 		if body.Header != nil || body.Footer != nil {
 			psr.errf(sub.Node, "inline",
-				"an inline subreport shares the parent's pages, whose header and footer are already reserved; %s must not define them",
+				"an inline subreport prints on the host's pages, so its layout defines no header and no footer; %s does",
 				target.what)
 		}
 		// swapheader places a band outside the page header and swapfooter
@@ -586,14 +614,14 @@ func (psr *parser) checkSubreportTarget(sub *Subreport, target *subTarget, repor
 		}
 		if body.Summary != nil && body.Summary.SwapFooter {
 			psr.errf(sub.Node, "inline",
-				"swapfooter places a summary below the page footer, and an inline subreport prints on a page whose footer is the host's; %s must not use it",
+				"an inline subreport prints on a page whose footer is the host's, and cannot swap with a page footer it does not own; %s does",
 				target.what)
 		}
 		if target.page != nil && report.Layout != nil {
 			mine := report.Layout.Page
 			if target.page.Width != mine.Width || target.page.Height != mine.Height {
 				psr.errf(sub.Node, "inline",
-					"an inline subreport shares the parent's pages; %s is %g by %g pt and this report is %g by %g pt",
+					"an inline subreport prints on the host's pages; %s is %g by %g pt and this report is %g by %g pt",
 					target.what, target.page.Width, target.page.Height,
 					mine.Width, mine.Height)
 			}
@@ -602,11 +630,11 @@ func (psr *parser) checkSubreportTarget(sub *Subreport, target *subTarget, repor
 	supplied := map[string]bool{}
 	for _, arg := range sub.Args {
 		if _, ok := target.byName[arg.Name]; !ok {
-			psr.errf(arg.Node, "", "%s has no parameter named %q", target.what, arg.Name)
+			psr.errf(arg.Node, "", "the subreport declares no parameter named '%s'", arg.Name)
 			continue
 		}
 		if supplied[arg.Name] {
-			psr.errf(arg.Node, "", "duplicate arg %q", arg.Name)
+			psr.errf(arg.Node, "", "'%s' is supplied twice", arg.Name)
 		}
 		supplied[arg.Name] = true
 	}
@@ -617,8 +645,8 @@ func (psr *parser) checkSubreportTarget(sub *Subreport, target *subTarget, repor
 			continue
 		}
 		psr.errf(sub.Node, "",
-			"%s requires the parameter %q, which has no default and no arg here",
-			target.what, param.Name)
+			"the subreport requires '%s', which has no default and no arg here",
+			param.Name)
 	}
 }
 

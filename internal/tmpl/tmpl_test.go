@@ -132,49 +132,49 @@ func TestValidationRejects(test *testing.T) {
 	}{
 		{"all three on one axis",
 			wrap(`detail { field left=1 right=2 width=3 text="x" }`),
-			"at most two of left, right and width"},
+			"left, right and width are one too many"},
 		{"all three vertically",
 			wrap(`detail { field top=1 bottom=2 height=3 text="x" }`),
-			"at most two of top, bottom and height"},
+			"top, bottom and height are one too many"},
 		{"two content sources",
 			wrap(`detail { field text="x" expr="1" }`),
-			"exactly one of expr, text and data"},
+			"takes exactly one of expr, text or data"},
 		{"no content source",
 			wrap(`detail { field left=0 }`),
-			"exactly one of expr, text and data"},
+			"takes exactly one of expr, text or data"},
 		{"evaltime without expr",
 			wrap(`detail { field text="x" evaltime="report" }`),
-			"takes its content from expr"},
+			"evaltime defers the expr, so there has to be one"},
 		{"deferred stretch field with no placeholder",
 			wrap(`detail { field expr="FINAL.PAGE_NUMBER" evaltime="report" stretch=#true }`),
-			"needs a placeholder"},
+			"needs a text or data placeholder"},
 		{"deferred barcode with no placeholder",
 			wrap(`detail { barcode type="Code128" expr="FINAL.PAGE_NUMBER" evaltime="report" }`),
-			"needs a placeholder"},
+			"needs a text or data placeholder"},
 		{"FINAL without evaltime",
 			wrap(`detail { field expr="FINAL.PAGE_NUMBER" }`),
-			"FINAL lives in the expr of a field or barcode with an evaltime"},
+			"FINAL belongs in the expr of a field or barcode with an evaltime"},
 		{"FINAL in printwhen",
 			wrap(`detail { field text="x" printwhen="FINAL.PAGE_NUMBER > 1" }`),
-			"FINAL lives in the expr"},
+			"FINAL belongs in the expr"},
 		{"evaltime without FINAL",
 			wrap(`detail { field expr="PAGE_NUMBER" evaltime="report" }`),
 			"never names FINAL"},
 		{"FINAL of an unknown name",
 			wrap(`detail { field expr="FINAL.nonesuch" evaltime="report" }`),
-			"neither a predefined variable nor a declared variable"},
+			"is neither; a parameter is constant"},
 		{"unknown evaltime scope",
 			wrap(`detail { field expr="FINAL.PAGE_NUMBER" evaltime="nonesuch" }`),
-			"names neither report, page, column, nor a group"},
+			"is not a scope: name report, page, column, or a group"},
 		{"unknown style font",
 			wrap(`detail { field text="x" { style font="nonesuch" } }`),
-			`no font named "nonesuch"`},
+			`no font named 'nonesuch'`},
 		{"unknown outline target",
 			wrap(`detail { xref type="outline" target="'nowhere'" { field text="x" } }`),
-			`no outline is named "nowhere"`},
-		{"unknown property",
-			wrap(`detail { field text="x" nonesuch=1 }`),
-			"unknown property"},
+			`no outline is named 'nowhere'`},
+		{"a property one edit from a legal one",
+			wrap(`detail { field text="x" printwhn="True" }`),
+			"did you mean `printwhen`?"},
 		{"barcode ink that reflects red light",
 			wrap(`detail { barcode type="Code128" text="x" ink="yellow" }`),
 			"will not scan"},
@@ -187,36 +187,36 @@ func TestValidationRejects(test *testing.T) {
 		{"barcode ink too close to its paper",
 			wrap(`detail { barcode type="Code128" text="x" ink="navy" paper="#654321" }`),
 			"will not scan"},
-		{"unknown node",
-			wrap(`detail { nonesuch }`),
-			"unexpected node here"},
+		{"a node one edit from a legal one",
+			wrap(`detail { rectangel }`),
+			"did you mean `rectangle`?"},
 		{"both group and detail",
 			wrap(`detail { field text="x" }
     group "g" expr="1" { detail { field text="y" } }`),
-			"exactly one of group and detail"},
+			"holds exactly one group or one detail"},
 		{"neither group nor detail",
 			wrap(`title { field text="x" }`),
-			"exactly one of group and detail is required"},
+			"holds exactly one group or one detail"},
 		{"format on a non-temporal member",
 			`report name="t" {
   records { member "a" type="int" format="2006" }
   font "body" file="f.ttf" size=9
   layout pagesize="A4" { detail { field text="x" } }
 }`,
-			"applies only to a date or datetime member"},
+			"format reads a date, and this member is a"},
 		{"a name that collides with a predefined one",
 			`report name="t" {
   variable "PAGE_NUMBER" expr="1"
   font "body" file="f.ttf" size=9
   layout pagesize="A4" { detail { field text="x" } }
 }`,
-			"collides with a predefined name"},
+			"is a predefined name"},
 		{"a group whose derived name collides",
 			`report name="t" {
   font "body" file="f.ttf" size=9
   layout pagesize="A4" { group "PAGE" expr="1" { detail { field text="x" } } }
 }`,
-			"would derive PAGE_COUNT"},
+			"derives 'PAGE_COUNT'"},
 		{"duplicate variable",
 			`report name="t" {
   variable "v" expr="1"
@@ -224,14 +224,14 @@ func TestValidationRejects(test *testing.T) {
   font "body" file="f.ttf" size=9
   layout pagesize="A4" { detail { field text="x" } }
 }`,
-			`duplicate variable "v"`},
+			`a variable named 'v' is declared twice`},
 		{"itergrp naming no group",
 			`report name="t" {
   variable "v" expr="1" iter="group" itergrp="nonesuch"
   font "body" file="f.ttf" size=9
   layout pagesize="A4" { detail { field text="x" } }
 }`,
-			`no group named "nonesuch"`},
+			`no group named 'nonesuch'`},
 		{"font with neither typeface nor file",
 			`report name="t" {
   font "body" size=9
@@ -243,7 +243,7 @@ func TestValidationRejects(test *testing.T) {
   font "body" file="f.ttf" size=9
   layout { detail { field text="x" } }
 }`,
-			"either pagesize, or both width and height"},
+			"a layout needs a pagesize, or both a width and a height"},
 		{"a column count that leaves no width",
 			`report name="t" {
   font "body" file="f.ttf" size=9
@@ -252,14 +252,14 @@ func TestValidationRejects(test *testing.T) {
     detail { field text="x" }
   }
 }`,
-			"leaves no width"},
+			"leave no width"},
 		{"both default and defaultexpr",
 			`report name="t" {
   parameter "p" default="1" defaultexpr="2"
   font "body" file="f.ttf" size=9
   layout pagesize="A4" { detail { field text="x" } }
 }`,
-			"at most one of default and defaultexpr"},
+			"default and defaultexpr are alternatives"},
 		{"an inline subreport whose layout has a header",
 			`report name="t" {
   font "body" file="f.ttf" size=9
@@ -274,7 +274,7 @@ func TestValidationRejects(test *testing.T) {
     }
   }
 }`,
-			"must not define them"},
+			"defines no header and no footer"},
 		{"a subreport combining inline with ownpageno",
 			`report name="t" {
   font "body" file="f.ttf" size=9
@@ -286,7 +286,7 @@ func TestValidationRejects(test *testing.T) {
     }
   }
 }`,
-			"cannot restart numbering"},
+			"cannot restart their numbering"},
 		{"a subreport on a columns header",
 			`report name="t" {
   font "body" file="f.ttf" size=9
@@ -301,7 +301,7 @@ func TestValidationRejects(test *testing.T) {
     detail { field text="x" }
   }
 }`,
-			"put it on a title, summary or detail band"},
+			"a subreport belongs on a detail, a title or a summary"},
 		{"an arg naming no parameter",
 			`report name="t" {
   font "body" file="f.ttf" size=9
@@ -313,7 +313,7 @@ func TestValidationRejects(test *testing.T) {
     }
   }
 }`,
-			"has no parameter named"},
+			"declares no parameter named"},
 		{"a floating element with no height of its own",
 			wrap(`detail height=20 { field float=#true text="x" left=0 right=0 }`),
 			"a floating element's height must come from the element"},

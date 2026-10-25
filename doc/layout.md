@@ -7,6 +7,7 @@ a [printout](printout.md).
 
 - [Coordinates and rounding](#coordinates-and-rounding)
 - [Text metrics](#text-metrics)
+- [Line breaking](#line-breaking)
 - [Measure, decide, commit](#measure-decide-commit)
 - [Frames](#frames)
 - [Building a band](#building-a-band)
@@ -30,8 +31,57 @@ Every computed coordinate and extent is rounded to 3 decimal places immediately
 after the computation that produces it. This is normative: it decides whether
 a band fits, so rounding only at output time gives different page breaks.
 
+**Halves round away from zero.** 0.0005 becomes 0.001 and -0.0005 becomes
+-0.001; the rule is symmetric about zero, so it is neither truncation
+toward zero nor rounding toward positive infinity, and it is not the
+round-half-to-even that several languages make their default.
+
+That tie-break is shared with `quantize` and the
+[`round` builtin](expressions.md#starlark-builtins), so a reader never has
+to remember which of three rules applies where. Only the tie-break is shared:
+those work on an exact decimal and on a float respectively, while a coordinate
+is rounded by the binary64 arithmetic below, and reaching for `quantize` to
+round a coordinate gives a different answer.
+
+The arithmetic is normative too, because it is observable. Rounding is
+
+```
+round_half_away_from_zero(value * 1000) / 1000
+```
+
+evaluated in IEEE 754 binary64, and *not* rounding of the exact decimal the
+source text spelled. The two differ. A `left` written as `0.1235` is held as
+0.12349999999999999866…, which is below the half and would round down to 0.123;
+multiplying by 1000 first gives exactly 123.5, which rounds to 0.124. 0.124 is
+the answer, so the scaling comes first. An implementation that reaches for an
+exact decimal type here disagrees with this one in the last digit, which is
+enough to move a page break.
+
 Comparisons against frame boundaries use a tolerance of 0.001 pt, so a band
 whose height matches the remaining space exactly fits rather than ejecting.
+Both sides of such a comparison are already rounded, so the tolerance absorbs
+one unit in the last place rather than an accumulated error.
+
+The tolerance is added in binary64 like everything else here, and the test is
+
+```
+extent <= limit + 0.001
+```
+
+which is not the same as comparing thousandths as integers, because adding
+0.001 to a three-decimal value does not always reach the next one. `20.003 +
+0.001` is exactly 20.004, so a band of 20.004 pt fits a remaining 20.003 pt;
+`1.001 + 0.001` is 1.0019999999999998, so a band of 1.002 pt does **not** fit
+a remaining 1.001 pt and the page breaks.
+
+Which way a value falls depends on its binade, not on its size in any smooth
+way. Across the 842 pt of an A4 page the addition falls short for 22.5% of
+three-decimal values, so an implementation comparing thousandths instead
+would disagree about roughly one exact fit in five — but the rate is 49.6%
+in [1, 2), 41.6% in [256, 512), and exactly zero throughout [4, 8), [16, 32)
+and [64, 256). That is why the rule has to be the arithmetic rather than the
+intent: "a tolerance of one unit in the last place" describes what it is for,
+and this expression is what decides where the page breaks.
 
 ## Text metrics
 
@@ -53,6 +103,156 @@ and therefore where every page after it breaks.
 A character the resolved font lacks is measured and drawn as `.notdef`, which is
 a visible empty box, and recorded as a
 [warning](template.md#missing-glyphs). Metrics are unaffected, so nothing shifts.
+
+## Line breaking
+
+A text mark's [`lines`](printout.md#text) array is part of the printout,
+and how many entries it has decides the height of a stretch field, the height
+of its band, and therefore where the page breaks. So this is normative to the
+character, and two engines that wrap differently agree about nothing further
+down the document.
+
+What is wrapped is the string the element finally holds: the `expr`
+result with `format` applied, or the `text` or the `data` node's content
+as written, since `format` applies to nothing else
+([content sources](template.md#content-sources)).
+Where a character came from makes no difference to how it is treated.
+
+### Mandatory breaks
+
+**U+000A LINE FEED ends a line**, whether or not the box needed a break there.
+It is consumed, appearing on neither side. Nothing else does this: U+000D,
+U+000B, U+000C, U+0085 and U+2028 are ordinary characters, so a CRLF leaves
+its carriage return at the end of the line before it.
+
+A paragraph that is empty stays a line: text beginning with a newline starts
+with an empty line, text ending with one ends with an empty line, and a run
+of newlines gives a run of empty lines. `lines` is never empty, so text that
+is empty or reduces to nothing is one empty line rather than none.
+
+### Break opportunities
+
+Within a paragraph the only break opportunities are **U+0020 SPACE and
+U+0009 TAB**. No other character is one — not a hyphen, a soft hyphen,
+a solidus or an em dash, and not a no-break space, a zero-width space,
+an em space, a figure space or an ideographic space. Nothing happens
+between CJK characters either. Those all measure and draw normally,
+and a line may be cut in the middle of a run of them only by the rule
+for overlong runs below.
+
+That this list is two characters long rather than a Unicode line-breaking
+algorithm is a choice, and the cost of it is that a language which does
+not separate its words with spaces does not wrap at its own boundaries.
+
+### Fitting
+
+Take the paragraph as a sequence of **chunks**, each one a maximal run
+of characters that are neither space nor tab, together with the run of
+spaces and tabs immediately after it. Either run may be empty, which is
+what makes a paragraph's leading whitespace a chunk of its own — an empty
+word and the spaces after it — so that it lands at the start of the first
+line. Fill each line with whole chunks while they fit, then break.
+
+The whitespace inside a chunk counts toward the fit. That is the part worth
+stating outright, because it is where a plausible implementation goes wrong:
+a line takes another word only when that word **and the whitespace before
+the next one** still fit. `"xxxx xxxx"` set in Go-Regular at size 10 measures
+42.778 pt, and 45.557 pt counting the space after it; in a box between those
+two widths, a line takes one word rather than two when more text follows,
+and both words when nothing does.
+
+**A line's width is accumulated, and rounded at every step.** Start at zero;
+for each chunk added, add that chunk's own width and round the running total
+to 3 decimals by the rule under [Coordinates and rounding](#coordinates-and-rounding).
+The line still fits while that total is no more than **the limit**: the box's
+own rounded width plus the usual 0.001 pt tolerance.
+
+Measuring the candidate line as one string instead, and rounding once at the
+end, is a different rule and gives different documents. In a box of 72.280 pt —
+limit 72.281 — `"q q q q q q q q q"` at size 10 measures 72.2802734375 pt, which
+rounds to 72.280 and is within the limit; accumulated chunk by chunk it reaches
+72.282 pt, which is not. The engine breaks it, so the accumulation is normative
+rather than an implementation detail — as the rounding rule it follows from
+already implies, since a line's width is a computed extent like any other.
+
+Each chunk contributes **its own width, rounded once** — not the total of a
+walk through its codepoints, which can differ by a unit in the last place. The
+two granularities are separate and neither borrows the other's arithmetic.
+
+### Overlong runs
+
+A chunk too wide for the space left on the current line moves to a line of its
+own. Whether it fits there is settled by **walking it**, codepoint by codepoint:
+start at zero, add each codepoint's advance, round the running total at every
+one, and stop at the last codepoint that keeps the total within the limit —
+except that **the walk always takes its first codepoint**, whether or not
+that one fits. That exception is what keeps wrapping terminating, and it is
+why content overflows a box narrower than a single character rather than
+wrapping forever.
+
+The walk is both the test and the cut, and what decides between them is **how
+much of the chunk the walk consumed**, not whether the chunk fits. Consuming
+all of it means the chunk starts the line; stopping short means the codepoints
+taken are a line of their own, and what is left is walked again.
+
+Those two are not the same test, and a box narrower than one codepoint is
+where they come apart: there the forced first codepoint may be the whole
+of what remains, so the walk consumed the chunk while nothing about it fits.
+It starts the line. Being the line in progress rather than an emitted cut,
+it is then trimmed at the end of the paragraph like any other — which is
+why `"Wa"` followed by a tab, in a box of 6.89 pt, ends `["W", "a", ""]`
+and not `["W", "a", "<tab>"]`.
+
+That the walk is what decides takes a worked example, because the two
+measurements are never far apart. A box of 11.122 pt has a **limit**
+of 11.123 pt — the box rounded, plus the tolerance. `"qq"` at size 10
+is 11.123 pt measured as one string, which is within that limit, and
+11.124 pt walked, which is not. The engine puts one `q` on the line,
+so the walk is the figure it consulted.
+
+The walked total is used for nothing else. A chunk that fits contributes
+its own rounded width to the line, as above, and the walk is forgotten.
+
+What a cut leaves behind starts the next line, and wrapping goes on from there
+as usual: the remainder is walked again, cut again if the walk still stops
+short, and otherwise joined by the chunks after it in the ordinary way.
+
+The unit is the **codepoint**: not the byte, not the UTF-16 code unit, and not
+the grapheme cluster. A cut may therefore fall between a letter and a combining
+mark that follows it. Cutting by grapheme cluster would be kinder and is not
+what this does.
+
+### Whitespace
+
+A break at a break opportunity consumes the whole run of spaces and tabs
+it falls at, so the run survives on neither line. Whitespace anywhere else
+is kept as it is: leading whitespace stays at the start of a line, and
+whitespace inside a line is neither collapsed nor trimmed.
+
+**Trimming follows from that, and only from that.** A line ended at a break
+opportunity loses its trailing run of spaces and tabs, because the break
+consumed them, and so does the last line of a paragraph. Trimming stops
+at the first character that is neither space nor tab, so a trailing no-break
+space stays and takes any whitespace before it with it.
+
+**A line ended by a cut is not trimmed**, because a cut consumes nothing:
+it falls between two codepoints, wherever they happen to be, and whitespace
+it happens to end on is inside the line rather than at a break. So a box
+too narrow for a word can yield a line that is a single space, kept — while
+the same whitespace reaching the end of a line the ordinary way is removed,
+and a line that was nothing but a consumed run is left empty.
+
+Because trimming happens before the line reaches the printout, `align="right"`
+and `align="center"` measure the line without that whitespace, while leading
+whitespace still counts.
+
+### A box of zero width
+
+A box whose width is zero is **not wrapped**. Zero is the width a box has
+when nothing determined one, and one codepoint per line is not a useful
+reading of that. Mandatory breaks still apply, because they do not consult
+a width. Any positive width wraps, including one narrower than a single
+character.
 
 ## Measure, decide, commit
 
@@ -103,8 +303,11 @@ A **frame** is a rectangular region that bands fill from the top down.
 | `header`, `footer` | Bands reserved at the frame's top and bottom. |
 | `parent`, `children` | Tree links. |
 | `fillY` | Where the next band goes. |
+| `floor` | The lowest edge a band placed in an ancestor reaches on this page. |
 
 Frames form a tree, each frame's geometry derived from its parent's.
+A template nests one group per level, so the tree is a chain:
+a frame has at most one child.
 
 ### Construction
 
@@ -116,28 +319,129 @@ Built once, before any data is read:
 2. **Column frames.** A `columns` node creates a child frame with
    `width = (parent.width - (count - 1) × gap) / count`, carrying `count` and
    `gap`. If that `columns` node has its own header or footer, they attach to
-   this frame and a further child frame holds the content.
+   this frame and are reserved out of each of its columns.
 3. **Group levels.** For each `group`, from outermost in, its `columns` node — if
    any — creates frames by the same rule. The group's `title` and `summary` bands
    belong to the frame that *contains* the group's columns, so a group title spans
    all columns.
 4. **Detail frame.** The innermost frame holds the `detail` band.
 
-`title` and `summary` at layout level belong to the innermost non-column frame,
-unless `swapheader` / `swapfooter` is set, which moves them to the page frame so
-they sit outside the page header and footer.
+`title` and `summary` at layout level belong to the page frame, which is the
+frame that contains the layout's own columns. `swapheader` / `swapfooter`
+moves them outside the page header and footer as well; see
+[below](#swapheader-and-swapfooter).
+
+### Extent and fill
+
+A frame's **extent** is fixed for the length of a column. Its `top` is its
+parent's `top` with its own header reserved below that, and its `bottom`
+its parent's `bottom` with its own footer reserved above that; the page
+frame's are the margins'. So a column frame reaches down to the page
+frame's `bottom`, a column footer sits directly above the page footer's
+reservation, and `VERTICAL_POSITION` is measured from a `top` that does
+not move while the column is being filled.
+
+Where the next band goes is the frame's **fill**, and a committed band
+moves three sets of fills:
+
+- **Its own frame's**, which advances by the band's height.
+- **Every ancestor's**, which comes down to at least the band's bottom edge.
+  A column lies inside its parent's current column, so a band in a column
+  is in the parent's way too. A band placed in the parent afterwards --
+  a group summary under a group's columns, a report summary under the
+  report's -- therefore goes below the **deepest** column, not below
+  the one that happened to be filling last.
+- **Every descendant's**, which comes down to at least the band's bottom
+  edge too, since the band spans all of their columns. The descendant
+  keeps that edge as its **floor**, and a column it opens later on the
+  same page begins at its `top` or at its floor, whichever is lower.
+  So a column opened after a group title begins below the title, beside
+  the column opened before it, rather than on top of it.
+
+A header and a footer take no fill of their own: they are drawn at the edges
+of the column. They do come in the way of the frames above, which is why a
+report title placed after the first page's column headers goes below them,
+and why a column that has had its footer placed counts as filled to its
+bottom: a band placed across the columns after that one has ended needs
+the next page.
+
+A column is **empty** when its fill is as high as a column of its frame
+can begin. That is the frame's `top`, or, in a frame with columns inside it,
+the lowest edge their headers were drawn to: every column it opens draws
+them again, and a band placed across them goes below. Where each header
+took what it reserved, that edge is the `top` of the innermost of them.
+No column of the frame gives a band more room. A column that begins at its
+floor is not empty, even with nothing placed in it: the next column on the
+page begins as low, but the next page begins at the top. Nor is a column
+below a [swapped title](#swapheader-and-swapfooter) on the first page,
+ since the next page's content begins higher by the title's height.
+
+A band in a frame with columns inside it stops above their footers,
+at the innermost column's `bottom` rather than the frame's own.
+Those footers are drawn when their columns end, flush with the bottom,
+and a band placed across the columns before then would be under them.
+`VERTICAL_SPACE` for such a band is measured to there. The one footer
+that is never drawn leaves its strip free: the last column's of an inline
+subreport's columns, below the subreport's summary, as [pages](#pages) says.
+
+A column eject resets the frames inside the ejecting one to their
+first column; a page eject resets every frame, and every floor.
 
 ### Header/footer reservation
 
 A frame reserves space for its header and footer by measuring them.
-Both are measured against the context as it stands when the frame begins.
+Both are measured against the context as it stands when the frame begins,
+and a frame begins **each time one of its columns opens**: the page frame
+on every page, a column frame on every page and at every column eject.
+So a header whose content changes from page to page reserves a different
+height on each, and the columns of one page may start at different heights.
+
+So each of the two is measured **twice**: once to find out how much space
+to reserve, when the column opens, and once when the band is built onto
+the page. The two measurements can disagree, since the footer is built when
+the column ends and a `printwhen` or a stretch field may answer differently
+by then. Where they do, the reservation is what the frame was inset by
+and the second measurement is what is drawn. On the first page the
+reservation is measured before any record has been read.
 
 A footer is placed flush against the frame's reserved bottom band — including
 a column footer. For content that should follow immediately below the last band,
 use a group `summary`.
 
+**Flush means the frame's bottom edge, not the reservation's.** The two are
+the same place whenever the two measurements agree, and where they do not,
+this is what keeps the band on the page: a footer guarded by
+`printwhen="THIS != None"` -- the guard [below](#what-a-header-or-footer-sees)
+recommends -- prints nothing at reservation, because there is no record yet,
+and reserves nothing; at the end of the page it prints, and its bottom edge
+is the frame's. A footer that measured taller than its reservation therefore
+grows upward, into the content, rather than off the paper.
+
 Deferred values inside a header or footer are sized from their placeholder
 content; see [deferred evaluation](#deferred-evaluation).
+
+#### What the two counters report
+
+`VERTICAL_POSITION` and `VERTICAL_SPACE` describe the frame a band is being
+tried against, and for these two bands that frame is not the one the content
+fills:
+
+| | `VERTICAL_POSITION` | `VERTICAL_SPACE` |
+|---|---|---|
+| header | 0 | the frame less the **footer's** reservation |
+| footer | how far the content frame was filled | the strip reserved for the footer |
+
+A header is at the top of the page by construction, so its position is zero,
+and the space below it is everything the page has left once the footer is out --
+its own reservation is not subtracted, because the header is what is being
+measured. A footer is the other way about: it is drawn at a fixed place,
+so what is worth reporting is where the content stopped, and the space
+it has to grow into is the band held for it rather than the page.
+
+That the header's figure has one reservation taken out and not the other
+is worth stating because it is the only asymmetric thing here, and it
+follows from what each number is for: a band is told what it may grow
+into, and a band never has to make room for itself.
 
 ### What a header or footer sees
 
@@ -154,6 +458,31 @@ In both, the names resolve as they do anywhere else. Specifically:
   and the reset values in the next page's header.
 - Variables hold their accumulated values. In a footer that is before the reset
   for the scope just ended, so a `reset="page"` total is that page's.
+- A group's own names hold
+  [unspecified](expressions.md#between-a-groups-runs) values between its
+  runs, and the last page's footers come after every group's last run.
+
+**At a group break** an eject can end the page, or the column, that the
+runs which ended are on, and begin the one the new runs start on. That is
+so while nothing of the new record has been placed: an eject a keep-together
+rule causes as a group opens, one of its title's `eject` nodes, the title
+not fitting, and for a group whose title does not print, the first detail
+band not fitting or one of its `eject` nodes. So is the end of the page
+that a [subreport with pages of its own](#pages) makes when it runs before
+one of those bands, with a negative `seq`. Such an eject's footers are
+built against the context the break's summaries were built in: `THIS` and
+`ITEM_NUMBER` are the previous record's, every group of the break reads
+as its ended run left it, and every variable holds what it held then.
+Its headers are built against the new record, with every group of the
+break at the start of its new run: `_COUNT` at 0, `_PAGE_NUMBER` at 1,
+and the variables it resets reset. As in the headers of any eject a band
+causes, the band's own fold is not in them yet: a group's `iter="group"`
+fold goes with its title, and is counted on the page the title lands on.
+
+Once a band of the new record has been placed, an outer group's title for
+one, an eject is built as any other, and a group of the break that has not
+opened yet is [between its runs](expressions.md#between-a-groups-runs) in
+its footers.
 
 Before the first record — on a page filled by a tall `title`, or in a report with
 no data at all — `THIS` is `None` and reading a record field from it is an error.
@@ -169,16 +498,33 @@ field expr="region" printwhen="THIS != None"
 frame, outside the page header and footer. The space comes out of the page it
 lands on:
 
-- The `title` is placed at the top of the page frame on the first page, and that
-  page's header is reserved below it. Content on page 1 starts that much lower.
-- The `summary` is placed in the page frame's reserved bottom band on the last
-  page, and that page's footer is placed immediately above it. The last page's
-  content space is that much shorter.
+- The `title` is placed at the top of the page frame on the first page,
+  and that page's header is reserved below it. Content on page 1 starts
+  that much lower, so no column below it is [empty](#extent-and-fill):
+  a band that fits a page without the title goes to page 2 rather than
+  overflowing on page 1.
+- The `summary` is placed in the page frame's reserved bottom band on
+  the last page, and that page's footer is placed immediately above it.
+  The last page's content space is that much shorter.
 
 Since the last page is only known when the record loop ends, the summary is
 placed like any other band: if what remains above the enlarged bottom
 reservation is already filled, a page eject happens first, and the summary gets a
-fresh page carrying that page's header and footer.
+fresh page carrying that page's header and footer. What remains is measured
+above the column footers as well, since they move up with the page footer.
+
+A swapped title taller than the page frame, or a swapped summary taller
+than an empty page offers, is an [overflow](#errors). Where that is
+allowed, it is placed where it would go unswapped, at the top of the
+page frame, and the summary after one page eject, as any band that fits
+nowhere is. That eject is not made from a page an eject has just begun,
+as a page the summary's own `eject` nodes have taken it to is.
+
+Where it fits, the page frame's bottom moves up by the summary's height before
+the last page's footers are placed, so the page footer and every column footer
+are placed flush against the new bottom, above the summary. The page footer's
+`VERTICAL_POSITION` then counts the summary as filled: it is measured to the
+summary's bottom edge.
 
 ## Building a band
 
@@ -190,6 +536,10 @@ Given a band template and a context, measurement proceeds:
    scope first: the band's own, then its `columns`, then each enclosing `group`,
    then `layout`. The first whose `when` is true supplies `font`, `color`, and
    `bgcolor`. Unset properties fall through to the next match in the same walk.
+   The walk is one sequence, each scope's nodes in document order, and the
+   next match may be a later node of the same scope: a `layout` whose first
+   `style` sets a `font` and a `color` and whose second sets a `bgcolor`
+   gives a band with no styles of its own all three.
 3. **Resolve the band's geometry** against the frame, per
    [the two-of-three rule](template.md#position-and-size-any-two-of-three).
    An explicit `height` is known here; `height="auto"` is settled at step 6.
@@ -203,21 +553,52 @@ Given a band template and a context, measurement proceeds:
       clamps. In a band whose height is still unsettled, an extent that depends on
       the band's bottom edge is left for step 6.
    4. **Resolve its content:**
-      - `field`: evaluate `expr` (or take `text` / `data`), apply `format`, wrap
-        to the box width. With `stretch`, the box height grows to the wrapped text;
+      - `field`: evaluate `expr` and apply `format` to its result,
+        or take `text` / `data` as written, then wrap to the box
+        width by the rule in [Line breaking](#line-breaking).
+        With `stretch`, the box height grows to the wrapped text;
         without it, lines beyond the box are dropped at a line boundary.
-      - `image`: decode and sniff the type, then apply `scale`. `cut` draws the
-        image at natural size clipped to the box, and the retained region becomes
-        the mark's `crop`. `fill` scales the image to the box: with `proportional=#true`
-        the aspect ratio is preserved, so it is scaled to fit within the box
-        and positioned by `halign` / `valign`, and with `#false` it is stretched
-        to the box exactly. `grow` expands the box wherever the image exceeds it,
-        so the image is drawn at natural size, neither scaled nor clipped.
-        Only `fill` scales, so `proportional` is consulted only for `fill`;
-        only `cut` produces a `crop`.
-      - `barcode`: encode, obtaining stripe widths and a minimum symbol size;
-        the box grows along the coding direction to at least that minimum.
+        A stretch field that is [container-dependent](#building-a-band)
+        is the exception: its box is the one the band gives it in step 6
+        and does not grow, and its text keeps every line and runs past
+        that box, placed by `valign` like any content taller than its box.
+        A `maxheight` on a stretch field, whether or not the field is
+        container-dependent and whether or not the clamp is what made
+        its box short, drops the lines beyond the box as they are dropped
+        without `stretch`.
+      - `image`: read the bytes as far as their header, which gives
+        the format and the natural size. With `scale="grow"` the natural
+        height is the element's content height. How the image is finally
+        drawn waits for the box: `cut` draws it at natural size clipped to
+        the box, and the retained region becomes the mark's `crop`; `fill`
+        scales it to the box, keeping its aspect ratio unless `proportional`
+        is `#false`; and `grow` expands the box wherever the image exceeds
+        it, so the image is drawn at natural size, neither scaled nor clipped.
+        See [an image in its box](#an-image-in-its-box).
+      - `barcode`: encode the value by the rules of
+        [barcode.md](barcode.md), giving a symbol in modules.
+        Its size at the declared `module` is the element's content height,
+        and how it is finally drawn waits for the box: see
+        [a barcode in its box](#a-barcode-in-its-box).
       - `xref`: recurse — an xref is a container of elements and is measured as one.
+        Its own box comes from its geometry alone and never grows to what it
+        holds. An xref has no content height, so it is container-dependent,
+        and waits for step 6, unless it declares a `height` and no `bottom`.
+        Its children are then built against that box as a band's elements
+        are built against the band, except that the height the
+        container-dependent among them resolve against is the xref's own
+        rather than a maximum they take part in. The xref's `halign` and
+        `valign` move nothing: each child is placed by its own geometry
+        and its own alignment.
+
+        What an xref holds still takes room from the band, in the second
+        maximum of step 6 and not the first. A child whose vertical extent
+        is its own reaches as far as its box, whether or not its mark does;
+        a container-dependent child reaches as far as its mark; a nested
+        xref reaches as far as its own contents do. So a stretch field that
+        runs past its xref pushes the next band down, and so does a field
+        declared taller than the xref that holds it, while a rule beside
+        the xref spans only the xref.
       - A field or barcode with `evaltime` is measured from its placeholder content
         and [registered](#deferred-evaluation).
 5. **Resolve floating elements.** See [below](#floating-elements).
@@ -235,14 +616,14 @@ Given a band template and a context, measurement proceeds:
    An element has a height of its own — a **content height** — when it is
 
    - a `field` with `stretch=#true`: the wrapped text's height;
-   - a `barcode`: the symbol's minimum height;
+   - a `barcode`: its symbol's height at the declared `module`;
    - an `image` with `scale="grow"`: the bitmap's natural height.
 
-   Those three participate in the maximum even with no vertical geometry given
-   at all, which is why a band of barcodes and stretch fields sizes to them.
-   A non-stretch `field`, a `line`, a `rectangle`, and an image that is
-   not `grow` have no content height, so with a derived `bottom` they are
-   container-dependent.
+   Those three participate in the maximum even with no vertical geometry
+   given at all, which is why a band of barcodes and stretch fields sizes
+   to them. A non-stretch `field`, a `line`, a `rectangle`, an image that
+   is not `grow`, and an `xref` have no content height, so with a derived
+   `bottom` they are container-dependent.
 
    If every element in a band is container-dependent and the band declares
    no height, the height is zero and all of them collapse.
@@ -252,6 +633,198 @@ Given a band template and a context, measurement proceeds:
 
 The emitted mark's box is the content box from step 7, not the declared box.
 
+A band's [outline entry](printout.md#outline) is selected once its
+elements are built: the first of the section's `outline` nodes whose
+`when` holds, if any does. Its `title` and `name` are evaluated then,
+against the names the band's elements saw. The entry is a mark of the band
+at the band's own top-left corner, after the band's other marks, and it
+takes no part in the band's height.
+
+### The band's height is settled twice
+
+Step 6 reads as one maximum and is two, and the difference shows in every band
+that holds a rule. The first is over the **declared** boxes and is what the
+container-dependent elements are resolved against; the second is over the
+**marks**, and is the band's height.
+
+1. Take the greater of the declared `height` and the lowest bottom edge among
+   the elements whose vertical extent is their own.
+2. Resolve the container-dependent elements against that. A `line` written
+   `top=10` and nothing else ends up exactly there, and one written with no
+   geometry at all spans it.
+3. The band is then as tall as the greatest bottom edge of the marks
+   [step 7](#building-a-band) produced, or that first height, whichever is
+   greater.
+
+Only step 3 sees content that overflowed the box it was given: a `field`
+without `stretch` in a box shorter than one line still draws that line, and a
+container-dependent field whose box came out empty draws its line below the
+top edge. So a band whose only content is such a field grows to the text,
+while a rule inside it keeps the height the declared boxes gave.
+
+The second maximum cannot feed back into step 2, and that is not a
+simplification for its own sake: resolving the rule against the final height
+would make the two define each other, which is the reason step 6 excludes
+container-dependent elements from the first maximum at all.
+
+### A barcode in its box
+
+A symbol's size comes from its modules and not from its box, so the two
+rarely match, and these are the rules that put one in the other.
+Every length here is rounded as it is computed, as
+[coordinates and rounding](#coordinates-and-rounding) requires.
+
+**The symbol's size at a module** is its length, the module times the
+modules along the coding direction, quiet zone included; and its depth,
+which for a 2-D symbol is the module times its rows, and for a 1-D symbol
+is 15% of the length or a quarter of an inch, whichever is greater:
+
+```
+length = round(module × modules)
+depth  = max(round(length × 0.15), 18)       1-D
+depth  = round(module × rows)                2-D
+```
+
+The coding direction runs across the page, or down it with `vertical`,
+so the symbol is `length` wide and `depth` tall, or the other way round.
+Its height on the page at the declared `module` is the element's
+[content height](#building-a-band).
+
+**The box** is resolved from the geometry like any element's, `maxwidth`
+and `maxheight` included, which clamp the box and never the symbol.
+Across the page, that is all. Down the page, a box whose height
+is its own is at least the content height, so a symbol taller
+than the box pushes the box down rather than overhanging it,
+and a container-dependent box is what the band gives it.
+
+**`grow`** expands the symbol into the box, and never shrinks it.
+A 1-D symbol's depth becomes the box's extent across the coding direction,
+where that is more. A 2-D symbol's module becomes what fills the box's
+shorter side, where that is more:
+
+```
+module = max(module, min(fill(box width, columns), fill(box height, rows)))
+```
+
+`fill(side, count)` is the longest whole number of thousandths of a point
+that `count` modules fit into `side`. The side is a whole number of
+thousandths already, so it is computed in whole numbers, exactly:
+`floor(round(side × 1000) / count) / 1000`, the division an integer one.
+A binary64 quotient rounded down would lose a thousandth that fits about
+one time in nine: 22.185 over 29 modules is 0.765 exactly, and
+`floor(22.185 / 29 × 1000)` is 764. It is the one length in the engine
+that is not rounded half away from zero, because a module rounded up
+would draw a symbol larger than the box it was made to fill.
+A box  whose height is the symbol's own content height leaves `grow`
+nothing to expand into down the page, so a 2-D symbol given a width
+and no height keeps its module.
+
+**The symbol sits in the box** by `halign` and `valign`, measured
+from the box's edges:
+
+```
+x = round(box.x + share × (box.width  - symbol width))
+y = round(box.y + share × (box.height - symbol height))
+```
+
+with `share` 0, 0.5, or 1 as for a field. A symbol larger than its box
+overhangs it, on the side the alignment does not name, and the mark is
+the symbol: its box, its `module`, and its runs. A symbol that overhangs
+the band reaches the band's second maximum like any mark.
+
+### An image in its box
+
+An image's size comes from its bitmap, and `scale` decides how that
+meets the box. Every length here is rounded as it is computed,
+as [coordinates and rounding](#coordinates-and-rounding) requires.
+
+**The natural size** is the bitmap's pixel count along each axis, drawn
+at one point per pixel. It is read from the image's header and nothing
+else in the file moves it: resolution metadata -- a PNG's `pHYs` chunk,
+a JFIF density, an EXIF resolution -- is not read, and neither is an EXIF
+orientation, so a photo a viewer would turn a quarter turn is drawn as
+its pixels lie. A GIF's natural size is its logical screen's, not its
+first frame's. Which bytes are read, and which are refused,
+is in [template.md](template.md#image).
+
+Ignoring resolution is a deliberate decision: the density an image
+declares cannot be trusted. Many files carry a wrong one, because the
+tool that saved them wrote 72 or 96 whatever the image was made for,
+and a GIF has no field for it at all. Honouring it would make an
+image's size depend on which program last saved the file.
+The pixel count is the one size every image states correctly, and
+a box with `scale="fill"` draws an image at any physical size wanted.
+
+**The box** is resolved from the geometry like any element's, `maxwidth` and
+`maxheight` included. Under `cut` and `fill` an image has no content height,
+so a box with no height of its own is [container-dependent](#building-a-band).
+Under `grow` the natural height is the content height, and a box whose height
+is its own is at least that.
+
+**The drawn size** is decided by `scale`:
+
+```
+cut     width  = min(natural width,  box width)
+        height = min(natural height, box height)
+fill    width  = box width,  height = box height        proportional=#false
+grow    width  = natural width,  height = natural height
+```
+
+Under `fill` with `proportional=#true`, the default, the axis whose ratio
+of box to image is the smaller takes the box's extent exactly, and the
+other follows from it:
+
+```
+if box width × natural height ≤ box height × natural width:
+    width  = box width
+    height = round(natural height × box width / natural width)
+otherwise:
+    width  = round(natural width × box height / natural height)
+    height = box height
+```
+
+A box of no width or no height draws the image at no size at all.
+
+**`grow` expands the box** wherever the image exceeds it, right and down:
+the box keeps its left and top edges as resolved and reaches as far as the
+image does. That holds for a box whose left edge was derived from a `right`,
+which still grows to the right, and for one a `maxwidth` or `maxheight`
+clamped, which grows back to the image, since a clamp does not clamp a grow
+image. An image that grows past the band's bottom edge reaches the band's
+second maximum like any mark. Along an axis where the image is smaller
+than the box, the box stays as it was.
+
+**The image sits in the box** by `halign` and `valign`,
+measured from the box's edges as a barcode's symbol is:
+
+```
+x = round(box.x + share × (box.width  - width))
+y = round(box.y + share × (box.height - height))
+```
+
+along each axis where the image is no larger than the box.
+Where `grow` made it larger, the box grew to it, and it starts at
+the box's left or top edge. The mark's box is the drawn rectangle.
+
+**`cut` clips the image to the box**, and the mark's `crop` names the pixels
+kept. The bitmap is aligned before it is clipped, so the pixels kept are
+the ones the alignment leaves inside the box: an image wider than its box
+and aligned right keeps its right side, and one centred keeps its middle.
+
+```
+crop.x = round(share × (natural width  - width))
+crop.y = round(share × (natural height - height))
+crop.width  = width
+crop.height = height
+```
+
+with `share` the alignment's, as above. The crop is in source pixels
+at one point per pixel, measured from the image's top-left corner,
+and keeps a fraction of a pixel where the box has one: a box 10.5 wide
+keeps 10.5 pixels. It is present only where the image was clipped along
+at least one axis, and along an axis that was not clipped it spans the
+whole image. Neither `fill` nor `grow` clips, so neither produces a crop.
+
 ## Floating elements
 
 An element with `float=#true` has no fixed vertical position: it sits below
@@ -259,23 +832,62 @@ whatever lies above it, using measured heights rather than declared ones.
 
 Resolution is a partial order, not declaration order:
 
-1. Consider every element whose vertical extent is **its own** and non-negative:
-   either a declared `height`, or a
+1. Consider every element that prints and whose vertical extent
+   is **its own**: either a declared `height`, or a
    [content height](#building-a-band) the element determines itself.
-   An element sized from the band's bottom edge does not participate.
-2. Build the minimal DAG of "wholly above" relations from the **declared** boxes:
-   - a non-floating element precedes a floating element it is wholly above;
-   - a floating element precedes another floating element only when it starts
-     earlier, which settles the case of a zero-height floater.
+   An element sized from the band's bottom edge does not participate,
+   and neither does one its `printwhen` suppressed, since it is not there
+   at all. An element of zero height does participate.
+2. Build the DAG from the **declared** boxes. An element's declared box
+   runs from its `top` down by its declared `height`, or by nothing where
+   it declared none: a stretch field given only a `top` has a declared box
+   of no height at that top. The declared height is the one written, before
+   `maxheight` clamps it.
+   - A non-floating element precedes a floating element it is **wholly
+     above**: its declared bottom edge is no lower than the floating
+     element's declared top.
+   - A floating element precedes another floating element when it
+     **starts earlier**: its declared top is strictly higher. That is the
+     whole test between two floating elements, so one precedes another
+     whose declared box it overlaps, and two that start level precede
+     neither way, which settles the case of a zero-height floater.
 
-   Minimal means: if C is above both A and B, and B is above A, C depends on B
-   only. Transitivity supplies the rest.
+   Only the vertical axis is read. An element at the far side of the band
+   is above one at the near side all the same.
 3. Walk the DAG in topological order, assigning each floating element
-   `top = max(bottom edges of its predecessors) + gap`, where `gap` is that
-   element's declared distance to the nearest predecessor.
+   `top = max(bottom edges of its predecessors) + gap`. The bottom edges
+   are the predecessors' as they now stand, floated, grown, and clamped.
+   `gap` is the element's declared distance to the **nearest element
+   wholly above it** -- the one whose declared bottom is lowest -- among
+   those step 1 considers. Where none is, it is the distance to the band's
+   top edge, or to the highest declared top among those elements where one
+   starts above that edge. A floating element with no predecessor at all
+   keeps its declared top.
 
-Zero-height elements are skipped, so a suppressed field does not push its
-followers down.
+The gap is measured to what is wholly above because a distance to an element
+the box overlaps is not a distance. Where only an overlapping floating
+element precedes, the gap is therefore measured from the band's top edge
+and added below that element, which moves the follower a long way down:
+a template that overlaps two floating boxes is usually one to fix.
+
+The element the gap is measured to need not precede. The one case where
+it does not is a floating element with no declared height that starts level
+with this one: its declared box is wholly above, at a distance of nothing,
+but it does not start earlier. The gap is then zero, and the element sits
+directly on its predecessors.
+
+Both sides of the gap are declared, and what it is added to is not:
+under a `maxheight`, the gap below an element keeps the distance from
+its declared bottom and is added to its clamped one.
+
+Nothing in the rule depends on the floating element's own height. A rule
+of zero height floated 2 pt under a paragraph stays 2 pt under it when
+the paragraph grows.
+
+A suppressed element is not there to precede anything, so it does not push
+its followers down, and their gaps are measured past it to whatever is above.
+A non-floating element of zero height, such as a rule, is there, and a gap
+below it is measured from it.
 
 ### What a floating element may be
 
@@ -290,6 +902,15 @@ What a floating element may **not** do is take its height from the band — a de
 has finished, and the band's height is not known until step 6, so such an element
 has neither end fixed. It is excluded here for the same reason it is excluded from
 the band's height: the two would define each other.
+[Validation](template.md#validation) refuses one.
+
+A floating element that **declares** a `bottom` is another matter. With a height
+of its own, a declared `height` or a content height, it loads, but a declared
+`bottom` makes an element [container-dependent](#building-a-band) whatever its
+content, so it is resolved against the band in step 6 like any other and takes
+no part in this pass. Its `float=#true` has no effect. A stretch field of that
+kind keeps the box the band gives it, as any container-dependent stretch field
+does.
 
 The DAG itself is built from **declared** boxes, so it depends on the template and
 not on the data. Measured heights are used to propagate positions along it, but they
@@ -315,9 +936,24 @@ else if band splits and any cut point fits `available`:
     # taller than an empty frame: every split preference is given up
     split at the last such cut point, commit the head, column eject, continue
 
+else if a band has been placed on this page, or it is the first:
+    # a later page may offer more: its headers may take less
+    page eject, re-measure, start again from the top
+
 else:
     band cannot fit any frame → see Errors
 ```
+
+`frame.bottom` is where a band in the frame must stop, which in
+a frame with columns inside it is above their footers: see
+[extent and fill](#extent-and-fill).
+
+Each branch is tried against the frame **as it stands**, and the
+fourth is no exception: a band too tall for any frame is cut here,
+at the last cut point that fits what this column has left, and not
+after an eject has found it an emptier one. A band is only ever moved
+whole when it would fit an empty column, when it fits nowhere on a page
+that is not one an eject has just begun, or when it overflows.
 
 A **cut point** is an offset no mark's span falls through; a **legal split point**
 is a cut point that also divides content and satisfies `orphans` and `widows`.
@@ -332,20 +968,57 @@ Branch order matters. A cut that leaves one side blank is excluded by requiremen
 precisely so that branch 2 declines it and branch 3 ejects the band whole, which is
 the better outcome. Without that, branch 2 would win by being tried first.
 
-`frame.height(empty)` is `bottom - top` for a fresh frame — the most a band could
-ever get.
+`frame.height(empty)` is the room an [empty](#extent-and-fill) column
+offers, from where it begins down to `bottom`: the most a band could get.
+It is taken on the page the band is tried on, since a page's headers are
+measured when it opens and a later page's may take more or less. The one
+difference known in advance is a swapped title, which only the first page
+has, and on that page the height is taken as if the title were not there.
 
-An eject a band triggers by not fitting is always a **column** eject. In a
-single-column frame that is the same thing as a page eject, and in a multi-column
-one it advances to the next column, escalating to a page eject only when no column
-remains — see [which frames participate](#which-frames-participate). A band that
-overflows its column should move to the next column, not skip the rest of the page.
+Only the fifth branch moves a band whole out of an empty column. A band
+that fails the first branch there is taller than `frame.height(empty)`,
+so the third does not take it, and the fourth cuts it where it is.
+One that cannot be cut is carried to the next page once, by a page eject,
+where the headers may leave it more room. No column left on this page
+would do, since none begins higher than an empty one, and that holds
+whether or not the column the band was tried in has anything in it.
+Where it still fits nowhere, it overflows. A column that is not empty,
+including one that begins at its floor, ejects under the third branch
+until the band fits or the column is empty, which is on the next page
+at the latest.
 
-An [`eject` node](template.md#eject) is the only way to force a page eject, via
-`type="page"`.
+The carry is made from a page a band has been placed on, or from the
+first page. It is not made from a page an eject has begun with nothing
+placed on it yet, since that page would be left blank, and its headers
+have been tried already. So a band that is taken to a new page before
+it fits anywhere is judged there, whatever made the eject: its own `eject`
+nodes, a [keep-together](#keeping-content-together) rule, the `minrows`
+of a group whose title does not print, or the third branch. An eject
+that keeps the band on its page, to the next column, leaves the carry
+to be made.
 
-After committing, `frame.fillY` advances by the band's height, and every descendant
-frame's `top` moves down with it.
+That is why the empty height is measured below the headers of the columns
+inside the frame, as they were drawn, and above their footers. Measured
+from the frame's own `top`, it would count room that no page offers a
+band across the columns, and so would a header that was drawn taller than
+it reserved, measured from its reservation. A band in the page frame that
+fits the frame, but not the room below the column headers, would then be
+ejected from page to page for ever.
+
+An eject a band triggers by not fitting is a **column** eject, except the
+fifth branch's. In a single-column frame that is the same thing as a page
+eject, and in a multi-column one it advances to the next column, escalating
+to a page eject only when no column remains, or none that would offer the
+band more room: see [which frames participate](#which-frames-participate).
+A band that does not fit what its column has left should move to the next
+column, not skip the rest of the page. Only one that no column of the page
+could hold skips it.
+
+Apart from that one, an [`eject` node](template.md#eject) is the only way
+to get a page eject, via `type="page"`.
+
+After committing, `frame.fillY` advances by the band's height, and the frames
+above and below it move as [extent and fill](#extent-and-fill) describes.
 
 ## Band splitting
 
@@ -378,10 +1051,12 @@ holding such a field could ever split, which would make `split=#true` inert in m
 templates that set it. Under this one it spans its line, and cuts below that line
 are legal.
 
-Barcodes, images, and band-spanning rectangles block a cut anywhere inside their span.
-A `rectangle` has no natural size to shrink to — its content is its box — so one given
-`bottom=0` genuinely does span the band and genuinely does block. A `stretch` field
-permits cuts between its lines.
+Barcodes, images, and band-spanning rectangles block a cut anywhere
+inside their span. A `rectangle` has no natural size to shrink to,
+its content is its box, so one given `bottom=0` genuinely does span
+the band and genuinely does block. A `stretch` field permits cuts
+between its lines, unless it is [deferred](#placeholders): its lines
+are then its placeholder's, and it blocks like the rest.
 
 #### 2. The cut must divide content
 
@@ -405,6 +1080,10 @@ The rule is symmetric: a cut whose **head** would be empty is excluded for the s
 reason, since that only relocates a blank strip. A split divides content or it does
 not happen.
 
+A band's outline entry is not content for this rule, nor for the first:
+it is a point at the band's top edge, so no cut falls through it,
+and a head that would hold nothing but the entry is empty.
+
 #### 3. `orphans` and `widows` must hold
 
 At least `orphans` lines remain above the cut and at least `widows` below it, per
@@ -416,7 +1095,8 @@ blocks like an unsplittable element.
 The greatest legal *y* not exceeding the available space is chosen. The head
 commits: elements wholly above *y* as-is, split fields with their leading lines and
 `lastLineJustified: true` so the renderer does not treat a continued line as a
-paragraph end. Then a column eject, and the tail continues with the remaining
+paragraph end, and the band's outline entry, which points where the band begins.
+Then a column eject, and the tail continues with the remaining
 lines, its elements re-placed from the tail's top.
 
 Non-splittable elements below the cut move to the tail whole.
@@ -438,13 +1118,31 @@ An eject ends the current page or column and starts the next.
 
 ### Which frames participate
 
-Given the frame of the band that triggered the eject:
+Given the frame of the band that triggered the eject, the walk finds
+the **ejecting frame**:
 
-- **Page eject**: that frame and every ancestor, up to and including the page
-  frame.
+- **Page eject**: the page frame.
 - **Column eject**: that frame and ancestors, stopping at the first frame that
   still has an unused column. If none does, the walk reaches the page frame and the
   column eject becomes a page eject.
+
+A column eject that is looking for room also walks past a frame whose next
+column would offer the band no more than it has. In that column the band
+begins at the frame's floor, or where it began in this one, whichever is
+lower, so it gains nothing where its column is filled no lower than that:
+a column that opened below a band placed across it, and has had nothing
+placed in it since, or an empty one. Every eject looks for room
+except one an [`eject` node](#eject-nodes) without `require` asks for,
+which is an instruction and goes to the next column whatever that offers.
+A band that does not fit, a keep-together rule, and a `require` that is not
+met all want the room, and a column that begins no higher would not give it.
+
+The ejecting frame participates, and so does **every frame inside it**,
+since the columns they are filling end with it. For a band in the innermost
+frame that is the same set as the walk passed through; for a band in an outer
+frame -- a group summary placed across the columns of its group -- it includes
+the columns below the band as well, so each of them has its footer placed
+before the page ends and its header placed when the next one begins.
 
 ### Sequence
 
@@ -452,7 +1150,8 @@ Given the frame of the band that triggered the eject:
    placed flush at its reserved bottom band. Footers are built against the
    **outgoing** context, so a page footer reports the page it belongs to.
 2. **Resolve deferred values** for the scopes that just ended — `column` for a
-   column eject, `page` and `column` for a page eject.
+   column eject, `page` and `column` for a page eject. They read the context
+   the footers were built against; see [when a scope ends](#when-a-scope-ends).
 3. **Advance.** A column eject:
    - resets `COLUMN_COUNT`;
    - applies `column`-scoped variable resets, then `column`-scoped iterations;
@@ -463,11 +1162,23 @@ Given the frame of the band that triggered the eject:
    A page eject ends a column as well, so it does all of the above and then:
    - increments `PAGE_NUMBER` and resets `PAGE_COUNT`;
    - applies `page`-scoped variable resets, then `page`-scoped iterations;
-   - updates each group's `_PAGE_NUMBER`;
+   - adds one to each group's `_PAGE_NUMBER`, except a group that is still
+     opening;
    - starts a new page, with every frame's `column` back to 0.
-4. **Headers, outermost first** — the reverse of the footer order.
+4. **Headers, outermost first**: the reverse of the footer order.
+   Each participating frame's next column opens: its header and footer
+   are reserved and its header is placed at its top.
 
 The two orders together are the order in which the bands appear on the page.
+
+A group is **opening** from its break, where the record loop starts its
+new run, until a band of that run has been placed: its title, or for
+a group whose title does not print, the first band inside it. An eject
+in that time -- one of the title's `eject` nodes, a
+[keep-together](#keeping-content-together) rule, the title not fitting, or
+a [subreport with pages of its own](#pages) that runs before the band --
+moves the group to the page that band lands on rather than making that page
+its second, so `_PAGE_NUMBER` is 1 wherever a run's first band is.
 
 ### `eject` nodes
 
@@ -475,7 +1186,15 @@ A band's `eject` nodes are tested in document order. The first whose `when` is t
 is selected, and the search stops there whether or not it ejects; a `when`-false
 node is skipped and the next is tried. The selected node ejects unconditionally if
 it has no `require`, and otherwise only when less than `require` remains in the
-frame. Full table in [template.md](template.md#eject).
+frame and the column is not [empty](#extent-and-fill), since no eject could
+give it more room. Full table in [template.md](template.md#eject). A column
+eject with no `require` goes to the next column; one with `require` is
+looking for room, and passes over a column that would offer none, as
+[which frames participate](#which-frames-participate) says.
+
+A band that does not print tests none of its `eject` nodes, whatever
+their `when`: `printwhen` suppresses the band with what it would have asked
+of the page. A group whose title does not print therefore opens without them.
 
 Ejects are evaluated **before** the band is placed, with one exception: a report's
 own `title` — the band at `layout` or `embedded` level — evaluates them **after**,
@@ -510,9 +1229,17 @@ filled is even already, and comes out of the pass unchanged.
    the room left decided it, and the fragment is left alone.
 3. The shallowest bottom the same bands still reach in those columns is found by
    bisection, and every band is moved to the column and position it is assigned.
+   The bisection runs over whole thousandths of a point, which is the grid
+   every coordinate is on, so what it finds is the smallest bottom that
+   grid has, and packing to it gives the assignment.
 4. The frame is left filled to the deepest of the balanced columns, so that
    what follows starts immediately below them rather than at the bottom the
-   ragged fill reached.
+   ragged fill reached. It stays in the column the fill left it in, which is
+   what `COLUMN_NUMBER` reads after the pass.
+
+A column the fragment never reached begins at the frame's `top`, or at
+its [floor](#extent-and-fill) where a band placed across the columns
+earlier on the page reaches lower.
 
 Nothing is measured or evaluated a second time: the columns are the same width,
 so moving a band is a translation of the marks already built. An expression
@@ -530,10 +1257,24 @@ in it:
   not reproduce. An eject that starts a new page decides nothing about the
   fragment it starts, so that one leaves it alone.
 - **A band split.** Its two halves belong at the column edge they were cut on.
-- **A subreport.** Its bands are the child engine's rather than a band of the
-  host's, and the frame has no way to carry them along when it moves one.
+- **A subreport** on a band of the fragment, of either kind. An inline one's
+  bands are the child engine's rather than a band of the host's, and
+  the frame has no way to carry them along when it moves one. One with pages
+  of its own ends the page where it runs, and that page is left as the fill
+  left it too: the band it hangs off was placed with the page about to end.
 - **A `column` deferral.** It is resolved when the column ends, against
-  the column it ended in.
+  the column it ended in, and moving bands afterwards would leave it
+  counting rows that are elsewhere. One counts here when it is placed
+  in the frame: in a band of the fragment, in a header of the frame's
+  columns, or in anything inside them. One outside the frame, in a page
+  header say, leaves the fragment to balance.
+  **A footer is judged from the template.** The page balances before its
+  footers are placed, so the last column's footer comes too late to stop
+  it, and its deferral would count the rows the fill left in that column
+  while sitting under the rows balancing put there. A frame whose columns'
+  footers, or the footers of a frame inside it, hold a `column` deferral
+  is therefore never balanced, on any page, whether or not the deferral
+  prints there.
 - **A band placed outside the frame after the fragment's first one.**
   It interleaves with the columns and would be left behind by anything that moved.
   A group `summary` outside that group's own `columns` block is the usual case.
@@ -550,27 +1291,54 @@ see [how they combine](#how-they-combine).
 
 ### `group keeptogether`
 
-Before committing a group's `title`, the group's whole extent — title, every
-detail, summary — is measured, accumulating until either the group ends or the
-total exceeds an empty frame. If it fits an empty frame but not the space
-remaining, an eject happens first.
+Before committing a group's `title`, the group's whole extent is measured:
+its title, every detail, its summary, and the titles and summaries of the
+groups inside it. It accumulates until either the group ends or the total
+exceeds an empty frame. If it does not fit the space remaining, an eject
+happens first.
 
 Accumulation stops at the empty-frame height, which bounds the lookahead cost
-regardless of group size: a group that cannot fit one frame cannot be kept
-together.
+regardless of group size. A group that cannot fit one frame cannot be kept
+together, and what it asks for is then an empty frame: it starts at the top
+of an empty column, where it gets as much of itself onto one frame as any
+frame could hold.
 
 Lookahead is available because the data sequence is fully buffered.
+It measures what the record loop would place, folding variables and
+counting rows as the loop would, and then puts all of that back:
+nothing it measures is committed, and nothing it folds is kept.
 
 ### `group minrows` and `mintailrows`
 
 `minrows` is the minimum number of detail rows that must share a frame with the
 group title. Before committing the title, it plus the next `minrows` details are
-measured; if the total does not fit, an eject happens first.
+measured, with any nested group titles and summaries among them; if the total
+does not fit, an eject happens first. Like `keeptogether`, what it asks for is
+capped at an empty frame, and a group with fewer rows asks for all of them.
 
-`mintailrows` is the minimum that must share a frame with the group summary. When
-the record loop reaches the point where `mintailrows` details plus the summary
-remain, they are measured together; if they do not fit, an eject happens before the
-first of them.
+`mintailrows` is the minimum that must share a frame with the group summary.
+When the record loop reaches the point where `mintailrows` details plus the
+summary remain, they are measured together; if they do not fit, an eject
+happens before the first of them. The point is the first printed row from
+which no more than `mintailrows` printed rows remain in the group, so a group
+shorter than `mintailrows` is tested at its first row, and each opening of a
+group is tested once. What is measured runs from that row through the group's
+summary, nested summaries included, and is capped at an empty frame like the
+rest.
+
+The default for both is 1, which is not a no-op: a title is never left at
+the bottom of a frame without a row after it, and a summary never starts
+a frame without a row before it.
+
+No keep-together rule ejects from an [empty](#extent-and-fill) column,
+and nor does an `eject require` on any band. An eject there could offer
+no more room, and would leave a blank page behind. An `eject require`
+taller than an empty frame asks for more than any eject could give, and
+what the others ask for is capped at an empty frame. A column that begins
+at its floor is not empty, and a rule it does not satisfy ejects from it as
+from any other. The columns left on that page begin below the same band and
+offer no more room, so the eject passes over them to the next page: see
+[which frames participate](#which-frames-participate).
 
 Both are counted in rows, distinct from a band's line-counted `orphans` and
 `widows`. **Rows means printed rows**: a record whose `detail` is suppressed
@@ -591,7 +1359,8 @@ along with `minrows`. They are not applied in turn. Before the group's `title`
 is committed, each mechanism that applies contributes the height it wants available:
 
 - `keeptogether`: the whole group's extent, capped at an empty frame's height;
-- `minrows`: the title plus the next `minrows` printed detail rows;
+- `minrows`: the title plus the next `minrows` printed detail rows,
+  capped likewise;
 - `eject require` on the title: the `require` dimension,
   if a `when` selected that node.
 
@@ -622,10 +1391,22 @@ For each record, in this order:
    determines the break level; every group nested inside it breaks too.
 3. For each breaking group, **innermost first**: place its `summary`, built against
    the **previous** record's context, so a group summary can print its own total.
-4. Reset variables whose scope just ended.
-5. For each breaking group, **outermost first**: iterate variables for that scope,
-   then place its `title`.
-6. Iterate `detail`-scoped variables, then place the `detail` band.
+   The previous record's context is the whole of it: `THIS` and `ITEM_NUMBER`
+   are the previous record's while the summaries are placed, including in
+   the footers and headers of any eject a summary causes.
+4. Reset variables whose scope just ended, and every breaking group's
+   `_COUNT` to 0 and its `_PAGE_NUMBER` to 1. Each breaking group's new
+   run begins here, and is **opening** until a band of it is placed.
+5. For each breaking group, **outermost first**: the group opens --
+   its group-scoped variables iterate -- then its `title` is placed.
+   What a group's own names read between its break and its opening,
+   in an outer group's summary or title, is
+   [unspecified](expressions.md#between-a-groups-runs). An eject in
+   steps 5 and 6 before anything of the new record has been placed
+   is built on both sides of the break; see
+   [what a header or footer sees](#what-a-header-or-footer-sees).
+6. Iterate `item`-scoped variables; then, where the `detail` band prints,
+   `detail`-scoped variables; then place the `detail` band.
 
 Full variable semantics are in
 [expressions.md](expressions.md#variables).
@@ -649,8 +1430,33 @@ has its fold rolled back before the eject and reapplied after, so no value is
 counted twice. Step 6 iterates variables before placing because the band's content
 usually depends on them.
 
+The same holds for every eject a band causes before it is committed:
+one of its `eject` nodes, a [keep-together](#keeping-content-together)
+rule, or its not fitting, and for one a
+[subreport of negative `seq`](#where-a-subreports-bands-go) causes
+before the band is placed. The fold is undone, so the footers of the page
+it leaves do not count it; the eject resets what it resets; and the fold
+is applied again, evaluated afresh, so the band counts on the page it
+lands on. A `reset="page"` total therefore neither counts a row twice
+nor loses one to the reset in between.
+
+A group's title is a band like any other here, and its fold is the
+group-scoped iteration of step 5. A title that moves to the next page
+takes its group's iteration with it, as a detail band takes its own.
+
+A band that is split is committed, head first, and nothing is rolled back:
+its fold belongs to the page its head is on.
+
 A band suppressed by `printwhen` does not iterate `detail`-scoped variables, but
-does advance `ITEM_NUMBER`.
+does advance `ITEM_NUMBER` and iterates `item`-scoped ones.
+
+### The end of the report
+
+After the last record, every group still open is closed, innermost first:
+its summary is placed against the last record's context, as step 3 places
+one at a break. Then the fragment of any balanced frame is balanced, the
+report's `summary` is placed, and the last page's footers are placed,
+innermost first.
 
 ### Report structure
 
@@ -713,6 +1519,16 @@ and the function is called. Everything else it sees is the snapshot.
 That is why the snapshot is per element rather than per band: two fields
 in one footer may sit at the same place but name different things.
 
+**An element is registered when its band is placed, not when it is
+measured.** A band is measured more often than it is placed:
+a header or footer once to reserve its space and once to be built,
+a band again after an eject it caused, and every band a
+[keep-together](#keeping-content-together) lookahead reaches.
+Only the measurement that reaches the page registers anything,
+so the snapshot is the one that band was placed from. A row that ejects
+and is measured again on the next page reads that page's `PAGE_COUNT`,
+not the one it left.
+
 ### When a scope ends
 
 | `evaltime` | Resolved |
@@ -720,15 +1536,46 @@ in one footer may sit at the same place but name different things.
 | `column` | at each column eject, and at the end of the report |
 | `page` | at each page eject, and at the end of the report |
 | *group* | when that group breaks, after its `summary` is committed, and at the end of the report |
-| `report` | after the `summary` band is committed |
+| `report` | at the end of the report |
 
-The trailing "and at the end of the report" covers the last page, last column,
-and last group, which end without an eject or a break.
+The end of the report comes after the last page's footers, so it covers the
+last page, last column, and last group, which end without an eject or a break.
 
-A group's deferrals resolve after its `summary`, so both read the same final group
-totals. Report-scoped variables are not reset until after the `summary` is
-committed, for the same reason — see
-[the report boundary](expressions.md#the-report-boundary).
+A group's deferrals resolve after its `summary`, so both read the same final
+group totals. A `report` deferral reads the totals the report's `summary` read,
+since report-scoped variables are not reset before the report ends.
+See [the report boundary](expressions.md#the-report-boundary).
+
+Several things follow from the table, and each is a place
+where two engines could otherwise disagree.
+
+- **A scope's deferrals resolve in the order they were placed.**
+  It decides which of two failing expressions is reported,
+  and the order of the glyph warnings their values raise.
+- **An eject resolves after its footers**, which is step 2 of the
+  [sequence](#sequence), so a deferral in a footer resolves with the
+  scope that footer closes. `FINAL` then reads what the footers read.
+  A page that ends at a group break, with nothing of the new record on
+  it, is built against the context the break's summaries were built
+  in, as [what a header or footer sees](#what-a-header-or-footer-sees)
+  says, and so is its `FINAL`: `FINAL.THIS` is the record the page
+  ends with, and the group's names are the run that ended.
+- **Every eject ends a column**, in whichever frame it happens.
+  A `column` deferral outside any frame with columns, in a page
+  header say, resolves at the first column eject on its page,
+  and at the page eject where there is none.
+- **Groups that break together resolve innermost first**, each after its
+  own summary, or where its summary would go if it has none. A deferral
+  that an outer group's summary registers for an inner group is placed
+  after the inner group has resolved, and waits for its next break.
+- **A lookahead resolves nothing.** Keep-together measures what the
+  record loop would place, closing groups as it goes, and puts all of it
+  back. Nothing it measures was registered, and nothing already waiting
+  is resolved against a run it only measured.
+- **At the end of the report everything still waiting resolves**, after
+  the last page's footers, whatever its scope. The groups' last runs have
+  resolved by then, as each closed; what remains was placed after them,
+  in the report's summary or the last page's footers among others.
 
 ### Placeholders
 
@@ -736,27 +1583,91 @@ A placeholder is **required** exactly when the deferred element's own size depen
 on its content: a `field` with `stretch=#true`, or any `barcode`. In both cases the
 box grows to fit, so the space it will need cannot be known from the geometry alone.
 
-Everywhere else the resolved box is content-independent — geometry resolution always
-produces a complete box — so there is nothing to reserve and the placeholder is
-optional.
+Everywhere else the resolved box is content-independent, because geometry
+resolution always produces a complete box, so there is nothing to reserve
+and the placeholder is optional.
 
 The placeholder is the element's `text` or `data`, and the band is measured from it.
 Validation rejects a deferred element that needs one and has none. See
 [content sources](template.md#content-sources).
 
+**It is measured as written.** `format` is applied to what `expr` resolves to,
+and the placeholder stands in for that result rather than feeding it:
+`format="rows %05d" text="rows 99999"` is a placeholder of ten characters,
+not a value `%05d` would refuse. An element without one is measured as
+empty text, which is one empty line. A barcode's placeholder is encoded
+as written, so it has to be a value its type can carry: Interleaved
+2 of 5 refuses `text="999"` as it would refuse the value `999`.
+
+**It is never drawn**, so a character its font lacks raises no
+[glyph warning](template.md#missing-glyphs). The value raises
+its own when it is set, since that is the text the page shows.
+
+A deferred `stretch` field is **not cut between its lines** when its band
+[splits](#legal-split-points). Its lines are the placeholder's, which are
+replaced when the scope ends, so a cut between them would divide lines
+that are not the ones printed. It blocks a cut anywhere inside its span,
+as an element that cannot split does.
+
 ### Re-measurement
 
-After substitution the element is re-measured:
+When the scope ends the value is formatted and wrapped to the box's width,
+and set in **the room the placeholder reserved**. That room is the
+placeholder's own text: the box of the mark it was measured into,
+which went wherever the band was committed, split, or balanced.
+It is not the element's box. A field 30 pt tall whose placeholder
+is one line has a room one line tall.
 
-- **Height unchanged or smaller** — accepted. The box shrinks to the resolved
-  value, a barcode's on both axes, and the element's `halign` and `valign`
-  re-anchor it inside the room the placeholder reserved, so the whitespace
-  falls on the side the alignment does not name.
-- **Height larger** — **error**, naming the field, its placeholder, and both
-  heights.
+- **A field that does not stretch** keeps the lines that fit the room and
+  drops the rest, at a line boundary and keeping one at least, as it drops
+  the lines that do not fit its box. A value may therefore lose lines that
+  the box had room for, and a field with no placeholder at all keeps one.
+- **A field that stretches** drops nothing, so a value that needs more lines
+  than the room holds is an **error**, naming the field, the value,
+  its placeholder, both heights, and the record the field was built for.
+  That holds under a `maxheight` too: the clamp bounds the box the field
+  takes, and the box was taken by the placeholder.
+- **What is kept sits in the room by `valign`**, so a value shorter than its
+  placeholder leaves the whitespace on the side the alignment does not name.
+  The box keeps its width, and `align` places each line in it as before.
 
-So a placeholder must be sized for the worst case: `text="Page 999 of 999"`, 
+The new top edge is the room's top edge, already rounded, plus
+the share of the difference `valign` names, rounded once more:
+
+```
+top = round(room.top + share × (room.height - value.height))
+```
+
+with `share` 0 for `top`, 0.5 for `center`, and 1 for `bottom`.
+It is not recomputed from the element's box.
+The room's top edge rounded a half once already, where the placeholder
+was centred in its box, and recomputing would round that half a second
+time: for a field 9.607 pt tall at `top=0.37`, centring a two-line room
+and then one line in it gives 2.773, and centring the one line in the box
+gives 2.774.
+
+So a placeholder must be sized for the worst case: `text="Page 999 of 999"`,
 not `text="Page 1 of 1"`.
+
+A **barcode** is re-measured the same way, its value encoded and its symbol
+set in the room its placeholder's symbol took: the placeholder's mark,
+which is a symbol rather than the element's box.
+
+- **Its length must fit the room's**, along the coding direction, at the
+  declared `module`. A longer symbol is an **error**, naming the barcode,
+  the value, its placeholder, both lengths, and the record the barcode
+  was built for.
+- **A 1-D symbol's bars reach across the room**, as long as the
+  placeholder's were. They are never shorter than the value's own would be,
+  since a symbol no longer than the room has bars no longer than its own.
+- **A 2-D symbol keeps the declared `module`**, or with `grow` takes
+  the module that fills the room, as the placeholder did.
+- **The symbol sits in the room** by `halign` and `valign`, by the same
+  arithmetic as in [its box](#a-barcode-in-its-box), measured from the
+  room's edges.
+
+So the placeholder for a page count drawn as a barcode is the longest value
+the count can take, encoded: `text="9999"` for a four-digit count.
 
 ## Subreports
 
@@ -773,8 +1684,21 @@ A layout named by `template=` is a separate document with fonts, data and a base
 directory of its own, and its style search ends at its own `layout` -- the same
 rule applied to a different tree. Either way the printout carries one font table
 and one data table for the whole document, so a face two templates both resolve
-is measured and embedded once, and a name two templates give to different things
-is published under distinct names.
+is measured once and [embedded once](render.md#fonts-in-the-file).
+The fonts that name it are still listed under their own names,
+as [printout.md](printout.md#fonts) describes, and a name two templates
+give to different things is published under distinct names: the one
+used first keeps it, and the other is suffixed, by the rule
+[printout.md](printout.md#fonts) gives for fonts and
+[the one](printout.md#data) it gives for `data` entries.
+
+A layout named by `template=` has its `data` nodes produced and its fonts
+resolved when it **first runs**, against the parameters of that first
+invocation, and keeps them for the rest of the build. A `data` node written
+as `expr` needs parameters, and a subreport has none until an invocation
+supplies them; a document that never runs resolves nothing, and a font of
+its that cannot be found is not an error until it does. The report's own
+fonts are resolved before anything is built, as ever.
 
 - **Non-inline** (default): the child builds complete pages, which are spliced into
   the parent's page list at the point the subreport occurs. `ownpageno` restarts
@@ -798,7 +1722,10 @@ with it.
 Nesting is bounded at 32. A subreport may name the layout it is written in,
 which is how a template walks a tree, and the data normally ends that walk;
 nothing guarantees it does, so the recursion stops with an error naming the node
-rather than running out of stack.
+rather than running out of stack. Thirty-two invocations may be open at once,
+one inside another, and the thirty-third is the error. A subreport whose `when`
+is false is never invoked and does not count; one over an empty sequence is
+invoked, since it still prints its title and summary, and it counts.
 
 ### Where a subreport's bands go
 
@@ -814,6 +1741,17 @@ as a whole:
 Ties break on document order. Either way the subreport consumes frame space
 of its own; it takes nothing from the host band's height, and the host band's
 height is unaffected by it.
+
+The band's [`eject` nodes](#eject-nodes) are tested before any of it:
+first the `eject` nodes, then the negative-seq subreports, then the band,
+then the non-negative ones. A report's own `title`, which tests its `eject`
+nodes after itself, tests them after its non-negative subreports too, so an
+`eject` there gives the title and everything it carries a page of their own.
+
+A detail band is counted -- `REPORT_COUNT`, `PAGE_COUNT`, `COLUMN_COUNT` and
+each group's `_COUNT` -- once it is committed, and before the subreports
+after it run: they print after it, and the footer of a page one of them ends
+counts it.
 
 When the host band splits, the subreport goes outside the whole split,
 not between the fragments: `seq` negative places it before the head,
@@ -842,6 +1780,13 @@ band is measured, so if the host band then turns out not to fit and ejects,
 the subreport's bands stay where they were placed and the host band follows
 them onto the next page -- which is what "the host band follows them" means.
 
+An eject the subreport itself causes is an eject before the host band is
+committed, so the band's fold is [rolled back](#rollback) around it,
+as around an eject the band causes: the footers of the page the subreport
+leaves do not count the band, and the band counts on the page it lands on.
+A subreport that paginates itself ends the host's page, and the fold is
+rolled back around that too, and applied again when the host resumes.
+
 ### Pages
 
 **Inline.** The child prints in the frame the host band belongs to, from
@@ -850,16 +1795,65 @@ the host's current fill position. It shares the host's `PAGE_NUMBER` and
 footers are placed, the host's page-scoped variables reset, and the host's
 header is reserved on the next page, all alongside the child's own. An inline
 subreport therefore has no page of its own to attach a header or a footer to,
-and defines none.
+and defines none. Each frame's footer and header is built in the context of
+the report that owns the frame, the host's or the child's, and each report's
+scopes end with the page or the column its bands were printing in. Its own
+counters, `PAGE_COUNT` and `COLUMN_COUNT` among them, start again with the
+host's page and column.
+
+A band the child commits is something of the host band's on the page. So a host
+band at a group break, with nothing of its new record placed yet, has begun its
+new runs once the child commits a band: a page the child ends after that ends
+the new runs, and its footers are built against the new record, per
+[what a header or footer sees](#what-a-header-or-footer-sees).
 
 It may open a `columns` block. That reserves a frame inside the host's rather
 than one of its own, so it is grafted onto the host frame for the length of the
 invocation and removed again at the end of it. The frames begin where the host
-is filled -- the space above belongs to the host -- and stay there for the rest
-of that page, so a column the child opens on the page it started on begins
-beside the first, not above it. A page break puts them back at the top of
-the host's frame. The child's own `columns` header and footer are placed and
-measured in the child's context, which is live for as long as the frames are.
+is filled -- the space above belongs to the host -- and stay there
+for the rest of that page, so a column the child opens on the page
+it started on begins beside the first, not above it, and so does
+one it opens in the host's next column on that page. A page break
+puts them back at the top of the host's frame.
+
+They begin only where there is room for their headers and footers.
+Where less of the host's frame is left below its fill than those reserve,
+the host ejects first, as for a band that does not fit -- to a column
+of its own with room, or to the next page -- and the frames begin where
+that leaves it. Where no eject could give them more room, the reservations
+exceed the frame, which is the [error](#errors) it is for any frame.
+Nothing more than that is asked for, since the child's own bands are not
+[measured in advance](#what-the-lookahead-does-not-see). So a column with
+no room for one between its header and its footer ends as a full column does,
+with both drawn, and the child goes on in the next.
+
+The child's own `columns` header and footer are placed and measured in the
+child's context, which is live for as long as the frames are. While they are,
+they are frames of the host's tree like any other: each of their column breaks
+is a column break of the page, which `COLUMN_NUMBER` counts for the host
+as well. So a host footer built at an eject inside them reports the column
+the child was in, and the count does not go back when they come off.
+
+The host's frame can hold columns of its own as well, where the host band is
+the `title` or the `summary` of a level that opened some. The grafted frame then
+takes the room a band of the host's frame would have: below whatever the host's
+own columns have drawn above it, and above their footers. Nothing draws over
+anything else.
+
+At the end of the invocation the columns come off the host's frame without the
+last column's footer: that column does not end, and the page goes on below it.
+What the host's frame holds below the invocation continues below it, as it
+continues below any band placed across its columns -- below a column footer,
+too, where a column of the child's ended in a column break on that page.
+
+The child's summary is the last band placed while the columns are on,
+so the strip that last footer would have taken is the summary's, and its
+`VERTICAL_SPACE` reaches past it. The columns come off as soon as any of the
+summary is on the page, so nothing after that -- the rest of a summary that
+splits, or the summary's own subreports -- ends their column. A page break
+before then ends it as any does: a summary that does not fit moves on,
+the column's footer is drawn, and the columns open again above the summary
+on the next page.
 
 **Its own pages.** The host's current page is closed -- footers placed, page
 and column deferrals resolved -- the child builds complete pages, and the host
@@ -875,7 +1869,18 @@ printout's [per-page overrides](printout.md#page-lines) are for.
 Without `ownpageno` the child continues the host's numbering and the host
 resumes after it: a host on page 3 whose subreport takes three pages resumes
 on page 7. With `ownpageno` the child numbers from 1 and the host's numbering
-is untouched, so the host resumes on page 4.
+is untouched, so the host resumes on page 4. Either way the child's pages
+are not the host's: a group's `_PAGE_NUMBER` goes up by one across them,
+as across any page eject, and the host's page-scoped variables reset once.
+A group that is still [opening](#sequence) is the exception, as it is for
+any page eject: at a group break, a subreport that runs before the first band
+of the new record ends a page that holds none of it, so that page's footers
+read the runs that ended, and the new runs begin on the page the host resumes on.
+
+An empty sequence still runs the child, which still begins on a page of its own
+and prints its title and summary there. And the host resumes on a fresh page
+whether or not anything of it follows, so a subreport on the last band of
+a report that has no summary leaves an empty page at the end.
 
 ### What the lookahead does not see
 
@@ -894,12 +1899,44 @@ The child's parameters are bound from the `arg` nodes, which are evaluated in
 the **host's** context before the child has one, and type-checked against the
 declaration rather than parsed for it. A parameter with neither an `arg` nor a
 default is a load-time error: a subreport has no command line to fall back on.
+A parameter with no `arg` takes its `default`, or its `defaultexpr` evaluated
+as a report's is, against `BUILD_TIME` and the parameters settled before it.
+
+The check is exact. A `string` takes a string, an `int` an int and not a
+boolean, a `decimal` a decimal and a `float` a float, neither taking the
+other or an int, a `bool` a boolean, a `date` or a `datetime` a time,
+a `list` a list and not a tuple, and an `object` a record and not a dict,
+since a dict has no attribute access. `None` is of no type.
 
 The `data` expression is evaluated in the host's context too, and must yield
 a sequence. Its elements are coerced by the child's own
-[`records`](template.md#records), exactly as the input file is coerced
-by the report's -- a `list` member arrives from JSON untyped, and that
+[`records`](template.md#records), as the input file is coerced by
+the report's -- a `list` member arrives from JSON untyped, and that
 declaration is what turns its fields into ints, decimals and times.
+
+`None` is an empty sequence, which a `nullable` list member can be.
+Text is not a sequence, and nor is a time; anything else that can be
+iterated is, a dict yielding its keys. Each element must be an object:
+a record or a dict. Since the data is an expression, an element's fields
+can arrive typed rather than as JSON gave them, and each is read by its
+declared type as a JSON value is: written as text, and parsed. A boolean,
+an int, and a float are written as JSON spells them, a decimal as its digits,
+and a time as RFC 3339 without fractions of a second, so a decimal reaches
+an `int` member as its digits and a time a `string` member as RFC 3339.
+A `string` member refuses a float, though, since a float the host computed
+has no one spelling as text. Three values are kept as they are: a time
+in a `date` or `datetime` member, which a `date` takes at the start of
+its day; a record or a dict in an `object` member; and a list or a tuple
+in a `list` member. The host's context is the host's as it stands
+when the subreport runs, with one refinement. `VERTICAL_POSITION`
+and `VERTICAL_SPACE` there are the host band's: for a non-negative
+`seq`, as the band was measured, which holds where the band split;
+for a negative one, where the band would begin with nothing before it,
+since it has not been measured yet. Everything else -- the counters,
+the page number, the variables -- reads the report as it stands,
+so after the band the counters count it. `when` is evaluated the same way,
+and first: a subreport whose `when` is false evaluates neither its `data`
+nor its `arg` nodes.
 
 Every deferral a child registered resolves when its invocation ends. For a child
 with its own pages that is the ordinary end-of-report resolution. For an inline
@@ -938,15 +1975,20 @@ Each of these names the template node, the record index, and the measured values
 | Band taller than an empty frame, splitting allowed, some cut point exists | split there, giving up every split preference |
 | Band taller than an empty frame, splitting allowed, no cut point exists | **overflow** |
 | A mark lands outside the page's printable area | **overflow** |
-| Deferred value taller than its placeholder | error |
+| An `xref type="outline"` whose target no outline entry in the document carries | error, when the document ends |
+| Deferred stretch field whose value is taller than its placeholder | error |
+| Deferred barcode whose symbol is longer than its placeholder's | error |
 | Header and footer reservations together exceed the frame | error |
 | Barcode content not encodable in the selected type | error |
+| An image file that cannot be read, `embed=#false` included | error |
+| Image bytes that are not a PNG, a JPEG or a GIF that can be sized, or have no pixels along an axis | error |
 | Expression type mismatch, missing field, or a `null` in a member that is not `nullable` | error |
 | A value a `calc="sum"` accumulator cannot add to its running total | error |
 | `FINAL` without `evaltime`, or `evaltime` without `FINAL` | error, at template validation |
 | Column count so high that column width is non-positive | error, at template validation |
 | A subreport's `data` yields something that is not a sequence | error |
-| An `arg` value whose type is not the parameter's | error |
+| A subreport's `data` element that is not an object, or a member of one that will not coerce | error |
+| An `arg` value, or a `defaultexpr` result, whose type is not the parameter's | error |
 | Subreports nested more than 32 deep | error |
 | A subreport parameter with no `arg` and no default | error, at template validation |
 | A template that reaches itself through a subreport | error, at template load |
@@ -955,8 +1997,45 @@ The rows marked **overflow** are errors that `--allow-overflow` downgrades to a
 warning, placing the marks anyway. The warning is recorded in the printout header,
 so an overflowing document is identifiable from the artifact.
 
+An oversized band is first carried to the next page by one page eject,
+unless it is on a page an eject has just begun, since a later page
+may leave it more room: see [placing a band](#placing-a-band).
+Where it still fits nowhere, it is placed at the top of an
+[empty](#extent-and-fill) column: where it is if that column is empty,
+and otherwise after as many column ejects as it takes to reach one,
+which is the next page at the latest. It runs past that column's bottom,
+and the band after it starts the next column. The warning is raised once
+for each band, before those ejects, and carries the record that band was
+being placed for, the first record's 0 included.
+
 A mark outside the printable area is the case a negative `right` or `bottom`
 produces. Such an offset is legal in the template — it means the box reaches past
 its container, which for a container in the middle of the page is perfectly
 ordinary. Overflow is judged on the resulting page coordinates, not on the
 declaration, so only a mark that actually crosses a margin is one.
+
+**It is judged as the page ends**, on the coordinates the marks end up at,
+once [balancing](#balanced-columns) has moved what it moves. A deferred
+value set later stays inside the room its placeholder took, so nothing
+after that moves a mark outward. A mark's box is what is judged,
+an outline entry's point, and every mark an xref holds as well as
+the xref's own box. Each edge is compared as a frame boundary is,
+with the tolerance [added in binary64](#coordinates-and-rounding):
+a left edge `x` lies inside a left margin `m` where `m <= x + 0.001`,
+and a right edge `r` inside the margin's edge `e` where `r <= e + 0.001`,
+`r` being `x + width` rounded to three decimals.
+The top and bottom edges are compared the same way.
+
+**A band is reported once**, for the first of its marks in paint order
+that lies outside, against the element that mark came from and the record
+the band was built for. A mark inside an xref came from one of its
+children, and is reported against that child rather than the xref.
+The message names the edge, where it is, and the margin:
+"the rectangle's left edge is at -3 pt, past the left margin at 0 pt".
+A band placed more than once, a header on every page,
+is judged at every page it is on. A band already reported for fitting
+no frame is not reported a second time: it was placed knowing that it
+runs past its frame, and its warning says so. That is also the only way
+past the bottom margin, since a band is as tall as the lowest of its marks.
+The warnings are raised in the order the bands were placed,
+after any raised while the page was being filled.

@@ -57,7 +57,7 @@ var pageSizes = map[string][2]string{
 func LookupPageSize(name string) (PageSize, error) {
 	dims, ok := pageSizes[name]
 	if !ok {
-		return PageSize{}, fmt.Errorf("unknown page size %q", name)
+		return PageSize{}, fmt.Errorf("unknown value %q; want a page size name", name)
 	}
 	return PageSize{Width: mustDim(dims[0]), Height: mustDim(dims[1])}, nil
 }

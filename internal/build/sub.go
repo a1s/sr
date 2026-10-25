@@ -260,7 +260,7 @@ func (eng *engine) unitFor(sub *tmpl.Subreport) (*unit, error) {
 			images:    eng.images,
 		}
 	default:
-		return nil, fmt.Errorf("no embedded layout named %q is in scope here",
+		return nil, fmt.Errorf("no embedded layout named '%s' is in scope here",
 			sub.Embedded)
 	}
 	if err := checkInlineLayout(sub, item.report.Layout); err != nil {

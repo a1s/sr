@@ -39,7 +39,7 @@ Two encodings carry the same data model:
   The first line is the [header](#header-line); every following line is a
   [page](#page-lines).
 - **CBOR** (`.srp.cbor`): the same objects as a CBOR sequence, in the same order.
-  Smaller, for large printouts.
+  Smaller, for large printouts. Its spelling is [below](#cbor).
 
 The in-memory structure is the primary artifact — the engine hands it to a renderer
 directly, and serializes only when asked. Serializing is not purely a re-encoding:
@@ -50,8 +50,94 @@ directly, and serializes only when asked. Serializing is not purely a re-encodin
 Every length is a number of PostScript points (1/72 inch), rounded to at most 3
 decimal places. Colors are `"#RRGGBB"` strings.
 
-Numbers serialize in the shortest form that round-trips. Integral values are
-written without a fractional part, so `72` not `72.0`.
+Numbers serialize in the shortest form that round-trips. Three details make
+that a rule rather than a property, because languages disagree on all three
+and the printout is compared byte for byte.
+
+- **Integral values carry no fractional part**: `72`, not `72.0`.
+  A language whose float formatting always writes one has to strip it.
+- **Negative zero is written `0`.** Rounding -0.0004 to three places gives
+  a negative zero, and `-0` in the output would make two printouts differ
+  over a value that compares equal.
+- **No exponent notation.** Implementations switch to it at different
+  magnitudes — around 1e-5 for some, 1e-7 for others — so the threshold cannot
+  be inherited from a host library. It does not arise in practice: a length is
+  rounded to 3 decimals, so the smallest non-zero magnitude is 0.001, and page
+  geometry bounds the other end. Writing the rule down is what keeps "does not
+  arise" from being a coincidence.
+
+### Strings
+
+JSON's escapes, with the choices a writer usually makes for itself made
+here instead, for the reason the numbers are:
+
+- A quotation mark is written `\"` and a backslash `\\`, and the five
+  characters JSON gives a short escape of their own keep it: `\b`, `\f`,
+  `\n`, `\r`, `\t`.
+- Every **other** character below U+0020 is `\u00xx`, in lower-case
+  hexadecimal: `\u000b`, not `\u000B` and not `\v`.
+- `<`, `>` and `&` are `\u003c`, `\u003e` and `\u0026`, although JSON does
+  not ask for it, so that a printout can be pasted into an HTML document as
+  it stands.
+- **U+2028 and U+2029** are `\u2028` and `\u2029`, for a reason of the same
+  shape: both are legal in a JSON string and neither is legal in a JavaScript
+  one, so a reader that is a JavaScript parser would refuse the file.
+- A **path that is not valid Unicode** is the one text two engines may
+  not spell alike, and the difference is in their string types rather
+  than in their choices. Where a string can hold a lone surrogate, the
+  surrogate is written as JSON's escape for the same code point, in
+  lower-case hexadecimal, `\udcff`, which leaves the path able to
+  find its file. Where a string cannot hold one, as a Go string cannot,
+  there is no surrogate to escape and each byte that is not part of a
+  valid sequence is written U+FFFD, which loses the path. This engine
+  is the second kind. A byte comparison of two printouts therefore
+  differs on such a path and nowhere else, and a build that has to
+  survive one names its files in Unicode.
+- Everything else is written as itself, in UTF-8. Non-ASCII is not escaped,
+  `/` is not escaped, and U+007F is an ordinary character.
+
+### Object keys
+
+**Every object writes its keys in the order this document lists them**, and a
+key whose value is absent is left out rather than written `null`. Key order is
+nothing to a JSON reader and everything to a byte comparison: two printouts
+that parse equal and order their keys differently are two files, and fixing the
+number format buys nothing if the keys around it float.
+
+The two tables whose keys are data rather than fields — [`fonts`](#fonts) and
+[`data`](#data) — are sorted by name instead, and say so where they are
+defined. So are `groupRuns` and `groupKeys`, whose keys are group names.
+
+### CBOR
+
+The same records as NDJSON, in the same order, one data item each.
+The stream is a CBOR sequence, as
+[RFC 8742](https://www.rfc-editor.org/rfc/rfc8742) defines one:
+nothing frames it, nothing stands between two items,
+and no item carries a tag, the self-describing one included.
+What a CBOR encoder would choose for itself is fixed here,
+for the reason the JSON spelling is.
+
+- **Maps and arrays have a definite length**, and a map writes its keys
+  in the order the record's NDJSON does.
+- **A string is a text string**, UTF-8 with a definite length.
+  CBOR has no escape for a lone surrogate, so an engine whose strings
+  hold one writes U+FFFD there, where NDJSON keeps the escape and keeps
+  the path. An engine whose strings cannot hold one, as this engine's
+  cannot, has already written U+FFFD in both.
+- **A count is an integer**, in the shortest of CBOR's integer forms.
+  The counts are `sr`, `pages`, the values of `groupRuns` and `groupKeys`,
+  a font's `size` and `resolvedIndex`, a page's `number`,
+  a warning's `record`, an outline entry's `level`,
+  and every run in `stripes` and `rows`.
+- **Every other number is a length, and a length is a double**,
+  the eight-byte float after the initial byte `0xfb`, whole or not:
+  `200` is `fb 40 69 00 00 00 00 00 00`. A negative zero is written
+  as a positive one, as NDJSON writes it `0`.
+- **Booleans are CBOR's `true` and `false`, and nothing is `null`**:
+  an absent field is left out, as in NDJSON.
+- **A `data` entry's `content` is the same base64 text** it is in NDJSON,
+  not a byte string. The objects are the same objects.
 
 ### Paths
 
@@ -146,20 +232,94 @@ Making the printout's own directory self-contained is a separate, deliberate act
 | `sr` | Format version. `1` for this specification. |
 | `kind` | Always `"header"`. |
 | `report` | Metadata from the template's `report` node. Omitted fields are absent, not null. |
-| `built` | RFC 3339, the run's `BUILD_TIME`. |
-| `engine` | Name and version of the producing engine. |
+| `built` | RFC 3339, the run's `BUILD_TIME`, in UTC and to a whole second. A `--build-time` carrying an offset names an instant, and the instant is what is recorded, so two machines in different zones write the same bytes. |
+| `engine` | Name and version of the engine, which is the name and version of *this specification's* engine rather than of an implementation of it. See [below](#the-engine-field). |
 | `strictFonts` | Whether font guessing was disabled for this run. |
 | `pages` | Number of page lines that follow. |
 | `groupRuns` | Per group name, how many times it opened. Group names are per-report namespaces, and this table is the document's, so a host and a [subreport](layout.md#subreports) that both call a group `region` are counted together here. |
-| `groupKeys` | Per group name, how many distinct key values it saw. A `groupRuns` value larger than its `groupKeys` value means the input was not ordered by that group's key. |
+| `groupKeys` | Per group name, how many distinct key values it saw. A `groupRuns` value larger than its `groupKeys` value means the input was not ordered by that group's key. Like `groupRuns` it counts by name, so the keys of every group of one name, the host's and each invocation's of a subreport's, are one set. |
 | `page` | Default page geometry, inherited by every page that does not override it. |
 | `fonts` | Resolved font table. |
 | `data` | Shared blobs, keyed by name. |
-| `warnings` | Present only when the build produced any. An array of objects with `kind`, `node`, `record`, and `message`. `kind` is `overflow` for an error `--allow-overflow` suppressed, `glyph` for a [character the resolved font lacks](template.md#missing-glyphs), or `font` for a `typeface` that reached the [substitute](template.md#the-substitute-face). Diagnostics about fonts on the host that this report did not use are [not warnings](template.md#host-enumeration). |
+| `warnings` | Present only when the build produced any. An array of objects with `kind`, `node`, `record`, and `message`. `kind` is `overflow` for an error `--allow-overflow` suppressed, `glyph` for a [character the resolved font lacks](template.md#missing-glyphs), `font` for a `typeface` that reached the [substitute](template.md#the-substitute-face), or `unknown` for a [name the format does not define](template.md#unknown-names). Diagnostics about fonts on the host that this report did not use are [not warnings](template.md#host-enumeration). |
+
+`groupRuns` and `groupKeys` list a group once it has opened, and are absent
+while none has: a report over no records carries neither. Keys are compared
+with the expression language's `==`.
+
+`record` is absent from a warning that no record produced, which is every
+warning raised at load: an `unknown` is found while the template is read
+and before any data is. A warning about a property carries a `prop` key
+naming it, and one about a node does not.
+
+**Warnings appear in the order the build raised them**, which for a load
+diagnostic is document order and for anything raised while pages are being
+made is the order they were made in. A `glyph` warning is raised once per font
+and character, at the first element set in that font that needed the character,
+and that first use is what fixes its place in the array. The array mixes kinds,
+so build order is the only order all four have in common; sorting the `glyph`
+ones among themselves would tell a reader nothing the `node` field does not
+already say, and would put them out of step with the rest.
+
+### The `engine` field
+
+Two implementations of one release of this specification write the **same**
+string, because the field names the engine the specification describes
+rather than the program that ran. That is what lets the goal be stated
+as it is: the same template over the same data with `--build-time` fixed and
+`--strict-fonts` set gives byte-identical printouts, from any implementation
+of that release and on any machine.
+
+Between releases the version is the one being worked on.
+An implementation raises it when work on the next release starts,
+and each does that on its own schedule, so for a while two implementations
+can write different versions after the same name.
+
+The cost is real and is worth stating: a printout does not record which
+implementation produced it. What it records is which *version of the format
+and engine* produced it, which is what a renderer and an archive need.
+A build that has to be traced back to a program is traced through the run
+that made it, not through the document.
 
 ### `fonts`
 
-One entry per distinct font used, sorted by `name`.
+One entry per font used, sorted by `name`, and an empty array when none is.
+
+A font is **used** when the [style walk](layout.md#building-a-band) of an
+element the engine measured resolved to it. The element need not set text:
+a rectangle whose own `style` names a font uses it. A band measured only
+to [reserve its space](layout.md#headerfooter-reservation) counts, since
+it was measured, while a font no walk reached -- one on a `style` whose
+`when` was false, one on an element its `printwhen` suppressed, one a
+nearer `style` shadowed -- is left out. Every declared font is still
+resolved when the template loads, so a font that cannot be found is refused
+whether or not it would have been listed. A subreport's template is the
+exception: its fonts are resolved when it [first runs](layout.md#subreports).
+
+**A font is listed under the name its template gave it, and is never
+merged into an entry of another name.** Two `font` nodes can resolve
+to the same face at the same size and with the same flags, and can even
+write entries that are the same in everything but `name`. Both are still
+listed when both are used. A [text mark](#text) names the font its own
+element's style walk resolved to, never another font that reads the same
+face. A `glyph` [warning](#header-line) counts fonts the same way, once
+per font and character, and the font it names always has an entry.
+
+The rule is the same where a [subreport](layout.md#subreports) brings
+a template with fonts of its own. Two fonts with different names stay
+two entries, however alike they resolve. Two that share a name and write
+the same entry, every field equal, are one entry, since sharing it
+renames nothing. Two that share a name and differ are published under
+distinct names, as layout.md says. **The font used first keeps the name**,
+whichever template declares it, and the other is published under the first
+of `-2`, `-3` and so on after the name that the table does not hold for a
+different entry: `x`, then `x-2`. Unlike a generated [`data`](#data) name,
+it steps around only the names published so far, not the names a template
+declares: where the host has used its `x` and a child declares `x` and `x-2`,
+the child's two are published as `x-2` and `x-2-2`. "First" means what it
+does for `data`, the first element built whose style walk resolves to the
+font. A [text mark](#text) names the font it was set in by the name it was
+published under, and so does a `glyph` warning.
 
 ```json
 {
@@ -229,9 +389,84 @@ Content is stored decompressed.
 
 Entries come from three places: the template's `data` nodes, which keep their
 declared names; embedded fonts; and images the template gave as `file=` with
-`embed=#true`, the default. Those last have no name in the template, so the engine
-assigns one, stable for a given source file, and distinct from every declared name.
-Two images from the same file share one entry.
+`embed=#true`, the default, or as a `content` child. Those last have no name
+in the template, so the engine assigns one.
+
+**The generated name is the source file's base name** — `logo.png` for
+`../assets/logo.png`. An image given as a `content` child has no file, and
+its base name is `image`. It has to be distinct from every other name in
+the table, so where it is taken already the engine appends `-2` to the
+whole base name, then `-3`, and so on until it is free: `logo.png`, then
+`logo.png-2`, then `logo.png-3`. The suffix goes after the extension,
+not before it, because the name is an identifier in this table rather
+than a filename.
+
+Base names collide readily — two directories each holding a `logo.png` is the
+ordinary case, not a contrived one — so the suffixed form is expected rather
+than exceptional. **Which of the two gets the unsuffixed name is decided by
+document order**: the first mention of an image wins it, where "first" is the
+order elements are built in. That is the one thing about this table that
+document order still decides, and moving an image within a template can
+therefore rename both blobs.
+
+A band is built each time it is measured, and a header or a footer is measured
+when its space is [reserved](layout.md#headerfooter-reservation), before the
+bands that fill the page. So an image in a page footer takes a name ahead of
+one drawn above it in a detail band. A name is taken when the image is built,
+whether or not its band goes on to reach the page; its entry is written only
+if something refers to it, below. An image with `embed=#false` has no entry
+and takes no name, and neither does one its `printwhen` suppressed, since
+it is never built.
+
+A name is taken if a `data` node declares it or an earlier entry generated it.
+Declared names are reserved whether or not anything refers to them, so an
+unused `data` node still pushes a generated name along. That is deliberate:
+which names are spoken for is a property of the template, not of what
+a particular build turned out to need.
+
+**Blobs are shared on their content.** Two images with identical bytes
+are one entry however they were named and wherever they were read from,
+which is what makes two references to one file share an entry, and equally
+makes two copies of one file under different names share an entry. Where
+a declared `data` node and a generated blob have identical content, they
+share the **declared** name: a name the template chose outranks a name
+the engine invented, and the order in which the document happens to mention
+them does not come into it.
+
+Two declared nodes with identical content are one entry too, and only one
+of their names can be its name. Neither outranks the other, so document order
+decides, as between generated names: the entry takes the name of the node
+the first element built refers to. A generated blob identical to several
+declared nodes takes the name of whichever already holds the entry, and
+failing that the first of them in the template.
+
+An embedded font is named by the same rules. Its entry is its node's name,
+unless an entry built earlier holds the same bytes, and a font is built when
+the first element whose [style walk](layout.md#building-a-band) resolves to
+it is. Its `resolvedData` names the entry, which is another node's name
+where two fonts read identical bytes.
+
+A [subreport](layout.md#subreports) named by `template=` brings `data` nodes
+of its own, and the document still has one table. **Every document's declared
+names are reserved from the start**, the subreports' with the report's, so a
+generated name steps around a name a subreport declares even before that
+subreport runs. Two documents can declare one name for different bytes,
+and then the node built first holds the name and the other is suffixed as
+a generated name would be: `shared`, then `shared-2`. Nothing else about
+a declared node's entry depends on which document declared it.
+
+**Only entries something refers to are written.** A `data` node nothing
+references does not appear, and neither does one a `field` consumed —
+a field's text reaches the printout in its mark's `lines`, so the blob
+behind it is not needed. An image with `embed=#false` contributes no entry
+either: the engine reads as far as its header, for its size, and its bytes
+stay in the file the mark points at. Nor does an image whose band was
+built and never reached the page, though it took its name.
+
+**Keys are sorted by name**, as [`fonts`](#fonts) is, and for the same reason:
+the table is a lookup and its order carries nothing, so an order that has to be
+chosen may as well be the one a reader can predict. Sorting settles the order
+of the keys only — which name each blob holds is still document order, as above.
 
 ## Page lines
 
@@ -347,18 +582,16 @@ The template's `stroke=#false` resolves to an absent `stroke`, and its
 {
   "kind": "image",
   "box": { "x": 42.52, "y": 100, "width": 56.7, "height": 28.35 },
-  "type": "png",
   "data": "logo",
-  "crop": { "x": 0, "y": 0, "width": 120, "height": 60 }
+  "crop": { "x": 0, "y": 0, "width": 56.7, "height": 28.35 }
 }
 ```
 
 | Field | Meaning |
 |---|---|
-| `type` | `png` `jpeg` `gif`. Always present. |
 | `data` | Name of a header `data` entry. |
 | `file` | Path to the image, when the template set `embed=#false`. Relative to the printout. Mutually exclusive with `data`. |
-| `crop` | Optional source-pixel rectangle. Present only when the image was clipped, which only `scale="cut"` does. |
+| `crop` | Optional source-pixel rectangle, measured from the image's top-left corner. Present only when the image was clipped, which only `scale="cut"` does. |
 
 Exactly one of `data` and `file` is present. `data` is the default case: an image
 given as `file=` with `embed=#true` has its bytes copied into the header's
@@ -372,37 +605,67 @@ render.
 `box` is the final drawn rectangle. `crop` names the source pixels that fill it;
 when `crop` is absent the whole image does. Scaling is whatever maps the one onto
 the other, so a renderer needs no notion of fitting: `cut` arrives as a `crop` at
-scale 1, `fill` as a box the image is stretched into, and `grow` as a box already
-the image's natural size.
+scale 1, `fill` as a box the image is stretched into, and `grow` as a box
+already the image's natural size. At scale 1 a crop's extent is the box's,
+so it is a length like any other, written to three decimals, and
+a box with a fraction of a point has a crop with a fraction of a pixel.
+Which pixels it starts at follows the element's alignment; see
+[an image in its box](layout.md#an-image-in-its-box).
 
-The template's `scale` and `proportional` do not appear — both are resolved away.
+The template's `scale` and `proportional` do not appear, both are resolved away.
+Nor does the image's format: the bytes are written as they are, and a
+[renderer](render.md#images) reads the format from their own signature,
+as the engine did.
 
 ### `barcode`
 
 ```json
 {
   "kind": "barcode",
-  "box": { "x": 42.52, "y": 60, "width": 90.7, "height": 36 },
+  "box": { "x": 42.52, "y": 60, "width": 66, "height": 18 },
   "type": "Code128",
-  "value": "Code 128",
-  "module": 10,
+  "value": "A",
+  "module": 1,
   "vertical": false,
-  "ink": "#000000",
-  "paper": "#FFFF00",
-  "stripes": [10, 2, 1, 2, 2, 2, 2, 1, 1, 4, 10]
+  "ink": "#000080",
+  "paper": "#FFE9B0",
+  "stripes": [10, 2, 1, 1, 2, 1, 4, 1, 1, 1, 3, 2, 3, 1, 3, 1, 1, 2, 3, 2,
+              3, 3, 1, 1, 1, 2, 10]
 }
 ```
 
-`stripes` is the encoded geometry, in modules. Both arrays alternate **light
-and dark starting with light**, so index 0 is a light run, index 1 a dark one,
-and so on. Polarity is positional, and nothing records it separately:
+```json
+{
+  "kind": "barcode",
+  "box": { "x": 42.52, "y": 90, "width": 15, "height": 15 },
+  "type": "Aztec",
+  "value": "A",
+  "module": 1,
+  "vertical": false,
+  "ink": "#000000",
+  "rows": [[4, 2, 3, 4, 1, 1], [2, 3, 2, 1, 2, 2, 3], [1, 3, 8, 1, 2],
+           [1, 13, 1], [0, 1, 2, 1, 7, 1, 1, 1, 1], …]
+}
+```
 
-- **1-D types**: a flat array of alternating space and bar widths. The leading
-  quiet zone is simply the first element and the trailing one the last.
-- **2-D types**: an array of rows, each an array of alternating light and dark
-  run lengths. A row that opens dark opens with a **zero-length light run**,
-  which keeps the alternation unambiguous while letting the runs still sum to
-  the whole extent. Only a symbology that asks for no quiet zone produces one.
+The fields are in that order. A 1-D symbol carries `stripes` and a 2-D one
+`rows`, never both, and either is the encoded geometry, in modules, by the
+rules of [barcode.md](barcode.md). Both alternate **light and dark starting
+with light**, so index 0 is a light run, index 1 a dark one, and so on.
+Polarity is positional, and nothing records it separately:
+
+- **1-D types**: `stripes` is a flat array of alternating space and bar
+  widths. The leading quiet zone is simply the first element and the
+  trailing one the last.
+- **2-D types**: `rows` is an array of rows, from the top, each an array
+  of alternating light and dark run lengths from the left. A row that opens
+  dark opens with a **zero-length light run**, which keeps the alternation
+  unambiguous while letting the runs still sum to the whole extent. Only
+  a symbology that asks for no quiet zone produces one. A row ends with
+  its last run, never with an empty one.
+
+With `vertical` both arrays are what they would be without it, and only
+the box is turned; [render.md](render.md#barcodes) says how they are drawn.
 
 Quiet zones are part of the geometry for every type, because a symbol drawn
 without its margin does not scan. Each side carries what its standard requires:
@@ -415,9 +678,11 @@ is filled over the whole box before the bars, so the quiet zone carries that
 colour too; absent, nothing is laid down and whatever is beneath the mark shows
 through.
 
-A 1-D symbol's extent across the coding direction — its bar height — is fifteen
-per cent of the symbol's length or a quarter of an inch, whichever is greater,
-unless `grow` expands it to the box.
+`box` is the symbol's own, placed in the element's box as
+[layout.md](layout.md#a-barcode-in-its-box) describes, so it is the area the
+symbol covers and not the box the template declared. A 1-D symbol's extent
+across the coding direction, its bar height, is 15% of the symbol's length or
+a quarter of an inch, whichever is greater, unless `grow` expands it to the box.
 
 `module` is the narrow-element width in points, after any `grow` adjustment.
 `value` is the encoded string, recorded so a reader can verify the encoding
@@ -441,6 +706,36 @@ An outline entry has a point rather than a box — it names a scroll position.
 `name` is present only when some `xref` targets it. Entries appear in the order
 they must appear in the outline tree; `level` gives the nesting.
 
+An entry is a mark of the band whose `outline` node selected it,
+and it is written after every other mark of that band.
+**Its point is the band's top-left corner**: the left edge of the frame
+the band went in, which is a column's in a column, and the band's top edge.
+It moves with its band from then on, as the band's other marks do:
+when a [balanced](layout.md#balanced-columns) column takes the band,
+and when the band [splits](layout.md#band-splitting), where it goes
+with the head. It takes no part in where a band may be cut.
+
+`title` and `name` are text, converted from what their expressions
+yield as a `field`'s `expr` is under the default
+[`format`](expressions.md#formatting) of `%s`, so a number is its digits
+and `None` is `None`. A name that comes out empty is no name.
+Several entries may carry one name, and an `xref` that targets it
+goes to the first of them in the document.
+
+**`level` is written as the entry's depth in the outline tree**,
+which may not be the level its template declared.
+An entry's parent is the nearest entry before it, in the document,
+whose declared level is lower; its depth is one more than its parent's,
+or 1 where it has none. Levels a template declares without a gap
+are written as they are, and the [tenth invariant](#invariants) holds
+even where a template skips a level, or where the entry that would have
+been an entry's parent is on a band that did not print: an entry
+declared at 2 with nothing above it is written at 1, and so is
+the next one at 2. Declared 1, 4, 3, the second and the third are
+both the first one's children, written 1, 2, 2. A reader of this
+engine's printouts therefore meets no gap, and builds the tree
+from the levels as they are written.
+
 ### `xref`
 
 ```json
@@ -457,6 +752,14 @@ they must appear in the outline tree; `level` gives the nesting.
 `type` is `url` or `outline`; for `outline`, `target` matches an outline mark's
 `name`. `caption` is optional hover text.
 
+The entry an `outline` xref targets may be on any page, before the xref
+or after it, so whether one exists is known when the document ends.
+**One that no entry in the document carries is a build error**,
+naming the xref and the record its band was built for: the printout
+would break the [fifth invariant](#invariants), and a renderer
+[refuses](render.md#errors) such an xref. A target that is a constant
+is caught sooner, when the template [validates](template.md#validation).
+
 Nested `marks` use **page coordinates**, not coordinates relative to the xref box,
 so a renderer can flatten them recursively and draw in one pass. The xref box is
 purely a hit region.
@@ -465,6 +768,12 @@ purely a hit region.
 
 A valid printout satisfies all of these. They are asserted on every printout
 produced in the test suite.
+
+The engine checks them before it hands a printout out, and a printout
+that breaks one is a failed build rather than a document: a fault
+in the engine is not the template's to discover later. `sr inspect`
+[checks them](cli.md#sr-inspect) on whatever printout it reads,
+whichever engine wrote it.
 
 1. `sr` is a version the reader understands.
 2. The number of page lines equals the header's `pages`.
@@ -476,13 +785,18 @@ produced in the test suite.
 7. Every mark lies within its page's printable area — inside the margins — to
    within the 3-decimal rounding tolerance, unless the header carries a warning of
    kind `overflow`. A negative `right` or `bottom` in the template is what usually
-   produces one; see [errors](layout.md#errors).
-8. Every `text` mark has at least one line, and `lines` count times `leading` does
-   not exceed the box height by more than the rounding tolerance.
+   produces one; see [errors](layout.md#errors). A mark's box is what lies
+   there, and an outline entry's point; an xref's nested marks lie there too.
+   The page's own margins are the ones that count, where it overrides
+   the header's.
+8. Every `text` mark has at least one line, and `lines` count times `leading`
+   does not exceed the box height by more than the rounding tolerance.
 9. `stripes` sums, times `module`, equal the box extent along the coding
-   direction, within tolerance. For a 2-D symbol every row sums alike, and
-   the row count times `module` equals the extent across that direction.
-10. Outline `level` never jumps by more than one from the previous entry.
+   direction, within tolerance. For a 2-D symbol every row of `rows` sums
+   alike, that sum times `module` equals the extent along the coding
+   direction, and the row count times `module` the extent across it.
+10. Outline `level` never jumps by more than one from the previous entry,
+    and the first entry's is 1.
 11. Every `image` mark carries exactly one of `data` and `file`.
 12. Every `barcode` mark carries an `ink` colour.
 
@@ -490,16 +804,29 @@ produced in the test suite.
 
 A one-page printout with one font, a rule, and two detail rows.
 The template pinned its font with `file=`, so `resolvedFile`
-is [relative to the printout](#paths):
+is [relative to the printout](#paths).
+
+It is [example/minimal/minimal.kdl](../example/minimal/minimal.kdl)
+over [films.jsonl](../example/minimal/films.jsonl), and these are
+the bytes that template produces, not an illustration of them:
+
+```bash
+sr build -t example/minimal/minimal.kdl \
+    -d example/minimal/films.jsonl -o example/minimal/minimal.srp.jsonl \
+    --build-time 2026-08-04T09:12:44Z --strict-fonts
+```
 
 ```json
 {"sr":1,"kind":"header","report":{"name":"Minimal"},"built":"2026-08-04T09:12:44Z","engine":"sr 0.1.0","strictFonts":true,"pages":1,"page":{"width":595.276,"height":841.89,"leftMargin":42.52,"rightMargin":42.52,"topMargin":28.35,"bottomMargin":28.35},"fonts":[{"name":"body","size":9,"bold":false,"italic":false,"underline":false,"resolvedFile":"../fonts/Go-Regular.ttf","resolvedFace":"Go","resolvedBy":"explicit"}],"data":{}}
 {"kind":"page","number":1,"marks":[
   {"kind":"text","box":{"x":42.52,"y":28.35,"width":200,"height":10.8},"font":"body","color":"#000000","align":"left","leading":10.8,"lines":["Film title"]},
-  {"kind":"line","box":{"x":42.52,"y":39.15,"width":510.24,"height":0},"width":0.5,"color":"#000000","dash":"solid","backslant":false},
+  {"kind":"line","box":{"x":42.52,"y":39.15,"width":510.236,"height":0},"width":0.5,"dash":"solid","color":"#000000","backslant":false},
   {"kind":"text","box":{"x":42.52,"y":39.15,"width":200,"height":10.8},"font":"body","color":"#000000","align":"left","leading":10.8,"lines":["ACADEMY DINOSAUR"]},
   {"kind":"text","box":{"x":42.52,"y":49.95,"width":200,"height":10.8},"font":"body","color":"#000000","align":"left","leading":10.8,"lines":["ACE GOLDFINGER"]}
 ]}
 ```
 
-The page line is shown wrapped for readability. In a real file it is one line.
+The page line is shown wrapped for readability: a record starts at the left
+margin, and a line that does not is a continuation of the one above it. In a
+file it is one line. Everything else, including the width of the rule and the
+order of every key, is the file.

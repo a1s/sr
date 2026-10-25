@@ -20,6 +20,8 @@ func cmdBuild(env Env, args []string) error {
 		formatName, buildTime   string
 		params                  paramList
 		strictFonts             bool
+		strictNames             bool
+		accept                  acceptList
 		allowOverflow           bool
 		uncompressed            bool
 		verbose                 bool
@@ -32,6 +34,8 @@ func cmdBuild(env Env, args []string) error {
 	stringFlag(set, &buildTime, "build-time", "", "RFC 3339 BUILD_TIME")
 	paramFlag(set, &params)
 	boolFlag(set, &strictFonts, "strict-fonts", "", "resolve only named font files")
+	boolFlag(set, &strictNames, "strict-names", "", "refuse any unknown node or property")
+	acceptFlag(set, &accept)
 	boolFlag(set, &allowOverflow, "allow-overflow", "", "warn instead of failing")
 	boolFlag(set, &uncompressed, "uncompressed", "", "leave PDF streams uncompressed")
 	boolFlag(set, &verbose, "verbose", "v", "report host font diagnostics")
@@ -66,7 +70,7 @@ func cmdBuild(env Env, args []string) error {
 		notes.line("warning: %s", mismatch)
 	}
 
-	tpl, err := sr.LoadTemplate(template)
+	tpl, err := sr.LoadTemplate(template, nameOptions(strictNames, accept)...)
 	if err != nil {
 		return err
 	}

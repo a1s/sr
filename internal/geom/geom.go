@@ -16,17 +16,31 @@ import (
 // rather than ejecting.
 const Tolerance = 0.001
 
-// Round rounds a length to three decimal places.
+// Round rounds a length to three decimal places, halves away from zero.
 //
 // The rule is normative rather than cosmetic: it decides whether a band fits,
 // so an implementation that rounds only at output time disagrees about page
 // breaks. Every computed coordinate and extent passes through here immediately
 // after the computation that produces it.
+//
+// The scaling comes first, and the arithmetic is binary64 rather than exact
+// decimal, because the two differ in the last digit and that is enough to
+// move a page break: 0.1235 is held as a value just below the half and would
+// round down, while multiplying by 1000 first gives exactly 123.5, which
+// rounds up. See doc/layout.md#coordinates-and-rounding.
+//
+// A negative zero comes back as a positive one. Rounding a value
+// just below zero produces one, and -0 in a printout would make
+// two documents differ over a number that compares equal.
 func Round(value float64) float64 {
 	if math.IsInf(value, 0) || math.IsNaN(value) {
 		return value
 	}
-	return math.Round(value*1000) / 1000
+	rounded := math.Round(value*1000) / 1000
+	if rounded == 0 {
+		return 0
+	}
+	return rounded
 }
 
 // Fits reports whether want fits in have, within Tolerance.
@@ -249,4 +263,31 @@ func AlignV(outerStart, outer, inner float64, align VAlign) float64 {
 		return Round(outerStart + outer - inner)
 	}
 	return Round(outerStart)
+}
+
+// ShareH is the fraction of the spare room that falls before the content
+// under a horizontal alignment: 0 for left, 0.5 for center, 1 for right.
+//
+// AlignH answers where content starts. A crop needs the same fraction
+// applied to a different pair of extents, since the pixels kept are
+// the ones the alignment leaves inside the box.
+func ShareH(align HAlign) float64 {
+	switch align {
+	case HCenter:
+		return 0.5
+	case HRight:
+		return 1
+	}
+	return 0
+}
+
+// ShareV is the vertical counterpart of ShareH.
+func ShareV(align VAlign) float64 {
+	switch align {
+	case VCenter:
+		return 0.5
+	case VBottom:
+		return 1
+	}
+	return 0
 }

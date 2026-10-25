@@ -1,6 +1,7 @@
 package expr
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -46,18 +47,27 @@ type Program struct {
 	fn *starlark.Function
 }
 
+// exprFile is the file name the parser attributes positions to.
+//
+// It is stripped from a diagnostic before the caller sees it: the caller
+// already knows which file, node and property the expression came from,
+// and says so, so repeating that here printed every location twice.
+// What is left is the position inside the expression, which is the
+// one thing the caller does not know.
+const exprFile = "expr"
+
 // Compile parses and compiles one expression.
 //
 // where is a human-readable location -- file, node path, property --
-// that every diagnostic from this expression carries.
+// that the compiled program carries, for a diagnostic raised later.
 func Compile(where, source string) (*Program, error) {
-	expr, err := fileOptions.ParseExpr(where, source, 0)
+	expr, err := fileOptions.ParseExpr(exprFile, source, 0)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", where, err)
+		return nil, inExpression(err)
 	}
 
 	if name, pos := findBlocked(expr); name != "" {
-		return nil, fmt.Errorf("%s: %s (at %s)", where, blockedUniversals[name], pos)
+		return nil, fmt.Errorf("%s (at %s)", blockedUniversals[name], pos)
 	}
 
 	// Resolve with every name that is not a Starlark universal
@@ -68,7 +78,7 @@ func Compile(where, source string) (*Program, error) {
 	anyPredeclared := func(name string) bool { return !IsUniversal(name) }
 	_, err = resolve.ExprOptions(fileOptions, expr, anyPredeclared, IsUniversal)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", where, err)
+		return nil, inExpression(err)
 	}
 	params := freeNames(expr)
 
@@ -190,4 +200,14 @@ func finalNames(expr syntax.Expr) []string {
 	})
 	sort.Strings(names)
 	return names
+}
+
+// inExpression strips the parser's file name from a diagnostic,
+// leaving the position inside the expression.
+func inExpression(err error) error {
+	message := err.Error()
+	if trimmed, ok := strings.CutPrefix(message, exprFile+":"); ok {
+		message = trimmed
+	}
+	return errors.New(message)
 }

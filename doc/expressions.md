@@ -11,6 +11,7 @@ the formatting mechanism, and variable accumulation semantics.
 - [Names in scope](#names-in-scope)
 - [Predefined variables](#predefined-variables)
 - [Modules and builtins](#modules-and-builtins)
+- [Strings](#strings)
 - [The `decimal` type](#the-decimal-type)
 - [Truth values](#truth-values)
 - [Formatting](#formatting)
@@ -29,13 +30,23 @@ Starlark is Python-like, not Python. What matters for templates:
 - **Integers are arbitrary precision.** `123456789012345678901234567890 + 1` is
   exact.
 - **`/` is float division**, `//` is floor division. `1/3` is a float.
-- **Strings are immutable** and indexable by byte; `.elems()` and `.codepoints()`
-  iterate.
+- **Strings are immutable** and indexed by **codepoint**. `len`, indexing
+  and slicing all count codepoints, so `len("Šķūnis")` is 6 and `title[:20]`
+  cannot cut a UTF-8 sequence in half. `.codepoints()` and `.codepoint_ords()`
+  iterate. See [Strings](#strings).
 - **`set` is available**, which `calc="set"` uses. Sets are a dialect option
   in Starlark rather than part of the core language; the engine enables them
   explicitly and does not rely on the host default.
+- **Literals are Starlark's.** The prefixes are `r`, `b`, and `rb`;
+  two literals in a row are not joined; and only Starlark's escapes
+  are escapes. See [Literals](#literals).
 - **`%` interpolation has no flags, width, or precision.** See
   [Formatting](#formatting).
+- **Tokens are separated by spaces, tabs, and line breaks only.** Python
+  also skips a form feed (U+000C) between two tokens, and Starlark does not.
+  A form feed outside a literal or a comment is an error,
+  `unexpected input character '\f'`, at the form feed's own offset.
+  Inside a literal or a comment it is a character like any other.
 
 ## Determinism
 
@@ -89,12 +100,12 @@ Nested objects come from nested JSON and are declared
 | `COLUMN_COUNT` | int | Detail sections printed since the start of the column. |
 | *group*`_COUNT` | int | Detail sections printed since the start of the named group. |
 | `PAGE_NUMBER` | int | Current page number, 1-based. |
-| `COLUMN_NUMBER` | int | Current column number, 1-based. |
+| `COLUMN_NUMBER` | int | Current column number, 1-based, counting the columns the page has opened: 1 on a new page, and one more at each column break, whichever block of columns breaks. So a block inside another block's columns numbers on across them: two columns inside each of two read 1 and 2 in the outer block's first column, and 3 and 4 in its second, while an inner block that the outer one breaks away from in its first column reads 2 in its first column again. |
 | *group*`_PAGE_NUMBER` | int | Page number relative to the start of the named group, 1-based. |
 | `VERTICAL_POSITION` | float, points | Distance from the top of the frame to where the section being measured begins. |
-| `VERTICAL_SPACE` | float, points | Space from there to the frame's reserved bottom — what the section has left to grow into. |
+| `VERTICAL_SPACE` | float, points | Space from there to the frame's reserved bottom — what the section has left to grow into. Across columns, that stops above their footers. |
 | `BUILD_TIME` | time | When this run started. Constant for the whole run. |
-| `FINAL` | namespace | Every name above, and every `variable`, read at the end of a scope instead of now. See [`FINAL`](#final). |
+| `FINAL` | namespace | Every name above but the two vertical ones, and every `variable`, read at the end of a scope instead of now. See [`FINAL`](#final). |
 
 The names divide into two families. `DATA_COUNT` and `ITEM_NUMBER` describe
 the **input**: how many records there are, and which one is current. Everything
@@ -113,12 +124,47 @@ the whole dataset before laying anything out — the same fact that makes
 about the *output* are different: nothing knows how many pages there will be
 until there are none left to make.
 
+### Between a group's runs
+
+A group's names are its `_COUNT`, its `_PAGE_NUMBER`, and every variable
+it resets, with `reset="group"` and `resetgrp` naming it. Like every name,
+they are in scope everywhere, from the start of the report to its end,
+and reading one is never an error.
+
+Before the group's first run their values are those of a run that has
+not begun: `_COUNT` is 0, `_PAGE_NUMBER` is 1, and each variable holds
+what its `init` seeded it with at the start of the report, as every
+variable does; see [`iter` and `reset`](#iter-and-reset).
+
+After that, what they hold describes the run of the group in progress,
+and between two runs there is none. From the break that ends a run,
+once the group's `summary` has been placed if it has one, until the
+group opens for its next `title`, their values are **unspecified**:
+this document deliberately does not say what they are, and a template
+that depends on one depends on the engine that built it.
+
+That time holds an outer group's `summary` and `title`, and the headers
+and footers of any eject among them. After a group's last run it lasts
+to the end of the report, so the report's `summary` and the last page's
+footers are in it for every group.
+
+The eject that ends a page or column at the break is the exception:
+its footers read the run that ended, and its headers the run that begins,
+as [what a header or footer sees](layout.md#what-a-header-or-footer-sees)
+says.
+
+A variable the group only iterates, with `iter="group"` and `itergrp`
+naming it, is not among those names: it folds once for each run, and
+an outer group's summary is where what it gathered is printed. Nor are
+the group's own [deferred values](#final), which resolve to what its
+summary read, as [when a scope ends](layout.md#when-a-scope-ends) says.
+
 ### `FINAL`
 
-Every name in the table above, and every `variable`, is also reachable as
-`FINAL.`*name*, which reads the value that name holds when a scope **ends**
-rather than the value it holds now. Which scope is the element's
-[`evaltime`](template.md#content-sources).
+Every name in the table above but two, and every `variable`, is also
+reachable as `FINAL.`*name*, which reads the value that name holds
+when a scope **ends** rather than the value it holds now. Which scope
+is the element's [`evaltime`](template.md#content-sources).
 
 ```kdl
 field expr="'Page %d of %d' % (PAGE_NUMBER, FINAL.PAGE_NUMBER)" \
@@ -139,11 +185,23 @@ for any of them:
 | `FINAL.PAGE_COUNT`, `evaltime="page"` | detail rows on this page |
 | `FINAL.customer_COUNT`, `evaltime="customer"` | rows in this customer's group |
 | `FINAL.total_amount`, `evaltime="report"` | a report-scoped variable's final total |
-| `FINAL.THIS.region`, `evaltime="page"` | a field of the last record on this page |
+| `FINAL.THIS.region`, `evaltime="page"` | a field of the record the page ends at |
+
+The record a page ends at is `THIS` as that page's footer sees it: the last
+that entered the record loop, which is the record whose band did not fit
+where a band moved to the next page, and the last of the runs that ended
+where the page ends at a group break. See
+[what a header or footer sees](layout.md#what-a-header-or-footer-sees).
 
 `FINAL` holds only names whose value changes as the report is built: the predefined
 variables and the `variable` accumulators. A `parameter` is constant, and a record
 field belongs to a record rather than to a scope — reach one through `FINAL.THIS`.
+
+Two predefined variables are not in it. `VERTICAL_POSITION` and
+`VERTICAL_SPACE` describe a band being measured, where it begins
+and what it has left, and when a scope ends no band is being measured,
+so neither has a value to give. `FINAL` is not in itself either.
+Naming any of the three after `FINAL.` is a validation error.
 
 `FINAL` lives in **`expr` and nowhere else.** `expr` is the only property whose
 evaluation `evaltime` defers; a `printwhen`, a `style when`, an `outline title`
@@ -175,10 +233,24 @@ content and width, which do not capture a dependence on position.
 
 Available: `abs` `all` `any` `bool` `bytes` `chr` `dict` `dir` `enumerate` `fail`
 `float` `getattr` `hasattr` `hash` `int` `len` `list` `max` `min` `ord` `range`
-`repr` `reversed` `set` `sorted` `str` `tuple` `type` `zip`.
+`repr` `reversed` `round` `set` `sorted` `str` `tuple` `type` `zip`.
 
 `print` is not available — a template has nowhere to print to.
-There is no `round` builtin; use `math.round` or [`format`](#formatting).
+
+`round` is not one of Starlark's own; the engine predeclares it, which both host
+implementations support. It takes **one argument** and rounds **half away from
+zero**, which is the same rule as `quantize`, as decimal division, and as
+[coordinate rounding](layout.md#coordinates-and-rounding) — one rounding rule
+for the whole system rather than three. It is a spelling of `math.round` rather
+than a new capability, and there is no digits argument because `quantize`
+already covers that ground for the type where it matters.
+
+It answers with an **int**, where `math.round` answers with a **float**:
+`round(2.5)` is `3` and `math.round(2.5)` is `3.0`. That is the only way
+the two spellings differ. `math` is the host Starlark's own module and what
+its functions return is not this engine's to change; `round` is predeclared
+here and is free to be the convenient shape. A decimal keeps its exactness on
+the way through: `round(decimal("2.5"))` is `3` without becoming a float first.
 
 List and dict comprehensions, conditional expressions (`a if c else b`),
 and slicing are all available.
@@ -192,7 +264,7 @@ are usable.
 
 | Type | Methods |
 |---|---|
-| string | `capitalize` `codepoint_ords` `codepoints` `count` `elem_ords` `elems` `endswith` `find` `format` `index` `isalnum` `isalpha` `isdigit` `islower` `isspace` `istitle` `isupper` `join` `lower` `lstrip` `partition` `removeprefix` `removesuffix` `replace` `rfind` `rindex` `rpartition` `rsplit` `rstrip` `split` `splitlines` `startswith` `strip` `title` `upper` |
+| string | `capitalize` `codepoint_ords` `codepoints` `count` `endswith` `find` `format` `index` `isalnum` `isalpha` `isdigit` `islower` `isspace` `istitle` `isupper` `join` `lower` `lstrip` `partition` `removeprefix` `removesuffix` `replace` `rfind` `rindex` `rpartition` `rsplit` `rstrip` `split` `splitlines` `startswith` `strip` `title` `upper` |
 | list | `index` — plus the mutating `append` `clear` `extend` `insert` `pop` `remove` |
 | dict | `get` `items` `keys` `values` — plus the mutating `clear` `pop` `popitem` `setdefault` `update` |
 | set | `difference` `intersection` `issubset` `issuperset` `union` — plus the mutating `add` `clear` `discard` `pop` `remove` `symmetric_difference`. There is no `update`; sets also support `\|` `&` `-` |
@@ -219,6 +291,14 @@ nanosecond=, location=)`, `time.parse_time(s, format=, location=)`,
 
 `time.now` is **not** available; see [Determinism](#determinism).
 `time.is_valid_timezone(name)` is.
+
+Every constructor that is not given a location produces a time in **UTC**,
+`time.from_timestamp` included. A timestamp read in the host's local zone
+would give a report whose text depended on the machine that built it, which
+is the thing [Determinism](#determinism) rules out. `time.time` takes each
+calendar field as **zero** where it is not given, and carries an
+out-of-range one, so `time.time(year=2005)` is 30 November 2004: month 0
+is the month before January and day 0 the day before the first of it.
 
 A time value has `.year .month .day .hour .minute .second .nanosecond .unix
 .unix_nano`, plus `.in_location(name)` and `.format(layout)`.
@@ -259,6 +339,159 @@ strftime(rental_date, '%d.%m.%Y')
 
 See [Formatting](#formatting).
 
+## Strings
+
+**A string is a sequence of codepoints.** `len`, indexing, slicing and
+comparison all work in those terms, so `len("Šķūnis")` is 6, the six letters —
+and not 9, the number of bytes UTF-8 spends on them.
+
+This matters more than it looks. Under byte indexing `title[:20]` can stop
+in the middle of a multi-byte sequence, and the result is not a string that
+means anything: it does not raise, it reaches the printout, and it surfaces
+as a broken glyph in a PDF. Nothing catches it while the test data is ASCII.
+Every report this engine formats is a candidate for text that is not.
+
+Two methods iterate:
+
+```
+"Šķūnis".codepoints()        # "Š", "ķ", "ū", "n", "i", "s"
+"Šķūnis".codepoint_ords()    # 352, 311, 363, 110, 105, 115
+```
+
+**A string holds no surrogates.** U+D800 to U+DFFF are not characters,
+and no string holds one:
+
+- `str` of a bytes value decodes it as UTF-8, and each byte that is not part
+  of a valid sequence becomes U+FFFD, one per byte: `str(b'\xe2\x82A')` is
+  two U+FFFD and an `A`.
+- `chr` and `%c` give U+FFFD for a surrogate's code point.
+- A string or bytes literal whose escape names one is an error:
+  `'\ud800'` does not compile. See [Literals](#literals).
+- A JSON record or parameter value whose `\u` escape spells half
+  a surrogate pair on its own reads it as U+FFFD.
+
+The `repr` of a bytes value is the other way round: there, each byte that
+is not part of a valid sequence is written as an escape, `b"\xe2\x82"`.
+
+There is deliberately **no `elems` or `elem_ords` on a string**. Those are
+the byte pair, and under codepoint indexing they have nothing left to mean.
+`bytes` keeps its own `elems`, because bytes are bytes and iterating them
+by byte is the whole point.
+
+This is a departure from `starlark-go`, whose string is a Go string and
+therefore a sequence of bytes. It is not a departure from Starlark: the Rust and
+Java implementations both count codepoints, and the byte reading is an artifact
+of one host language rather than a property of the language being hosted.
+This engine is built on `starlark-go`, so the departure costs it a patched
+copy of that interpreter's string type rather than a line of configuration.
+That is the price of the rule, and the rule is worth it: what it buys is
+every template that slices text behaving the same way in both engines.
+
+### Literals
+
+A string or bytes literal is read by Starlark's rules,
+and where Python's differ, an expression gets Starlark's answer.
+
+The prefixes are `r`, `b`, and `rb`, in lower case. Python's others do
+not compile: `u'A'` is an error, and so are `R'A'`, `B'A'`, and `br'A'`.
+Two literals in a row are an error too, where Python would join them:
+`'A' 'B'` does not compile, and `'A' + 'B'` is the spelling.
+
+These are the escapes, in a string literal and a bytes literal alike:
+
+| Escape | Stands for |
+|---|---|
+| `\\`, `\'`, and `\"` | the character after the backslash |
+| `\a`, `\b`, `\f`, `\n`, `\r`, `\t`, and `\v` | bell, backspace, form feed, newline, carriage return, tab, and vertical tab |
+| `\` and one to three octal digits, as in `\101` | a byte, by its value |
+| `\x` and two hexadecimal digits, as in `\x41` | a byte, by its value |
+| `\u` and four hexadecimal digits, or `\U` and eight | a character, by its code point |
+| `\` at the end of a line | nothing: the literal goes on |
+
+Any other backslash is an error, and so is an escape cut short:
+
+```
+'C:\data'          # invalid escape sequence \d
+'\N{DIGIT ONE}'    # invalid escape sequence \N
+'\x4'              # truncated escape sequence \x4
+```
+
+A Windows path is the usual way to meet the first: the expression wants
+`'C:\\data'` or `r'C:\data'`. In a template, KDL reads its own escapes
+before Starlark does, so that is `expr="'C:\\\\data'"`, or in a raw KDL
+string `expr=#"'C:\\data'"#`; see [Expression](template.md#expression).
+`\N{...}` is Python's, and Starlark has no named escapes.
+A raw literal has no escapes at all, so a backslash in one is a backslash.
+A line break written into a triple-quoted literal is a newline in its value,
+whether the text spells it `\r\n`, `\r`, or `\n`.
+
+**A string literal names a byte only up to 0x7F.** In a string literal,
+a `\x` or octal escape may name 0x7F at most: `'\x7f'` and `'\177'`
+compile, and `'\x80'`, `'\377'`, and `'\400'` do not. The error names
+the escape and the `\u` spelling of its character, `\u00FF` for `'\xff'`.
+Write that, or the character itself. The rule holds where the bytes
+would spell a valid character, too: `'\xc3\xa9'` does not compile,
+and `'\u00e9'` and `'é'` do.
+
+Starlark reads a `\x` or octal escape as a byte, which is what it is
+in a bytes literal. Below 0x80 a byte and a codepoint are the same thing.
+Above it they are not, and a string holds codepoints, so its byte escapes
+stop there. A bytes literal takes any byte, as in `b'\xff'`, and `r'\xff'`
+is the four characters it shows.
+
+**A bytes literal holds a character as its UTF-8.** A character above ASCII,
+written as itself or with `\u` or `\U`, stands for the bytes of its UTF-8
+encoding: `b'ÿ'` and `b'\u00ff'` are both `b"\xc3\xbf"`. An octal escape
+in a bytes literal stops at `\377`, the largest byte, and a `\u` or `\U`
+escape that names a surrogate, or a code point above `\U0010FFFF`, is
+an error, as it is in a string literal.
+
+### Quoted strings
+
+`repr` and `%q` quote a string, and so does `str` of a container
+for each string inside it. The quotation marks are double, and inside them
+a character is written as itself where Unicode calls it printable:
+a letter, a mark, a number, punctuation, or a symbol, or the ASCII space.
+That is Python's `str.isprintable` and Go's `strconv.IsPrint`, which agree.
+Every other character is escaped:
+
+| Character | Written |
+|---|---|
+| `"` and `\` | `\"` and `\\` |
+| bell, backspace, form feed, newline, carriage return, tab, and vertical tab | `\a`, `\b`, `\f`, `\n`, `\r`, `\t`, and `\v` |
+| any other below U+0080 | `\x` and two hexadecimal digits: `\x00`, `\x7f` |
+| any other below U+10000 | `\u` and four: `\u00a0`, `\u200b` |
+| any other | `\U` and eight: `\U000e0001` |
+
+So `Š` and an emoji are themselves, and a no-break space, a soft hyphen,
+a zero-width joiner, the line and paragraph separators, a private-use
+character, and a code point Unicode has not assigned are all escaped.
+What a quoted string writes is a literal that reads back as the string
+it quoted.
+
+```
+repr("Š\t")            # "Š\t"
+repr("a\u00a0b")       # "a\u00a0b"
+repr("\x07")           # "\a"
+```
+
+The hexadecimal digits are lower case.
+
+The `repr` of a bytes value reads the bytes as UTF-8 first. A character
+they spell is written as a string's is, and a byte that is not part of
+one is `\x` and its value: `repr(b'\xc2\xa0\xff')` is `b"\u00a0\xff"`.
+A character on its own, as a [missing glyph](template.md#missing-glyphs)
+is named in a warning, is quoted the same way in single quotes,
+where `'` is escaped rather than `"`.
+
+This is also how the [command line](cli.md#sr-inspect) quotes text
+a person reads: the dump of a printout, a check's report, and a diagnostic.
+
+Which characters are printable is the Unicode database's to say,
+and the database grows. An engine reads it from the version of Unicode
+it was built with, so a character assigned after that version is escaped
+by it and written as itself by an engine built with a later one.
+
 ## The `decimal` type
 
 A member declared `type="decimal"` produces `decimal` values,
@@ -277,21 +510,38 @@ Arithmetic:
 - `/` between decimals produces a decimal quantized to 6 fractional digits,
   rounding half away from zero. Use `quantize` for a different scale.
 - Comparisons between decimals are exact, and `min`, `max` and `sorted` follow
-  them. A comparison **between a decimal and an int or a float** is not
-  available: an ordered comparison raises, and `==` is false however the values
-  compare. This is the host dialect's rule for two unrelated types rather than
-  a choice, so write `amount > decimal("0")`, not `amount > 0`.
-- **Mixing a decimal with a float is an error.** Convert deliberately with
-  `float(d)` or `decimal(str(f))`.
+  them.
+- **A decimal compares with an `int`**, exactly. Write `amount > 0`. Three
+  things follow together, and an implementation that takes only the first
+  is wrong: ordered comparison works, `decimal("1") == 1` is therefore true,
+  and the two **hash equal**, or a dict keyed on one of them breaks. An int
+  is an exact integer and a decimal is an exact number, so nothing is lost
+  either way and there is no reason for the types to be strangers.
+- **A decimal and a float do not mix.** Arithmetic between them is an error,
+  and so is an ordered comparison; that mixing is genuinely lossy, which is
+  the difference from `int`. Convert deliberately with `float(d)` or
+  `decimal(str(f))`. `==` is the exception, and is **false** rather than
+  an error — the dialect's answer for two values that cannot be compared —
+  so `decimal("1") == 1.0` is false while `decimal("1") == 1` is true.
 
 Helpers:
 
 ```
-quantize(d, places)         # round to `places` fractional digits, half away from zero
-float(d)                    # explicit, lossy
-str(d)                      # plain decimal text, no exponent
-int(d)                      # truncates toward zero
+quantize(d, places) # round to `places` fractional digits, half away from zero
+abs(d)              # magnitude, exact
+float(d)            # explicit, lossy
+str(d)              # plain decimal text, no exponent
+int(d)              # truncates toward zero
 ```
+
+The `math` module is **not** among these. Its functions take an int or a float
+and refuse a decimal, because a conversion the language makes silently is
+the one thing the decimal rules exist to prevent. Write `math.floor(float(d))`,
+or `quantize(d, 0)` where the answer should stay exact.
+
+What they answer with is the host module's business rather than this
+specification's, and it is not uniform: `ceil` and `floor` give an **int**,
+and `round`, `sqrt`, `pow` and the rest give a **float**.
 
 `calc="sum"`, `"avg"`, `"min"`, `"max"` over decimals produce decimals;
 `avg` quantizes like `/`. `"std"` and `"var"` produce floats.
@@ -352,15 +602,33 @@ field expr="(customer.last_name, customer.first_name, customer_amount)"
 A tuple result spreads across the conversions positionally;
 the count must match exactly. The default is `"%s"`.
 
-Supported conversions: `%s` `%q` `%d` `%i` `%o` `%x` `%X` `%b` `%e` `%E` `%f` `%g`
-`%G` `%c` `%%`, each accepting the flags `-` `+` `#` `0` `' '`, a width, and a
-precision. `%q` is a quoted string; `%i` is an alias for `%d`. There is no `%r`.
+Supported conversions: `%s` `%q` `%d` `%i` `%o` `%x` `%X` `%b` `%e` `%E`
+`%f` `%g` `%G` `%c` `%%`, each accepting the flags `-` `+` `#` `0` `' '`,
+a width, and a precision. `%q` is a [quoted string](#quoted-strings);
+`%i` is an alias for `%d`. There is no `%r`. A literal percent sign is `%%`,
+in both formatters: every `%` begins a conversion, so an unknown letter
+after one is an error and a `%` that ends the string is a truncated conversion
+rather than a percent sign.
 
 `%d` and the float conversions accept `decimal` values and format them exactly:
 `%.2f` on a decimal rounds half away from zero without going through a float.
+An **integer** conversion of a decimal rounds it the same way — `%d` of
+`decimal("1.9")` is `2` — while an integer conversion of a **float** truncates
+toward zero, so `%d` of `1.9` is `1`. The two differ because a decimal is exact
+and there is a right answer to round to; and `int(d)` is a conversion rather
+than a rendering.
 
 `%s` on a float uses the shortest representation that round-trips, so `1.0/3`
 renders as `0.3333333333333333`. Give a precision.
+
+Shortest is a count of digits and not a shape, so the shape is fixed here too:
+a float is written in **exponent notation when its decimal exponent is below −4
+or at least 6**, and positionally otherwise, with a trailing `.0` on a
+positional form that would otherwise read as an integer. `123456.0` stays
+itself, `1234567.0` is `1.234567e+06`, and `0.0001` stays positional while
+`0.00001` is `1e-05`. `%g` with no precision is the same rule; `%e` and `%f`
+are always their own shape. Two implementations that each write the shortest
+digits can still disagree about where to turn over, and this is where.
 
 ### The `format` builtin
 
@@ -421,6 +689,23 @@ otherwise. `sum` of nothing is `None` rather than `0`, so "no rows" stays
 distinguishable from "rows summing to zero" — write `total_amount or 0`
 where the distinction does not matter.
 
+A **`None` folds into nothing.** The accumulators that *combine* values --
+`sum`, `avg`, `min`, `max`, `std`, `var` and `chain` -- skip one, and a skipped
+value counts toward nothing: not `avg`'s divisor, and not the *n* of `std` and
+`var`. The ones that *collect* values -- `list`, `set`, `first`, `last` and
+`count` -- keep it, because there a null is something the data had rather than
+something to add.
+
+So a `nullable` member totals the rows that have a number, a column of nothing
+but nulls reads as the empty accumulator above, and one null row behaves the
+same way as two of them. That last is the point: an accumulator that carried
+the first null and failed on the second would build a report over one record
+and refuse the same data one record longer.
+
+`None` is the only value this holds for. A zero, an empty string and an empty
+list are values, and the paragraph above exists to keep a total of zero
+distinguishable from no total at all.
+
 The guard is not an edge case. A page header and footer are
 [measured when the frame begins](layout.md#headerfooter-reservation),
 which on the first page is before any record has been consumed, so
@@ -450,12 +735,27 @@ field expr="format('std %.2f, var %.2f', total_std, total_var)" \
 | `detail` | once per printed detail section |
 | `item` | once per data record, whether or not its detail prints |
 
+A `reset="detail"` or `reset="item"` fires at every one of those, and seeds the
+accumulator from `init` each time, so such a variable holds that one section's
+or that one record's fold and nothing before it.
+
 `detail` is the default for `iter`, `report` for `reset`.
 
 `detail` and `item` differ for records whose detail is suppressed by `printwhen`:
 `iter="detail"` skips them, `iter="item"` counts them.
 
 `init`, if given, is evaluated at each reset and folded in as the first value.
+
+The start of the report is every variable's first reset, whatever its
+scope: each is seeded from `init` before the first band is built, the
+first page's header included. That is also the reset of the first page
+and the first column, so a `reset="page"` variable starts the first page
+from `init`, as it starts every later one, and a `reset="column"` variable
+the first column: the first page's total is `init` plus its rows, as every
+later page's is. A variable that a group, a `detail`, or an `item` resets
+reads its `init` until that scope first comes round, in the report's
+`title` and the first page's headers among others, and is reset again
+when it does.
 
 ### Ordering against section printing
 
@@ -469,14 +769,17 @@ Within one record, the order is:
 4. Variables reset for the scopes that just ended.
 5. For each breaking group, outermost-first: variables iterate for that scope,
    then its `title` prints.
-6. The `detail` section's variables iterate, then the detail prints.
+6. `item`-scoped variables reset and iterate; then, if the `detail` section
+   prints, `detail`-scoped variables reset and iterate; then the detail prints.
 
 Step 3 precedes step 4, which is what lets a group summary print that group's
-own total.
+own total. Step 6 comes after every title, so a group title reads the `item`
+values of the records before it and not its own.
 
 A detail section that turns out not to fit and is deferred to the next frame has
 its variable fold rolled back and reapplied after the eject, so a value is never
-counted twice.
+counted twice. A group `title` that moves to the next frame takes its group's
+iteration with it in the same way; see [rollback](layout.md#rollback).
 
 ### The report boundary
 
@@ -512,13 +815,18 @@ point of that property. `BUILD_TIME` is the document's.
 
 A subreport's parameters come from its `arg` nodes, evaluated in the **host's**
 context. So an `arg` reads the host's names and the subreport reads its own, and
-`arg "heading" value="film.title"` is how a value crosses between them. Nothing
-else does: the host's variables and record fields are not in scope inside the
-subreport, and the subreport's are not in scope outside it.
+`arg "heading" value="film.title"` is how a value crosses between them.
+Nothing else does: the host's variables and record fields are not in scope
+inside the subreport, and the subreport's are not in scope outside it.
+There, `VERTICAL_POSITION` and `VERTICAL_SPACE` describe the host band,
+as [names and values](layout.md#names-and-values) says.
 
 An expression in a subreport that has to react to where its bands landed --
 `VERTICAL_POSITION`, `VERTICAL_SPACE` -- reads the frame it is printing in,
-which under `inline` is the host's.
+which under `inline` is the host's. `COLUMN_NUMBER` counts the columns
+the page has opened, and an inline subreport's own `columns` block breaks
+columns of the page like any other: its first column reads what the host's
+did, and the count does not go back when its columns come off.
 
 Every deferral a subreport registers resolves when its invocation ends, or
 earlier if a page it is printing on ends first. `FINAL` in a subreport therefore
