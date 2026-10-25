@@ -77,6 +77,20 @@ type parser struct {
 }
 
 func (psr *parser) errf(node *kdl.Node, prop, format string, args ...any) {
+	psr.diags = append(psr.diags, psr.diagnostic(node, prop, format, args...))
+}
+
+// warnf records a diagnostic that does not stop the template loading.
+func (psr *parser) warnf(node *kdl.Node, prop, format string, args ...any) {
+	psr.warns = append(psr.warns, psr.diagnostic(node, prop, format, args...))
+}
+
+// diagnostic builds one diagnostic at a node.
+func (psr *parser) diagnostic(
+	node *kdl.Node,
+	prop, format string,
+	args ...any,
+) Diagnostic {
 	diag := Diagnostic{
 		File:    psr.file,
 		Path:    "<document>",
@@ -86,7 +100,7 @@ func (psr *parser) errf(node *kdl.Node, prop, format string, args ...any) {
 	if node != nil {
 		diag.Line, diag.Path = node.Line, node.Path()
 	}
-	psr.diags = append(psr.diags, diag)
+	return diag
 }
 
 // props reads a node's properties, tracking which were consumed

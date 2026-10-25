@@ -1,7 +1,6 @@
 package tmpl
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/a1s/sr/internal/kdl"
@@ -75,7 +74,8 @@ func (psr *parser) unknownName(node *kdl.Node, name string, legal []string, what
 		psr.errf(node, prop, "unknown %s `%s`", what, name)
 		return
 	}
-	psr.warnf(node, prop, "unknown %s `%s`, accepted and ignored", what, name)
+	psr.warnUnknownf(node, prop,
+		"unknown %s `%s`, accepted and ignored", what, name)
 }
 
 // nearMiss finds a legal name one edit from this one.
@@ -158,18 +158,17 @@ func oneDeletion(longer, shorter []rune) bool {
 	return at == len(shorter)
 }
 
-// warnf records a load diagnostic that does not stop the template loading.
-func (psr *parser) warnf(node *kdl.Node, prop, format string, args ...any) {
-	diag := Diagnostic{
-		File:    psr.file,
-		Path:    "<document>",
-		Prop:    prop,
-		Message: fmt.Sprintf(format, args...),
-		Unknown: true,
-	}
-	if node != nil {
-		diag.Line, diag.Path = node.Line, node.Path()
-	}
+// warnUnknownf records a warning about a name the format does not define.
+//
+// It is the one warning the printout header carries, so it is
+// marked as such here rather than recognised by its wording later.
+func (psr *parser) warnUnknownf(
+	node *kdl.Node,
+	prop, format string,
+	args ...any,
+) {
+	diag := psr.diagnostic(node, prop, format, args...)
+	diag.Unknown = true
 	psr.warns = append(psr.warns, diag)
 }
 

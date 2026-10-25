@@ -346,7 +346,7 @@ func (eng *engine) emitXref(xref *tmpl.Xref, slot *elementSlot, measured *measur
 	mark.Target = expr.Str(target)
 	if mark.Type == "outline" {
 		eng.doc.outlineXrefs = append(eng.doc.outlineXrefs,
-			xrefSite{target: mark.Target, record: eng.index})
+			xrefSite{target: mark.Target, record: eng.recordIndex()})
 	}
 	if xref.Caption != nil {
 		caption, err := eng.ctx.eval(xref.Caption)
@@ -499,7 +499,7 @@ func (eng *engine) noteMissingGlyphs(face *fontres.Face, node string) {
 			continue
 		}
 		eng.glyphWarned[key] = true
-		eng.out.AddWarning(printout.WarnGlyph, node, eng.index, fmt.Sprintf(
+		eng.warn(printout.WarnGlyph, node, eng.recordIndex(), fmt.Sprintf(
 			"the font %q has no glyph for %q, so an empty box is drawn in its place",
 			face.Name, char))
 	}

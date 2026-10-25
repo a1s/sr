@@ -30,7 +30,7 @@ so the markers have to be at the top.
 
 A file in `broken/` must produce at least one error and must state
 at least one `expect:`. A file in `valid/` must produce none,
-and must produce exactly the warnings it says it does :
+and must produce exactly the warnings it says it does:
 no `warn:` line means no warnings at all.
 
 Every case is loaded with the default options, so a template carrying
@@ -41,7 +41,7 @@ it is asked by the loader's own tests and the command line's instead.
 
 `NAME.inc.kdl` is a template another case pulls in with `subreport
 template=`. It is not loaded on its own, because on its own it is valid:
-what makes the pair a case is the relationship between them : a cycle,
+what makes the pair a case is the relationship between them: a cycle,
 or a page size that does not match its host's.
 
 The driver is [internal/tmpl/corpus_test.go](../../internal/tmpl/corpus_test.go),

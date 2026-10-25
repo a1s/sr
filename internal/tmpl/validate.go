@@ -661,10 +661,9 @@ func (psr *parser) warnCollapsingBand(section *Section) {
 			return
 		}
 	}
-	psr.warns = append(psr.warns, Diagnostic{
-		File: psr.file, Line: section.Node.Line, Path: section.Node.Path(),
-		Message: "this band declares no height and every element in it takes its height from the band, so the band collapses to nothing",
-	})
+	psr.warnf(section.Node, "",
+		"this band declares no height and every element in it takes its "+
+			"height from the band, so the band collapses to nothing")
 }
 
 // hasOwnHeight reports whether an element brings a height of its own, either

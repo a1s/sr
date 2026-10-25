@@ -31,6 +31,8 @@ Applies a template to a sequence of records and writes a PDF or a printout.
                           repeatable
       --build-time TIME   RFC 3339; fixes BUILD_TIME
       --strict-fonts      resolve only fonts the template names by file or data
+      --strict-names      refuse an unknown node or property instead of warning
+      --accept NAME       accept the named node or property; repeatable
       --allow-overflow    record an oversized band as a warning, not an error
       --uncompressed      leave PDF streams uncompressed
   -v, --verbose           report host font diagnostics
@@ -50,6 +52,8 @@ what it found. No data is read. The template may also be the sole argument.
       --param NAME=VALUE  a report parameter; repeatable
   -t, --template FILE     template file
       --strict-fonts      resolve only fonts the template names by file or data
+      --strict-names      refuse an unknown node or property instead of warning
+      --accept NAME       accept the named node or property; repeatable
   -q, --quiet             print nothing on success
   -v, --verbose           include host font diagnostics
 

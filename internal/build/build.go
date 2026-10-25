@@ -129,7 +129,6 @@ type engine struct {
 	frames *frameTree
 
 	records []*expr.Record
-	index   int
 
 	// args are the values a subreport's arg nodes supplied, evaluated in the
 	// host's context. They stand where the command line stands at the root.
@@ -710,6 +709,11 @@ func (eng *engine) finish() {
 		}
 		eng.out.Header.GroupKeys = keys
 	}
+	// A load diagnostic and a font resolution were both raised before
+	// any page was made, so they stand at the head of the table however
+	// late they are gathered here. See doc/printout.md#header-line.
+	var head []printout.Warning
+
 	// A name the format does not define is a document warning:
 	// it was found while the template was read, before any data,
 	// so it carries no record. The other load diagnostics are
@@ -717,7 +721,12 @@ func (eng *engine) finish() {
 	// out of the printout.
 	for _, diag := range eng.report.Warnings {
 		if diag.Unknown {
-			eng.out.AddLoadWarning(printout.WarnUnknown, diag.Path, diag.Message)
+			head = append(head, printout.Warning{
+				Kind:    printout.WarnUnknown,
+				Node:    diag.Path,
+				Prop:    diag.Prop,
+				Message: diag.Message,
+			})
 		}
 	}
 	// A typeface that reached the substitute is a document warning;
@@ -726,7 +735,11 @@ func (eng *engine) finish() {
 	// so a subreport's substituted typeface is reported here too.
 	for _, resolver := range eng.doc.resolvers {
 		for _, warning := range resolver.Warnings {
-			eng.out.AddLoadWarning(printout.WarnFont, warning.Node, warning.Message)
+			head = append(head, printout.Warning{
+				Kind:    printout.WarnFont,
+				Node:    warning.Node,
+				Message: warning.Message,
+			})
 		}
 		if eng.opts.Diagnostics != nil {
 			for _, diag := range resolver.Diagnostics {
@@ -734,13 +747,43 @@ func (eng *engine) finish() {
 			}
 		}
 	}
+	eng.out.AddLoadWarnings(head)
+}
+
+// noRecord is the record a diagnostic names
+// where no record produced what it is about.
+const noRecord = -1
+
+// recordIndex returns the record a diagnostic raised now names.
+//
+// ITEM_NUMBER is 1-based and is 0 until the first record is read,
+// which is where a report title and the first page header are built:
+// there the index a diagnostic wants is no index at all. Past the
+// last record it still names that record, which is the run a report
+// summary closes.  See doc/printout.md#header-line.
+func (eng *engine) recordIndex() int {
+	if eng.ctx.itemNumber == 0 {
+		return noRecord
+	}
+	return eng.ctx.itemNumber - 1
+}
+
+// warn records a document warning against a record,
+// or against none where record is noRecord.
+func (eng *engine) warn(kind, node string, record int, message string) {
+	warning := printout.Warning{Kind: kind, Node: node, Message: message}
+	if record != noRecord {
+		warning.Record = printout.RecordIndex(record)
+	}
+	eng.out.AddWarning(warning)
 }
 
 // overflow reports an oversized band, or records a warning
 // when the caller has asked for overflow to be tolerated.
 func (eng *engine) overflow(node, message string) error {
-	eng.doc.overflowed[overflowKey(node, eng.index)] = true
-	return eng.overflowAt(node, eng.index, message)
+	record := eng.recordIndex()
+	eng.doc.overflowed[overflowKey(node, record)] = true
+	return eng.overflowAt(node, record, message)
 }
 
 // overflowAt reports an oversized band or a band outside the printable area,
@@ -750,7 +793,7 @@ func (eng *engine) overflowAt(node string, record int, message string) error {
 	if !eng.opts.AllowOverflow {
 		return fmt.Errorf("%s: %s", node, message)
 	}
-	eng.out.AddWarning(printout.WarnOverflow, node, record, message)
+	eng.warn(printout.WarnOverflow, node, record, message)
 	return nil
 }
 

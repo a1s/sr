@@ -27,6 +27,11 @@ type bandSite struct {
 }
 
 // recordBand notes a committed band so the margin check can report it.
+//
+// The band's own list of marks is shared rather than copied:
+// nothing appends to it once the band is committed, and where
+// a balanced frame moves the band it moves these same marks,
+// which is what the check has to read.
 func (eng *engine) recordBand(node string, marks []printout.Mark) {
 	if len(marks) == 0 {
 		return
@@ -34,8 +39,8 @@ func (eng *engine) recordBand(node string, marks []printout.Mark) {
 	eng.doc.bands = append(eng.doc.bands, bandSite{
 		page:   eng.doc.page,
 		node:   node,
-		record: eng.index,
-		marks:  append([]printout.Mark(nil), marks...),
+		record: eng.recordIndex(),
+		marks:  marks,
 	})
 }
 

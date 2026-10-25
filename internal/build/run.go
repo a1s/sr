@@ -274,7 +274,6 @@ func (eng *engine) closePage() error {
 // consume runs the record loop for one record.
 func (eng *engine) consume(index int) error {
 	// 1. THIS and ITEM_NUMBER advance.
-	eng.index = index
 	eng.ctx.record = eng.records[index]
 	eng.ctx.itemNumber = index + 1
 
@@ -1023,6 +1022,11 @@ func (eng *engine) commit(measured *measurement, fr *frame, top float64) {
 	// can move the band afterwards without going looking for them, and
 	// so that the margin check can judge the band once its coordinates
 	// are final.
+	//
+	// The check runs when the document ends, so the list is held until
+	// then: a slice per band and a pointer per mark, for the length of
+	// the run. Only a band a balanced frame could move used to pay for
+	// it, and now every band does. The marks themselves are shared.
 	placed := make([]printout.Mark, 0, len(measured.drafts)+1)
 	for _, dft := range measured.drafts {
 		translate(dft.mark, across, top)

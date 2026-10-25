@@ -49,7 +49,7 @@ func TestAnUnreferencedDataNodeLeavesNoBlob(test *testing.T) {
 }
 
 // An image that is drawn keeps its entry,
-// which is the case the rule existssw to leave alone.
+// which is the case the rule exists to leave alone.
 func TestADrawnImageKeepsItsBlob(test *testing.T) {
 	const src = `report name="t" {
   font "body" file="Go-Regular.ttf" size=9

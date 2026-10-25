@@ -107,9 +107,13 @@ type Warning struct {
 	// Kind is "overflow", "glyph", "font", or "unknown".
 	Kind string `json:"kind"`
 	Node string `json:"node,omitempty"`
+	// Prop names the property the warning is about. A warning
+	// about a node carries none. See doc/printout.md#header-line.
+	Prop string `json:"prop,omitempty"`
 	// Record is the index of the record the warning was raised for,
 	// and is nil for one no record produced: a font that reached
-	// the substitute is found before any data is read.
+	// the substitute is found before any data is read, and a band
+	// built before the first record, a report title, is another.
 	//
 	// It is a pointer because record 0 is a record like any other,
 	// and a plain int with omitempty would drop the first record's
@@ -359,22 +363,34 @@ func NewOutline() *Outline { return &Outline{Kind: "outline"} }
 func NewXref() *Xref { return &Xref{Kind: "xref"} }
 
 // AddWarning records a document warning in the header.
-func (doc *Printout) AddWarning(kind, node string, record int, message string) {
-	at := record
-	doc.Header.Warnings = append(doc.Header.Warnings, Warning{
-		Kind: kind, Node: node, Record: &at, Message: message,
-	})
+//
+// Warnings stand in the order the build raised them, which is
+// the order they are added in. See doc/printout.md#header-line.
+func (doc *Printout) AddWarning(warning Warning) {
+	doc.Header.Warnings = append(doc.Header.Warnings, warning)
 }
 
-// AddLoadWarning records a warning that no record produced.
+// AddLoadWarnings puts warnings that no record produced
+// at the head of the header's table.
 //
-// Every warning raised while the template is read is one:
-// there is no record yet to name, and naming one would be a guess.
-func (doc *Printout) AddLoadWarning(kind, node, message string) {
-	doc.Header.Warnings = append(doc.Header.Warnings, Warning{
-		Kind: kind, Node: node, Message: message,
-	})
+// They were raised before any page was made: a template is read,
+// and the fonts it declares resolved, before the first band is measured.
+// Collecting them once the build is over is a convenience of the engine's
+// and must not move them past the warnings the pages raised.
+func (doc *Printout) AddLoadWarnings(warnings []Warning) {
+	if len(warnings) == 0 {
+		return
+	}
+	head := make([]Warning, 0, len(warnings)+len(doc.Header.Warnings))
+	head = append(head, warnings...)
+	doc.Header.Warnings = append(head, doc.Header.Warnings...)
 }
+
+// RecordIndex returns a record index as a warning carries it.
+//
+// Warning.Record is a pointer because record 0 is a record like any other,
+// and the format tells it apart from a warning no record produced.
+func RecordIndex(record int) *int { return &record }
 
 // HasWarning reports whether the header carries a warning of a kind.
 func (doc *Printout) HasWarning(kind string) bool {

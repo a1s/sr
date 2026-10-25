@@ -85,16 +85,27 @@ func describeSize(page printout.PageGeometry) string {
 
 // describeWarning renders a printout warning as one line.
 //
-// The kind, then the record and the node when they are known, then the message.
+// The kind, then the record and the node when they are known,
+// then the message, each two spaces from the next. A property
+// follows its node as `name=`, the way a diagnostic names one.
+// See doc/cli.md#sr-inspect.
 func describeWarning(warning printout.Warning) string {
 	parts := []string{warning.Kind}
 	if warning.Record != nil {
 		parts = append(parts, fmt.Sprintf("record %d", *warning.Record))
 	}
-	if warning.Node != "" {
-		parts = append(parts, warning.Node)
+	if where := warningSite(warning); where != "" {
+		parts = append(parts, where)
 	}
 	return strings.Join(append(parts, warning.Message), "  ")
+}
+
+// warningSite is the node a warning names, with its property after it.
+func warningSite(warning printout.Warning) string {
+	if warning.Prop == "" {
+		return warning.Node
+	}
+	return strings.TrimSpace(warning.Node + " " + warning.Prop + "=")
 }
 
 // fontFields renders one font table entry.
