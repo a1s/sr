@@ -309,7 +309,7 @@ func (psr *parser) parseVariable(node *kdl.Node) *Variable {
 	psr.allowChildren(node)
 	if variable.Iter == ScopeGroup && variable.IterGrp == "" {
 		psr.errf(node, "itergrp",
-			"iter=\"group\" names the group with a itergrp")
+			"iter=\"group\" names the group with an itergrp")
 	}
 	if variable.Reset == ScopeGroup && variable.ResetGrp == "" {
 		psr.errf(node, "resetgrp",
