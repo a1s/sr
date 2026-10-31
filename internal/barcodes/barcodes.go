@@ -79,15 +79,46 @@ type Symbol struct {
 	CrossModules int
 }
 
+// The charsets a two-dimensional symbol's bytes can be in.
+// See doc/template.md#character-set.
+const (
+	CharsetUTF8   = "utf-8"
+	CharsetLatin1 = "iso-8859-1"
+)
+
+// IsTwoD reports whether a type draws a matrix rather than a bar pattern.
+//
+// A two-dimensional type encodes bytes, which is what gives it a charset.
+// A one-dimensional type encodes characters, and takes ASCII only.
+func IsTwoD(kind string) bool {
+	switch kind {
+	case "DataMatrix", "Aztec", "QR-L", "QR-M", "QR-Q", "QR-H":
+		return true
+	}
+	return false
+}
+
 // Encode produces the symbol for a value.
+//
+// charset names the bytes a two-dimensional type encodes the value's
+// characters as: CharsetUTF8, which an empty string also means,
+// or CharsetLatin1. A one-dimensional type ignores it.
 //
 // Content a type cannot encode is an error naming the type,
 // the value, and the reason.
-func Encode(kind, value string) (*Symbol, error) {
+func Encode(kind, value, charset string) (*Symbol, error) {
 	if err := checkContent(kind, value); err != nil {
 		return nil, err
 	}
-	code, err := encodeRaw(kind, value)
+	data := value
+	if IsTwoD(kind) {
+		var err error
+		data, err = payload(kind, value, charset)
+		if err != nil {
+			return nil, fmt.Errorf("barcode %s: cannot encode %q: %w", kind, value, err)
+		}
+	}
+	code, err := encodeRaw(kind, data)
 	if err != nil {
 		return nil, fmt.Errorf("barcode %s: cannot encode %q: %w", kind, value, err)
 	}
@@ -195,6 +226,38 @@ func encodeRaw(kind, value string) (barcode.Barcode, error) {
 		return qr.Encode(value, qr.H, qr.Auto)
 	}
 	return nil, fmt.Errorf("unknown type")
+}
+
+// payload returns the bytes a two-dimensional symbol encodes a value as,
+// held in a string: its characters in the charset the element names.
+//
+// The Data Matrix encoder reads a first byte of 0xE8, which is FNC1,
+// as asking for a GS1 symbol, and then writes every such byte as FNC1.
+// No type writes an FNC1 (doc/barcode.md), so a value whose bytes open
+// with it is refused rather than drawn as a symbol that programs its
+// reader. In ISO 8859-1 that is a value opening with "è", and in UTF-8
+// one opening with a character from U+8000 to U+8FFF.
+func payload(kind, value, charset string) (string, error) {
+	data := value
+	switch charset {
+	case "", CharsetUTF8:
+	case CharsetLatin1:
+		encoded := make([]byte, 0, len(value))
+		for _, char := range value {
+			if char > 0xFF {
+				return "", fmt.Errorf("%q is not in ISO 8859-1", char)
+			}
+			encoded = append(encoded, byte(char))
+		}
+		data = string(encoded)
+	default:
+		return "", fmt.Errorf("unknown charset %q", charset)
+	}
+	if kind == "DataMatrix" && len(data) > 0 && data[0] == datamatrix.FNC1 {
+		return "", fmt.Errorf(
+			"its first byte is 0xE8, which the Data Matrix encoder writes as FNC1")
+	}
+	return data, nil
 }
 
 const code39Alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ-. $/+%"

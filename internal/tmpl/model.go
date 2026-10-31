@@ -4,6 +4,7 @@
 package tmpl
 
 import (
+	"github.com/a1s/sr/internal/barcodes"
 	"github.com/a1s/sr/internal/expr"
 	"github.com/a1s/sr/internal/geom"
 	"github.com/a1s/sr/internal/kdl"
@@ -619,6 +620,9 @@ type Barcode struct {
 	Grow     bool
 	Ink      *Color
 	Paper    *Color
+	// Charset is the bytes a 2-D type encodes the value's characters as,
+	// one of the barcodes package's Charset constants.
+	Charset string
 }
 
 // Kind names the element.
@@ -641,4 +645,10 @@ var BarcodeTypes = map[string]bool{
 	"Code128": true, "Code39": true, "Code93": true, "2of5i": true,
 	"DataMatrix": true, "Aztec": true,
 	"QR-L": true, "QR-M": true, "QR-Q": true, "QR-H": true,
+}
+
+// barcodeCharsets lists the values a barcode's `charset` takes.
+var barcodeCharsets = map[string]string{
+	"utf-8":      barcodes.CharsetUTF8,
+	"iso-8859-1": barcodes.CharsetLatin1,
 }

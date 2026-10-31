@@ -48,6 +48,13 @@ The driver is [internal/tmpl/corpus_test.go](../../internal/tmpl/corpus_test.go)
 which also holds the templates in `example/` to loading clean and
 silent.
 
+The cases are shared with [s-reports](https://github.com/a1s/sr.py)
+and are not edited to suit this engine. An `expect:` marker this engine
+knowingly does not meet is listed, with the reason, in the driver's
+`expectedFailures`. Such a marker is logged rather than failed, and
+the test fails once it passes, so that the entry goes when the engine
+catches up.
+
 ## What is here
 
 Each file's first line says what it isolates. Between them they

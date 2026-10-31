@@ -3,6 +3,7 @@ package sr
 import (
 	"math"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -161,6 +162,31 @@ func TestBarcodeSurvivesBothEncodings(test *testing.T) {
 		if len(mark.Rows) != len(before.Rows) {
 			test.Errorf("%s: %d rows, want %d", name, len(mark.Rows), len(before.Rows))
 		}
+	}
+}
+
+// A 2-D barcode's charset decides the bytes its symbol holds, deferred
+// or not, and a character the charset does not have is refused
+// when the band is built.
+func TestBarcodeCharsetReachesTheSymbol(test *testing.T) {
+	rows := func(declaration string) [][]int {
+		test.Helper()
+		out := buildString(test, barcodeTemplate(declaration), rowsOf(1))
+		return onlyBarcode(test, out).Rows
+	}
+	latin1 := rows(`barcode type="QR-M" text="Café" charset="iso-8859-1" left=0`)
+	if reflect.DeepEqual(rows(`barcode type="QR-M" text="Café" left=0`), latin1) {
+		test.Error(`charset="iso-8859-1" drew the UTF-8 symbol`)
+	}
+	deferred := rows(`barcode type="QR-M" expr="'Café' * FINAL.REPORT_COUNT" ` +
+		`text="placeholder" evaltime="report" charset="iso-8859-1" left=0`)
+	if !reflect.DeepEqual(deferred, latin1) {
+		test.Error("a deferred barcode lost its charset")
+	}
+	err := buildStringErr(test, barcodeTemplate(
+		`barcode type="QR-M" text="Ā" charset="iso-8859-1" left=0`), rowsOf(1))
+	if err == nil || !strings.Contains(err.Error(), "'Ā' is not in ISO 8859-1") {
+		test.Errorf("a character outside ISO 8859-1: %v", err)
 	}
 }
 

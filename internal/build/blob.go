@@ -4,10 +4,10 @@ import (
 	"bytes"
 	"compress/gzip"
 	"compress/zlib"
-	"encoding/base64"
 	"fmt"
 	"io"
-	"strings"
+
+	"github.com/a1s/sr/internal/tmpl"
 )
 
 // decodeBlob turns a data node's content into bytes: first
@@ -17,13 +17,7 @@ func decodeBlob(content, encoding, compress string) ([]byte, error) {
 	switch encoding {
 	case "":
 	case "base64":
-		clean := strings.Map(func(char rune) rune {
-			if char == '\n' || char == '\r' || char == '\t' || char == ' ' {
-				return -1
-			}
-			return char
-		}, content)
-		decoded, err := base64.StdEncoding.DecodeString(clean)
+		decoded, err := tmpl.DecodeBase64(content)
 		if err != nil {
 			return nil, fmt.Errorf("base64: %w", err)
 		}
