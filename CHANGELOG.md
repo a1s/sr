@@ -11,6 +11,10 @@
   names no data node, and a `default` that does not read as its type.
 - An expression's compile error gives its position as a character
   offset, and names an f-string or two literals in a row.
+- A `lambda` takes plain parameters and their defaults. `*args`,
+  `**kwargs`, a bare `*`, and a parameter named `__debug__` are refused.
+- A lambda parameter or a comprehension variable may be called `FINAL`
+  or `print`, and is then a local name.
 - Update dependencies.
 
 ## [0.1.0] - 2026-09-05

@@ -26,16 +26,11 @@ var expectedFailures = map[string]map[string]string{
 	"barcode-charset.kdl": {
 		"2of5i encodes characters rather than bytes, so it takes no eci": noECI,
 	},
-	"expression-syntax.kdl": {"there are no lambdas": keepsLambda},
 }
 
 // The reasons the markers in expectedFailures fail here.
-const (
-	noECI = "eci is not implemented: github.com/boombuler/barcode " +
-		"writes no ECI, so it is an unknown property here"
-	keepsLambda = "this engine keeps Starlark's lambda, " +
-		"which doc/expressions.md does not take away"
-)
+const noECI = "eci is not implemented: github.com/boombuler/barcode " +
+	"writes no ECI, so it is an unknown property here"
 
 // expectations are the markers a case states in its header comment.
 type expectations struct {

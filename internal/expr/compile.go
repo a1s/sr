@@ -65,15 +65,15 @@ func Compile(where, source string) (*Program, error) {
 		return nil, parseError(source, err)
 	}
 
-	if name, pos := findBlocked(expr); name != "" {
-		return nil, located(source, pos, blockedUniversals[name])
+	if message, pos := refusedParameter(expr); message != "" {
+		return nil, located(source, pos, message)
 	}
 
 	// Resolve with every name that is not a Starlark universal
 	// treated as predeclared, so that resolution succeeds and marks
 	// each identifier's scope. The free names are then the predeclared
 	// ones the fixed environment does not supply -- and a comprehension's
-	// loop variable, being local, is not among them.
+	// loop variable or a lambda's parameter, being local, is not among them.
 	anyPredeclared := func(name string) bool { return !IsUniversal(name) }
 	_, err = resolve.ExprOptions(fileOptions, expr, anyPredeclared, IsUniversal)
 	if err != nil {
@@ -82,6 +82,9 @@ func Compile(where, source string) (*Program, error) {
 			return nil, located(source, refused[0].Pos, refused[0].Msg)
 		}
 		return nil, err
+	}
+	if name, pos := findBlocked(expr); name != "" {
+		return nil, located(source, pos, blockedUniversals[name])
 	}
 	params := freeNames(expr)
 
@@ -144,11 +147,7 @@ func freeNames(expr syntax.Expr) []string {
 	var names []string
 	syntax.Walk(expr, func(node syntax.Node) bool {
 		id, ok := node.(*syntax.Ident)
-		if !ok {
-			return true
-		}
-		binding, ok := id.Binding.(*resolve.Binding)
-		if !ok || binding.Scope != resolve.Predeclared {
+		if !ok || !isFree(id) {
 			return true
 		}
 		if IsPredeclared(id.Name) || seen[id.Name] {
@@ -162,8 +161,21 @@ func freeNames(expr syntax.Expr) []string {
 	return names
 }
 
-// findBlocked reports the first blocked universal
-// named anywhere in the expression.
+// isFree reports whether the resolver found an identifier to come from
+// outside the expression.
+//
+// The rest are a comprehension's loop variable or a lambda's parameter,
+// which are local and may take any name, FINAL and print among them.
+func isFree(id *syntax.Ident) bool {
+	binding, ok := id.Binding.(*resolve.Binding)
+	return ok && binding.Scope == resolve.Predeclared
+}
+
+// findBlocked reports the first blocked universal the expression reads
+// from outside itself.
+//
+// It must run after the resolver: a local name that a blocked universal
+// also has is a name like any other.
 func findBlocked(expr syntax.Expr) (string, syntax.Position) {
 	var name string
 	var pos syntax.Position
@@ -171,7 +183,7 @@ func findBlocked(expr syntax.Expr) (string, syntax.Position) {
 		if name != "" {
 			return false
 		}
-		if id, ok := node.(*syntax.Ident); ok {
+		if id, ok := node.(*syntax.Ident); ok && isFree(id) {
 			if _, blocked := blockedUniversals[id.Name]; blocked {
 				name, pos = id.Name, id.NamePos
 				return false
@@ -182,7 +194,84 @@ func findBlocked(expr syntax.Expr) (string, syntax.Position) {
 	return name, pos
 }
 
+// The lambda parameters the dialect does not take.
+// See doc/expressions.md#functions.
+const (
+	starredParameter = "a lambda parameter may not be starred"
+	bareStar         = "a lambda takes plain parameters; there is no / or bare *"
+)
+
+// unbindable are the names Starlark takes as a parameter and the dialect
+// does not: s-reports compiles through Python, which cannot bind them.
+var unbindable = map[string]bool{"__debug__": true}
+
+// refusedParameter reports the first lambda whose parameters are
+// not plain parameters and their defaults.
+//
+// Starlark's lambda takes the whole parameter grammar of a def:
+// *args, **kwargs, and a bare * before keyword-only parameters.
+// The dialect takes none of them. It runs before the resolver,
+// and so reports a repeated parameter itself, so that each lambda's
+// parameters are judged before anything inside it, in the order
+// s-reports judges them.
+func refusedParameter(expr syntax.Expr) (string, syntax.Position) {
+	var message string
+	var pos syntax.Position
+	syntax.Walk(expr, func(node syntax.Node) bool {
+		if message != "" {
+			return false
+		}
+		if lambda, ok := node.(*syntax.LambdaExpr); ok {
+			message, pos = lambdaParameters(lambda)
+		}
+		return message == ""
+	})
+	return message, pos
+}
+
+// lambdaParameters reports what is wrong with one lambda's parameters,
+// or an empty message when nothing is.
+func lambdaParameters(lambda *syntax.LambdaExpr) (string, syntax.Position) {
+	var names []*syntax.Ident
+	bare := false
+	for _, param := range lambda.Params {
+		switch param := param.(type) {
+		case *syntax.Ident:
+			names = append(names, param)
+		case *syntax.BinaryExpr: // name=default
+			if name, ok := param.X.(*syntax.Ident); ok {
+				names = append(names, name)
+			}
+		case *syntax.UnaryExpr: // *name, **name, or a bare *
+			if param.X != nil {
+				return starredParameter, lambda.Lambda
+			}
+			bare = true
+		}
+	}
+	if bare {
+		return bareStar, lambda.Lambda
+	}
+	taken := map[string]bool{}
+	for _, name := range names {
+		if taken[name.Name] {
+			return "duplicate parameter: " + name.Name, name.NamePos
+		}
+		taken[name.Name] = true
+	}
+	for _, name := range names {
+		if unbindable[name.Name] {
+			return "a parameter may not be named " + name.Name, name.NamePos
+		}
+	}
+	return "", syntax.Position{}
+}
+
 // finalNames collects every name read as FINAL.<name>.
+//
+// It must run after the resolver. A lambda's parameter
+// or a comprehension's loop variable may be called FINAL,
+// and what is read off that local name is not read through FINAL.
 func finalNames(expr syntax.Expr) []string {
 	seen := map[string]bool{}
 	var names []string
@@ -192,7 +281,7 @@ func finalNames(expr syntax.Expr) []string {
 			return true
 		}
 		id, ok := dot.X.(*syntax.Ident)
-		if !ok || id.Name != FinalName {
+		if !ok || id.Name != FinalName || !isFree(id) {
 			return true
 		}
 		if !seen[dot.Name.Name] {
