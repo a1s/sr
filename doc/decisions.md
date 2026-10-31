@@ -2501,3 +2501,48 @@ so its own edges do not read as modules. The worked example in
 `example/invoices/invoices.kdl` covers 16% of the data area, well inside
 the budget. A `logo` property would have bought nothing except a second way
 to position an image.
+
+## Lambda, held to the dialect's parameters
+
+`lambda` was never off here. `resolve.AllowLambda` is one of starlark-go's
+obsolete flags, `true` and of no effect, so the engine has compiled a lambda
+from the first expression on, with the whole parameter grammar of a `def`.
+s-reports refused one until doc/expressions.md#functions was written, and
+that section takes plain parameters and their defaults and nothing else.
+The engine now refuses `*args`, `**kwargs`, a bare `*`, and a parameter
+named `__debug__`, with the messages s-reports gives. Narrowing is the half
+of the decision that can be taken back, and it leaves the two engines
+agreeing.
+
+### The parameters are judged before the resolver
+
+`refusedParameter` walks the syntax tree before `resolve.ExprOptions` runs.
+It reports a repeated parameter itself, though the resolver would too, so
+that a lambda's own parameters are judged before anything inside it. That
+is the order s-reports judges them in, so the two report the same mistake
+first. `/` never reaches the check: the parser refuses it as
+`not an identifier`, and s-reports refuses it with the bare-star message.
+
+### Two checks did not know a lambda has a scope
+
+`finalNames` and `findBlocked` walked every identifier. A parameter called
+`FINAL` had what was read off it counted as deferred names, so the load
+refused a member no variable has; a parameter called `print` was refused
+as the builtin. A comprehension variable had the same problem from the
+start, and a lambda made it easier to write. Both checks now ask the
+resolver, as `freeNames` already did, and a local name is a name like
+any other.
+
+### What is not frozen
+
+A list default outlives one evaluation of the lambda, and this engine
+evaluates a field that stretches twice, once to measure it and once to
+place it. s-reports evaluates it once, so what such a default accumulates
+differs between them. starlark-go would freeze the default:
+`Function.Freeze` freezes `defaults`. It stays mutable because the value
+a `first` or `last` variable holds is never frozen, and the same is true
+of a list or a dict held there. `variable "box" expr="[]" calc="first"`
+with `box.append(1)` in a stretched field reads 2, then 4.
+doc/expressions.md#methods says a variable cannot be mutated, and for
+`first` and `last` neither engine holds to it. Freezing here alone would
+trade one divergence for another, so it waits for both engines.

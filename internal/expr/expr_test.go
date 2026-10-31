@@ -95,6 +95,23 @@ func TestCompileErrors(test *testing.T) {
 		{"commented f-string", "1 2 # f'x'", "got int literal after expression, want EOF"},
 		// The parser's own error stands where it comes first.
 		{"form feed first", "1 +\f 'A' 'B'", `unexpected input character '\f' at offset 3`},
+		// A lambda takes plain parameters and their defaults, and nothing else.
+		{"star args", "lambda *rest: rest", starredParameter + " at offset 0"},
+		{"star star kwargs", "(lambda one, **named: named)", starredParameter + " at offset 1"},
+		{"in a call", "sorted([1], key=lambda *k: k)", starredParameter + " at offset 16"},
+		{"bare star", "(lambda one, *, two: one + two)", bareStar + " at offset 1"},
+		// A starred parameter is named first, wherever it stands.
+		{"bare star, then starred", "lambda *, two, **named: two", starredParameter + " at offset 0"},
+		{"debug", "(lambda one, __debug__: one)",
+			"a parameter may not be named __debug__ at offset 13"},
+		{"repeated", "(lambda total, total: total)", "duplicate parameter: total at offset 15"},
+		// A lambda's own parameters are judged before what is inside it.
+		{"repeated before inner", "lambda one, one: lambda *rest: rest",
+			"duplicate parameter: one at offset 12"},
+		{"repeated debug", "lambda __debug__, __debug__: 1",
+			"duplicate parameter: __debug__ at offset 18"},
+		{"print in a default", "lambda value=print: value", "print is not available: " +
+			"a template has nowhere to print to at offset 13"},
 	}
 	for _, testCase := range cases {
 		test.Run(testCase.name, func(test *testing.T) {
@@ -109,11 +126,21 @@ func TestCompileErrors(test *testing.T) {
 	}
 }
 
-// Starlark has lambda, and doc/expressions.md does not take it away.
+// A lambda takes plain parameters and their defaults.
+// See doc/expressions.md#functions.
 func TestLambdaCompiles(test *testing.T) {
-	got := evalStr(test, "', '.join(sorted(['b', 'a'], key=lambda s: s))", nil)
-	if got != "a, b" {
-		test.Errorf("got %q", got)
+	cases := map[string]string{
+		"', '.join(sorted(['b', 'a'], key=lambda word: word))": "a, b",
+		"str((lambda net, rate=0.21: net * (1 + rate))(100))":  "121.0",
+		"str((lambda: 1)())": "1",
+		// A local name may be one the dialect holds back from outside.
+		"str((lambda print: print + 1)(1))": "2",
+		"str([print for print in [3]])":     "[3]",
+	}
+	for source, want := range cases {
+		if got := evalStr(test, source, nil); got != want {
+			test.Errorf("%s = %q, want %q", source, got, want)
+		}
 	}
 }
 
@@ -157,6 +184,33 @@ func TestFinalNames(test *testing.T) {
 	// so both are parameters.
 	if strings.Join(prog.Params, ",") != "FINAL,PAGE_NUMBER" {
 		test.Errorf("Params = %v", prog.Params)
+	}
+}
+
+// A local name called FINAL is not the predefined one, so what is read
+// off it is not read through FINAL.
+func TestFinalNamesSkipLocalNames(test *testing.T) {
+	cases := []struct {
+		source string
+		uses   bool
+		names  string
+	}{
+		{"(lambda FINAL: FINAL.amount)(THIS)", false, ""},
+		{"[FINAL.amount for FINAL in rows]", false, ""},
+		{"FINAL.total + (lambda FINAL: FINAL.amount)(THIS)", true, "total"},
+		// A default is read where the lambda is written.
+		{"(lambda value=FINAL.total: value)()", true, "total"},
+	}
+	for _, testCase := range cases {
+		prog, err := Compile("test", testCase.source)
+		if err != nil {
+			test.Fatal(err)
+		}
+		names := strings.Join(prog.FinalNames, ",")
+		if prog.UsesFinal != testCase.uses || names != testCase.names {
+			test.Errorf("%s: UsesFinal = %v, FinalNames = %q; want %v, %q",
+				testCase.source, prog.UsesFinal, names, testCase.uses, testCase.names)
+		}
 	}
 }
 
