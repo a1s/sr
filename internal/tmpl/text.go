@@ -21,10 +21,10 @@ const DateLayout = "2006-01-02"
 
 // ParseScalar reads text as a value of this type.
 //
-// It reads every type but object and list, which are JSON and which
-// the data package reads. A `default` is held to it when the template
-// loads, and a parameter or a record member given as text when the report
-// is built, so the two cannot disagree about what a type accepts.
+// It reads every type but object and list, which are JSON: see DecodeObject
+// and DecodeList. A `default` is held to it when the template loads,
+// and a parameter or a record member given as text when the report
+// is built, so the two agree about what a type accepts.
 func (kind ValueType) ParseScalar(text, format string) (starlark.Value, error) {
 	switch kind {
 	case TypeString:
@@ -99,27 +99,50 @@ func (kind ValueType) parseTime(text, format string) (gotime.Time, error) {
 	return gotime.Time{}, fmt.Errorf("%q is not a %s: %v", text, kind, lastErr)
 }
 
+// DecodeObject reads text as the JSON an object parameter is given as.
+//
+// A number stays a json.Number, as it does in a record,
+// so one too large for a float is still a number.
+// The data package turns the result into values.
+func DecodeObject(text string) (map[string]any, error) {
+	var obj map[string]any
+	if decodeJSON(text, &obj) != nil {
+		return nil, fmt.Errorf("%q is not a JSON object", text)
+	}
+	return obj, nil
+}
+
+// DecodeList reads text as the JSON a list parameter is given as.
+//
+// It reads numbers as DecodeObject does.
+func DecodeList(text string) ([]any, error) {
+	var list []any
+	if decodeJSON(text, &list) != nil {
+		return nil, fmt.Errorf("%q is not a JSON array", text)
+	}
+	return list, nil
+}
+
+func decodeJSON(text string, into any) error {
+	dec := json.NewDecoder(strings.NewReader(text))
+	dec.UseNumber()
+	return dec.Decode(into)
+}
+
 // checkDefault reports a `default` that does not read as its declared type.
 //
-// An object or a list is JSON, which the data package turns into values
-// when the report is built. Here it is enough that the text decodes
-// as one, read as the data package reads it.
+// It reads the text with the functions data.ParamText reads it with
+// when the report is built.
 func checkDefault(text string, kind ValueType, format string) error {
+	var err error
 	switch kind {
 	case TypeObject:
-		var obj map[string]any
-		if json.NewDecoder(strings.NewReader(text)).Decode(&obj) != nil {
-			return fmt.Errorf("%q is not a JSON object", text)
-		}
-		return nil
+		_, err = DecodeObject(text)
 	case TypeList:
-		var list []any
-		if json.NewDecoder(strings.NewReader(text)).Decode(&list) != nil {
-			return fmt.Errorf("%q is not a JSON array", text)
-		}
-		return nil
+		_, err = DecodeList(text)
+	default:
+		_, err = kind.ParseScalar(text, format)
 	}
-	_, err := kind.ParseScalar(text, format)
 	return err
 }
 

@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"math"
 	"math/big"
 	"reflect"
 	"sort"
@@ -408,40 +407,30 @@ func Rows(records any) ([]map[string]any, error) {
 	return out, nil
 }
 
-// ParamText parses a parameter value supplied as text — from the command line,
-// or from a `default` — according to its declared type.
+// ParamText parses a parameter value supplied as text, from the command
+// line or from a `default`, according to its declared type.
+//
+// The text is read by the functions the template package holds
+// a `default` to when the template loads, so a default that loads
+// is one the build accepts.
 func ParamText(text string, kind tmpl.ValueType, format string) (starlark.Value, error) {
 	switch kind {
-	case tmpl.TypeString:
-		return starlark.String(text), nil
 	case tmpl.TypeObject:
-		var obj map[string]any
-		dec := json.NewDecoder(strings.NewReader(text))
-		dec.UseNumber()
-		if err := dec.Decode(&obj); err != nil {
-			return nil, fmt.Errorf("%q is not a JSON object", text)
+		obj, err := tmpl.DecodeObject(text)
+		if err != nil {
+			return nil, err
 		}
 		return objectValue(obj), nil
 	case tmpl.TypeList:
-		var list []any
-		dec := json.NewDecoder(strings.NewReader(text))
-		dec.UseNumber()
-		if err := dec.Decode(&list); err != nil {
-			return nil, fmt.Errorf("%q is not a JSON array", text)
+		list, err := tmpl.DecodeList(text)
+		if err != nil {
+			return nil, err
 		}
 		return Convert(list, tmpl.TypeList, "")
-	case tmpl.TypeFloat:
-		trimmed := strings.ToLower(strings.TrimSpace(text))
-		switch trimmed {
-		case "inf", "+inf":
-			return starlark.Float(inf(1)), nil
-		case "-inf":
-			return starlark.Float(inf(-1)), nil
-		case "nan":
-			return starlark.Float(nan()), nil
-		}
 	}
-	return Convert(text, kind, format)
+	// strconv.ParseFloat takes inf and nan in any case, with a sign,
+	// so a float needs no reading of its own here.
+	return kind.ParseScalar(text, format)
 }
 
 // MatchesType reports whether a value already has the declared type,
@@ -475,9 +464,6 @@ func MatchesType(value starlark.Value, kind tmpl.ValueType) bool {
 	}
 	return false
 }
-
-func inf(sign int) float64 { return math.Inf(sign) }
-func nan() float64         { return math.NaN() }
 
 // Sequence converts an expression's result into rows.
 //

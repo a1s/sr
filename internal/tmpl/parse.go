@@ -1008,18 +1008,24 @@ func (psr *parser) parseBarcode(node *kdl.Node) *Barcode {
 	barcode.Grow = pr.boolean("grow", false)
 	barcode.Ink = pr.color("ink")
 	barcode.Paper = pr.color("paper")
-	barcode.Charset = enumProp(pr, "charset", barcodeCharsets, barcodes.CharsetUTF8)
+	// A 1-D type takes no charset, so on one the value is not read:
+	// that there is one at all is the mistake to report.
+	// See doc/template.md#character-set.
+	barcode.Charset = barcodes.CharsetUTF8
+	linear := BarcodeTypes[barcode.Type] && !barcodes.IsTwoD(barcode.Type)
+	if _, given := pr.raw("charset"); given && linear {
+		psr.errf(node, "charset",
+			"%s encodes characters rather than bytes, so it takes no charset",
+			barcode.Type)
+	} else {
+		barcode.Charset = enumProp(pr, "charset", barcodeCharsets, barcodes.CharsetUTF8)
+	}
 	pr.done()
 	psr.allowChildren(node, "style")
 	if barcode.Type == "" {
 		psr.errf(node, "type", "required")
 	} else if !BarcodeTypes[barcode.Type] {
 		psr.errf(node, "type", "unknown barcode type %q", barcode.Type)
-	} else if _, given := node.Prop("charset"); given && !barcodes.IsTwoD(barcode.Type) {
-		// See doc/template.md#character-set.
-		psr.errf(node, "charset",
-			"%s encodes characters rather than bytes, so it takes no charset",
-			barcode.Type)
 	}
 	if barcode.Module <= 0 {
 		psr.errf(node, "module", "a barcode module must be positive")
