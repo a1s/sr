@@ -33,6 +33,8 @@ func (psr *parser) validate(report *Report) {
 	ns := psr.namespaceFor(report.Params, report.Variables, report.Records, report.Layout)
 	report.GroupNames = ns.order
 
+	psr.validateFonts(report.Fonts, shared)
+
 	if report.Layout != nil {
 		psr.validateStyles(report.Layout.Styles, shared)
 		psr.validateNamespace(ns, shared)
@@ -378,6 +380,18 @@ func (psr *parser) validateContent(node *kdl.Node, content *Content, ns *namespa
 			psr.errf(node, "evaltime",
 				"'%s' is not a scope: name report, page, column, or a group defined here",
 				content.EvalTime)
+		}
+	}
+}
+
+// validateFonts reports a font whose data names no data node.
+func (psr *parser) validateFonts(fonts []*Font, shared *sharedNames) {
+	for _, font := range fonts {
+		if font.Data == "" {
+			continue
+		}
+		if _, ok := shared.data[font.Data]; !ok {
+			psr.errf(font.Node, "data", "no data node named '%s'", font.Data)
 		}
 	}
 }

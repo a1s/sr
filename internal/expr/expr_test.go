@@ -72,6 +72,51 @@ func TestCompileRejectsPrint(test *testing.T) {
 	}
 }
 
+// A compile error says what is wrong and where, as a character offset
+// into the expression: the caller names the file, the node, and the
+// property, and the offset is the one thing it does not know.
+func TestCompileErrors(test *testing.T) {
+	cases := []struct {
+		name, source, want string
+	}{
+		{"form feed", "1 +\f 2", `unexpected input character '\f' at offset 3`},
+		{"second line", "(1 +\n  \f 2)", `unexpected input character '\f' at offset 7`},
+		{"after CR LF", "(1 +\r\n  \f 2)", `unexpected input character '\f' at offset 8`},
+		{"after a wide character", "'Š' +\f 2", `unexpected input character '\f' at offset 5`},
+		{"blocked name", "1 + print('x')", "print is not available: " +
+			"a template has nowhere to print to at offset 4"},
+		{"f-string", "f'{1}'", noFStrings + " at offset 0"},
+		{"raw f-string", "x + Rf'{x}'", noFStrings + " at offset 4"},
+		{"adjacent literals", "'A' 'B'", adjacentLiterals + " at offset 4"},
+		{"adjacent across a line join", "('A' \\\n b'B')", adjacentLiterals + " at offset 8"},
+		{"adjacent across a comment", "('A' # note\n 'B')", adjacentLiterals + " at offset 13"},
+		// A literal's text and a comment are skipped, not read.
+		{"quoted f-string", "'f\\'x\\'' 1", "got int literal after expression, want EOF"},
+		{"commented f-string", "1 2 # f'x'", "got int literal after expression, want EOF"},
+		// The parser's own error stands where it comes first.
+		{"form feed first", "1 +\f 'A' 'B'", `unexpected input character '\f' at offset 3`},
+	}
+	for _, testCase := range cases {
+		test.Run(testCase.name, func(test *testing.T) {
+			_, err := Compile("test", testCase.source)
+			if err == nil {
+				test.Fatalf("%q compiled", testCase.source)
+			}
+			if !strings.Contains(err.Error(), testCase.want) {
+				test.Errorf("%q: %v; want %q", testCase.source, err, testCase.want)
+			}
+		})
+	}
+}
+
+// Starlark has lambda, and doc/expressions.md does not take it away.
+func TestLambdaCompiles(test *testing.T) {
+	got := evalStr(test, "', '.join(sorted(['b', 'a'], key=lambda s: s))", nil)
+	if got != "a, b" {
+		test.Errorf("got %q", got)
+	}
+}
+
 func TestNoClock(test *testing.T) {
 	if _, ok := timeModule.Members["now"]; ok {
 		test.Fatal("the time module must not offer now")

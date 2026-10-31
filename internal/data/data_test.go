@@ -1,6 +1,7 @@
 package data
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	gotime "time"
@@ -169,6 +170,53 @@ func TestParamText(test *testing.T) {
 	}
 	if _, err := ParamText("not a date", tmpl.TypeDate, ""); err == nil {
 		test.Error("want an error for text that does not parse")
+	}
+}
+
+// A `default` loads when the build can read it, and only then:
+// the load holds it to the reading ParamText gives it.
+func TestDefaultsLoadAsTheyBuild(test *testing.T) {
+	cases := []struct {
+		kind tmpl.ValueType
+		text string
+		ok   bool
+	}{
+		{tmpl.TypeInt, " 7 ", true},
+		{tmpl.TypeInt, "one", false},
+		{tmpl.TypeDecimal, "19.99", true},
+		{tmpl.TypeDecimal, "x", false},
+		{tmpl.TypeFloat, "-INF", true},
+		{tmpl.TypeFloat, "nan", true},
+		{tmpl.TypeFloat, "1e999", false},
+		{tmpl.TypeBool, "0", true},
+		{tmpl.TypeBool, "yes", false},
+		{tmpl.TypeDate, "2005-05-24", true},
+		{tmpl.TypeDate, "24.05.2005", false},
+		{tmpl.TypeDatetime, "2005-05-24T22:53:30Z", true},
+		{tmpl.TypeDatetime, "2005-05-24", false},
+		// JSON keeps a number too large for a float, as a record does.
+		{tmpl.TypeObject, `{"a":1e999}`, true},
+		{tmpl.TypeObject, `[1]`, false},
+		{tmpl.TypeList, `[1e999]`, true},
+		{tmpl.TypeList, `{}`, false},
+	}
+	for _, testCase := range cases {
+		_, err := ParamText(testCase.text, testCase.kind, "")
+		if (err == nil) != testCase.ok {
+			test.Errorf("ParamText(%q) as %s: %v", testCase.text, testCase.kind, err)
+		}
+		source := fmt.Sprintf(`report name="t" {
+  parameter "p" type="%s" default=#"%s"#
+  font "body" file="Go-Regular.ttf" size=10
+  layout pagesize="A4" {
+    style font="body"
+    detail height=10 { field text="x" }
+  }
+}`, testCase.kind, testCase.text)
+		_, err = tmpl.LoadString(source, "default.kdl")
+		if (err == nil) != testCase.ok {
+			test.Errorf("a %s default %q: %v", testCase.kind, testCase.text, err)
+		}
 	}
 }
 

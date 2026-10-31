@@ -49,11 +49,10 @@ type Program struct {
 
 // exprFile is the file name the parser attributes positions to.
 //
-// It is stripped from a diagnostic before the caller sees it: the caller
-// already knows which file, node and property the expression came from,
-// and says so, so repeating that here printed every location twice.
-// What is left is the position inside the expression, which is the
-// one thing the caller does not know.
+// It never reaches a diagnostic: the caller already knows which file,
+// node and property the expression came from, and says so.
+// What a diagnostic adds is the position inside the expression,
+// which is the one thing the caller does not know. See located.
 const exprFile = "expr"
 
 // Compile parses and compiles one expression.
@@ -63,11 +62,11 @@ const exprFile = "expr"
 func Compile(where, source string) (*Program, error) {
 	expr, err := fileOptions.ParseExpr(exprFile, source, 0)
 	if err != nil {
-		return nil, inExpression(err)
+		return nil, parseError(source, err)
 	}
 
 	if name, pos := findBlocked(expr); name != "" {
-		return nil, fmt.Errorf("%s (at %s)", blockedUniversals[name], pos)
+		return nil, located(source, pos, blockedUniversals[name])
 	}
 
 	// Resolve with every name that is not a Starlark universal
@@ -78,7 +77,11 @@ func Compile(where, source string) (*Program, error) {
 	anyPredeclared := func(name string) bool { return !IsUniversal(name) }
 	_, err = resolve.ExprOptions(fileOptions, expr, anyPredeclared, IsUniversal)
 	if err != nil {
-		return nil, inExpression(err)
+		var refused resolve.ErrorList
+		if errors.As(err, &refused) {
+			return nil, located(source, refused[0].Pos, refused[0].Msg)
+		}
+		return nil, err
 	}
 	params := freeNames(expr)
 
@@ -202,12 +205,54 @@ func finalNames(expr syntax.Expr) []string {
 	return names
 }
 
-// inExpression strips the parser's file name from a diagnostic,
-// leaving the position inside the expression.
-func inExpression(err error) error {
-	message := err.Error()
-	if trimmed, ok := strings.CutPrefix(message, exprFile+":"); ok {
-		message = trimmed
+// parseError renders what the parser refused, at its offset.
+//
+// Where the expression reads as Python would format a literal or join
+// two, no later than where the parser stopped, the diagnostic says that
+// instead. The parser stops at the end of the literal it did not want,
+// so its own message points past the mistake and does not name it.
+func parseError(source string, err error) error {
+	var refused syntax.Error
+	if !errors.As(err, &refused) {
+		return err
 	}
-	return errors.New(message)
+	message, offset, found := misreadLiteral(source)
+	if found && (refused.Pos.Line <= 0 || offset <= offsetOf(source, refused.Pos)) {
+		return fmt.Errorf("%s at offset %d", message, offset)
+	}
+	return located(source, refused.Pos, refused.Msg)
+}
+
+// located renders a diagnostic with its character offset into the expression.
+//
+// The parser gives a line of 0 when it does not know where the problem is,
+// and then the diagnostic carries no offset.
+func located(source string, pos syntax.Position, message string) error {
+	if pos.Line <= 0 {
+		return errors.New(message)
+	}
+	return fmt.Errorf("%s at offset %d", message, offsetOf(source, pos))
+}
+
+// offsetOf turns a parser position into a 0-based character offset
+// into the expression.
+//
+// It counts lines as the parser does, ending one at "\r\n", "\r" or "\n",
+// and the parser's column counts characters, so an offset into
+// an expression of several lines is the same in any of the three.
+func offsetOf(source string, pos syntax.Position) int {
+	text := []rune(source)
+	offset := 0
+	for line := int32(1); line < pos.Line && offset < len(text); offset++ {
+		switch text[offset] {
+		case '\r':
+			if offset+1 < len(text) && text[offset+1] == '\n' {
+				offset++
+			}
+			line++
+		case '\n':
+			line++
+		}
+	}
+	return offset + int(pos.Col) - 1
 }

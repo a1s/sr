@@ -385,7 +385,7 @@ func encodeDeferredBarcode(
 	deferred *deferral,
 	text string,
 ) (*barcodes.Symbol, barcodes.Metrics, error) {
-	sym, err := barcodes.Encode(deferred.barcode.Type, text)
+	sym, err := barcodes.Encode(deferred.barcode.Type, text, deferred.charset)
 	if err != nil {
 		return nil, barcodes.Metrics{}, err
 	}

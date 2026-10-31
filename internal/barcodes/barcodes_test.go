@@ -2,6 +2,7 @@ package barcodes
 
 import (
 	"github.com/a1s/sr/internal/geom"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -26,7 +27,7 @@ func TestEveryTypeEncodes(test *testing.T) {
 	}
 	for _, testCase := range cases {
 		test.Run(testCase.kind, func(test *testing.T) {
-			sym, err := Encode(testCase.kind, testCase.value)
+			sym, err := Encode(testCase.kind, testCase.value, "")
 			if err != nil {
 				test.Fatal(err)
 			}
@@ -85,7 +86,7 @@ func TestContentErrors(test *testing.T) {
 		{"Code128", "", "empty"},
 	}
 	for _, testCase := range cases {
-		_, err := Encode(testCase.kind, testCase.value)
+		_, err := Encode(testCase.kind, testCase.value, "")
 		if err == nil {
 			test.Errorf("%s %q: want an error", testCase.kind, testCase.value)
 			continue
@@ -101,6 +102,70 @@ func TestContentErrors(test *testing.T) {
 			test.Errorf("%s %q: the diagnostic must name the type and the value: %v",
 				testCase.kind, testCase.value, err)
 		}
+	}
+}
+
+// A 2-D type encodes a value's characters in its charset,
+// which changes the symbol only for a value outside ASCII.
+func TestCharset(test *testing.T) {
+	for _, kind := range []string{"DataMatrix", "Aztec", "QR-M"} {
+		test.Run(kind, func(test *testing.T) {
+			rows := func(value, charset string) [][]int {
+				test.Helper()
+				sym, err := Encode(kind, value, charset)
+				if err != nil {
+					test.Fatal(err)
+				}
+				if sym.Value != value {
+					test.Errorf("Value = %q, want %q", sym.Value, value)
+				}
+				return sym.Rows
+			}
+			if !reflect.DeepEqual(rows("Cafe", CharsetUTF8), rows("Cafe", CharsetLatin1)) {
+				test.Error("an ASCII value draws a different symbol in each charset")
+			}
+			latin1 := rows("Café", CharsetLatin1)
+			if reflect.DeepEqual(rows("Café", CharsetUTF8), latin1) {
+				test.Error("a value outside ASCII draws the same symbol in each charset")
+			}
+			// One byte per character: the bytes a UTF-8 value would be
+			// passed through as, had they been written that way.
+			if !reflect.DeepEqual(rows("Caf\xe9", ""), latin1) {
+				test.Error("iso-8859-1 does not encode é as the byte 0xE9")
+			}
+		})
+	}
+}
+
+func TestCharsetErrors(test *testing.T) {
+	cases := []struct {
+		kind, value, charset, want string
+	}{
+		{"QR-M", "Ā", CharsetLatin1, "'Ā' is not in ISO 8859-1"},
+		{"Aztec", "x", "latin-1", `unknown charset "latin-1"`},
+		// 0xE8 is FNC1 to the Data Matrix encoder: è in ISO 8859-1,
+		// and the first byte of 色, U+8272, in UTF-8.
+		{"DataMatrix", "èe", CharsetLatin1, "FNC1"},
+		{"DataMatrix", "色", CharsetUTF8, "FNC1"},
+	}
+	for _, testCase := range cases {
+		_, err := Encode(testCase.kind, testCase.value, testCase.charset)
+		if err == nil {
+			test.Errorf("%s %q in %s: want an error",
+				testCase.kind, testCase.value, testCase.charset)
+			continue
+		}
+		msg := err.Error()
+		if !strings.Contains(msg, testCase.want) ||
+			!strings.Contains(msg, testCase.kind) ||
+			!strings.Contains(msg, testCase.value) {
+			test.Errorf("%s %q in %s: %v; want the type, the value, and %q",
+				testCase.kind, testCase.value, testCase.charset, err, testCase.want)
+		}
+	}
+	// Further on, 0xE8 is an ordinary byte, written with an upper shift.
+	if _, err := Encode("DataMatrix", "eè", CharsetLatin1); err != nil {
+		test.Error(err)
 	}
 }
 
@@ -135,7 +200,7 @@ func TestRunsFromBits(test *testing.T) {
 }
 
 func TestMeasure(test *testing.T) {
-	oneD, err := Encode("Code128", "Code 128")
+	oneD, err := Encode("Code128", "Code 128", "")
 	if err != nil {
 		test.Fatal(err)
 	}
@@ -159,7 +224,7 @@ func TestMeasure(test *testing.T) {
 		test.Errorf("grown 1-D: cross = %v, module = %v", metrics.Cross, metrics.Module)
 	}
 
-	twoD, err := Encode("QR-Q", "Version 2 (25x25)")
+	twoD, err := Encode("QR-Q", "Version 2 (25x25)", "")
 	if err != nil {
 		test.Fatal(err)
 	}
@@ -192,7 +257,7 @@ func TestMeasure(test *testing.T) {
 // The invariant a printout asserts: stripes sums, times module,
 // equal the box extent along the coding direction.
 func TestStripeSumMatchesTheExtent(test *testing.T) {
-	sym, err := Encode("2of5i", "9999")
+	sym, err := Encode("2of5i", "9999", "")
 	if err != nil {
 		test.Fatal(err)
 	}

@@ -244,6 +244,11 @@ func (psr *parser) parseParameter(node *kdl.Node) *Parameter {
 	if param.HasDefault && param.DefaultExpr != nil {
 		psr.errf(node, "default", "default and defaultexpr are alternatives")
 	}
+	if param.HasDefault {
+		if err := checkDefault(param.Default, param.Type, param.Format); err != nil {
+			psr.errf(node, "default", "%v", err)
+		}
+	}
 	if param.Format != "" && !param.Type.IsTemporal() {
 		psr.errf(node, "format",
 			"format reads a date, and this parameter is a %s",
@@ -367,7 +372,8 @@ func (psr *parser) parseData(node *kdl.Node) *DataBlob {
 	}
 	pr.done()
 	psr.allowChildren(node, "content")
-	if body := psr.atMostOne(node, "content"); body != nil {
+	body := psr.atMostOne(node, "content")
+	if body != nil {
 		if len(body.Args) != 1 {
 			psr.errf(body, "", "content takes one string argument")
 		} else if text, ok := body.Args[0].Text(); ok {
@@ -376,7 +382,13 @@ func (psr *parser) parseData(node *kdl.Node) *DataBlob {
 			psr.errf(body, "", "content must be a string")
 		}
 	}
-	if blob.Encoding != "" && blob.Encoding != "base64" {
+	switch blob.Encoding {
+	case "":
+	case "base64":
+		if blob.HasBody {
+			psr.checkBase64(body, blob.Content)
+		}
+	default:
 		psr.errf(node, "encoding", "unknown encoding %q; want base64", blob.Encoding)
 	}
 	if blob.Compress != "" && blob.Compress != "zlib" && blob.Compress != "gzip" {
@@ -386,6 +398,17 @@ func (psr *parser) parseData(node *kdl.Node) *DataBlob {
 		psr.errf(node, "", "a data node holds exactly one of expr or a content child")
 	}
 	return blob
+}
+
+// checkBase64 reports a content child whose text is not base64.
+//
+// The bytes are decoded again when the report is built. Reading them here
+// as well is what makes a corrupt blob an error when the template loads,
+// as doc/template.md#image says, rather than partway through a build.
+func (psr *parser) checkBase64(body *kdl.Node, content string) {
+	if _, err := DecodeBase64(content); err != nil {
+		psr.errf(body, "", "content is not base64: %v", err)
+	}
 }
 
 func (psr *parser) parseLayout(node *kdl.Node) *Layout {
@@ -942,6 +965,7 @@ func (psr *parser) parseImage(node *kdl.Node) *Image {
 		if len(body.Args) == 1 {
 			if text, ok := body.Args[0].Text(); ok {
 				image.Content, image.HasContent = text, true
+				psr.checkBase64(body, text)
 			} else {
 				psr.errf(body, "", "content must be a string")
 			}
@@ -984,6 +1008,18 @@ func (psr *parser) parseBarcode(node *kdl.Node) *Barcode {
 	barcode.Grow = pr.boolean("grow", false)
 	barcode.Ink = pr.color("ink")
 	barcode.Paper = pr.color("paper")
+	// A 1-D type takes no charset, so on one the value is not read:
+	// that there is one at all is the mistake to report.
+	// See doc/template.md#character-set.
+	barcode.Charset = barcodes.CharsetUTF8
+	linear := BarcodeTypes[barcode.Type] && !barcodes.IsTwoD(barcode.Type)
+	if _, given := pr.raw("charset"); given && linear {
+		psr.errf(node, "charset",
+			"%s encodes characters rather than bytes, so it takes no charset",
+			barcode.Type)
+	} else {
+		barcode.Charset = enumProp(pr, "charset", barcodeCharsets, barcodes.CharsetUTF8)
+	}
 	pr.done()
 	psr.allowChildren(node, "style")
 	if barcode.Type == "" {

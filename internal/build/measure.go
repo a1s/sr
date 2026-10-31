@@ -61,6 +61,7 @@ type deferral struct {
 	vertical bool
 	grow     bool
 	module   float64
+	charset  string
 	kind     string
 	draft    *draft
 	// halign and valign re-anchor the mark when the resolved value turns out

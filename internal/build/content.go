@@ -325,6 +325,7 @@ func (eng *engine) emitBarcode(barcode *tmpl.Barcode, slot *elementSlot, measure
 			vertical: barcode.Vertical,
 			grow:     barcode.Grow,
 			module:   barcode.Module,
+			charset:  barcode.Charset,
 			kind:     "barcode",
 			draft:    dft,
 			boxWidth: slot.width,
@@ -429,7 +430,7 @@ func (eng *engine) barcode(
 	if err != nil {
 		return nil, barcodes.Metrics{}, err
 	}
-	sym, err := barcodes.Encode(barcode.Type, text)
+	sym, err := barcodes.Encode(barcode.Type, text, barcode.Charset)
 	if err != nil {
 		return nil, barcodes.Metrics{}, fmt.Errorf("%s: %w", barcode.Node.Path(), err)
 	}

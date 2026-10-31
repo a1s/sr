@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"math"
 	"math/big"
 	"reflect"
 	"sort"
@@ -23,10 +22,6 @@ import (
 	startime "go.starlark.net/lib/time"
 	"go.starlark.net/starlark"
 )
-
-// DateLayout is the accepted text form for a date parameter or member
-// when the node gives no format.
-const DateLayout = "2006-01-02"
 
 // ReadJSON reads records from a JSON array document or from NDJSON,
 // one record per line.
@@ -172,45 +167,19 @@ func Convert(raw any, kind tmpl.ValueType, format string) (starlark.Value, error
 		}
 		return nil, fmt.Errorf("want text, got %T", raw)
 
-	case tmpl.TypeInt:
+	case tmpl.TypeInt, tmpl.TypeDecimal, tmpl.TypeFloat:
 		text, err := numericText(raw)
 		if err != nil {
 			return nil, err
 		}
-		num, ok := new(big.Int).SetString(text, 10)
-		if !ok {
-			return nil, fmt.Errorf("%q is not a whole number", text)
-		}
-		return starlark.MakeBigInt(num), nil
-
-	case tmpl.TypeDecimal:
-		text, err := numericText(raw)
-		if err != nil {
-			return nil, err
-		}
-		dec, err := decimal.NewFromString(text)
-		if err != nil {
-			return nil, fmt.Errorf("%q is not a decimal", text)
-		}
-		return expr.NewDecimal(dec), nil
-
-	case tmpl.TypeFloat:
-		text, err := numericText(raw)
-		if err != nil {
-			return nil, err
-		}
-		num, err := strconv.ParseFloat(text, 64)
-		if err != nil {
-			return nil, fmt.Errorf("%q is not a number", text)
-		}
-		return starlark.Float(num), nil
+		return kind.ParseScalar(text, format)
 
 	case tmpl.TypeBool:
 		switch typed := raw.(type) {
 		case bool:
 			return starlark.Bool(typed), nil
 		case string:
-			return parseBoolText(typed)
+			return kind.ParseScalar(typed, format)
 		case json.Number:
 			return starlark.Bool(typed.String() != "0"), nil
 		}
@@ -221,11 +190,7 @@ func Convert(raw any, kind tmpl.ValueType, format string) (starlark.Value, error
 		if !ok {
 			return nil, fmt.Errorf("want a timestamp as text, got %T", raw)
 		}
-		when, err := parseTime(text, kind, format)
-		if err != nil {
-			return nil, err
-		}
-		return startime.Time(when), nil
+		return kind.ParseScalar(text, format)
 
 	case tmpl.TypeObject:
 		obj, ok := raw.(map[string]any)
@@ -269,42 +234,6 @@ func numericText(raw any) (string, error) {
 		return "0", nil
 	}
 	return "", fmt.Errorf("want a number, got %T", raw)
-}
-
-func parseBoolText(text string) (starlark.Value, error) {
-	switch strings.ToLower(strings.TrimSpace(text)) {
-	case "true", "1":
-		return starlark.True, nil
-	case "false", "0":
-		return starlark.False, nil
-	}
-	return nil, fmt.Errorf("%q is not a boolean", text)
-}
-
-// parseTime reads a timestamp.
-//
-// A date yields a time value with zero time of day.
-func parseTime(text string, kind tmpl.ValueType, format string) (gotime.Time, error) {
-	layouts := []string{gotime.RFC3339}
-	if kind == tmpl.TypeDate {
-		layouts = []string{DateLayout, gotime.RFC3339}
-	}
-	if format != "" {
-		layouts = []string{format}
-	}
-	var lastErr error
-	for _, layout := range layouts {
-		when, err := gotime.Parse(layout, text)
-		if err == nil {
-			if kind == tmpl.TypeDate {
-				when = gotime.Date(when.Year(), when.Month(),
-					when.Day(), 0, 0, 0, 0, when.Location())
-			}
-			return when, nil
-		}
-		lastErr = err
-	}
-	return gotime.Time{}, fmt.Errorf("%q is not a %s: %v", text, kind, lastErr)
 }
 
 func objectValue(obj map[string]any) *expr.Record {
@@ -478,40 +407,30 @@ func Rows(records any) ([]map[string]any, error) {
 	return out, nil
 }
 
-// ParamText parses a parameter value supplied as text — from the command line,
-// or from a `default` — according to its declared type.
+// ParamText parses a parameter value supplied as text, from the command
+// line or from a `default`, according to its declared type.
+//
+// The text is read by the functions the template package holds
+// a `default` to when the template loads, so a default that loads
+// is one the build accepts.
 func ParamText(text string, kind tmpl.ValueType, format string) (starlark.Value, error) {
 	switch kind {
-	case tmpl.TypeString:
-		return starlark.String(text), nil
 	case tmpl.TypeObject:
-		var obj map[string]any
-		dec := json.NewDecoder(strings.NewReader(text))
-		dec.UseNumber()
-		if err := dec.Decode(&obj); err != nil {
-			return nil, fmt.Errorf("%q is not a JSON object", text)
+		obj, err := tmpl.DecodeObject(text)
+		if err != nil {
+			return nil, err
 		}
 		return objectValue(obj), nil
 	case tmpl.TypeList:
-		var list []any
-		dec := json.NewDecoder(strings.NewReader(text))
-		dec.UseNumber()
-		if err := dec.Decode(&list); err != nil {
-			return nil, fmt.Errorf("%q is not a JSON array", text)
+		list, err := tmpl.DecodeList(text)
+		if err != nil {
+			return nil, err
 		}
 		return Convert(list, tmpl.TypeList, "")
-	case tmpl.TypeFloat:
-		trimmed := strings.ToLower(strings.TrimSpace(text))
-		switch trimmed {
-		case "inf", "+inf":
-			return starlark.Float(inf(1)), nil
-		case "-inf":
-			return starlark.Float(inf(-1)), nil
-		case "nan":
-			return starlark.Float(nan()), nil
-		}
 	}
-	return Convert(text, kind, format)
+	// strconv.ParseFloat takes inf and nan in any case, with a sign,
+	// so a float needs no reading of its own here.
+	return kind.ParseScalar(text, format)
 }
 
 // MatchesType reports whether a value already has the declared type,
@@ -545,9 +464,6 @@ func MatchesType(value starlark.Value, kind tmpl.ValueType) bool {
 	}
 	return false
 }
-
-func inf(sign int) float64 { return math.Inf(sign) }
-func nan() float64         { return math.NaN() }
 
 // Sequence converts an expression's result into rows.
 //

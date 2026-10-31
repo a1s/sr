@@ -484,7 +484,22 @@ func TestBarcodeInkAloneIsJudgedAgainstWhite(test *testing.T) {
 
 // The diagnostic points at the property that has to change:
 // a background even black bars could not be read on is the paper's fault,
-// and anything else the ink's.
+// and anything else the ink's. A charset on a 1-D type is one mistake,
+// and gets one diagnostic, whatever the value says.
+func TestBarcodeCharsetOnALinearType(test *testing.T) {
+	_, err := LoadString(wrap(
+		`detail { barcode type="Code128" text="x" charset="latin-1" }`),
+		"test.kdl")
+	var diags DiagnosticList
+	if !errors.As(err, &diags) {
+		test.Fatalf("got %v, want a diagnostic list", err)
+	}
+	want := "Code128 encodes characters rather than bytes, so it takes no charset"
+	if len(diags) != 1 || diags[0].Message != want || diags[0].Prop != "charset" {
+		test.Errorf("got %q, want one diagnostic on charset: %q", diags, want)
+	}
+}
+
 func TestBarcodeContrastBlamesTheRightProperty(test *testing.T) {
 	cases := []struct {
 		name, declaration, want string

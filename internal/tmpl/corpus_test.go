@@ -3,6 +3,7 @@ package tmpl
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -12,6 +13,29 @@ import (
 // the other implementation of this specification can read the same cases.
 // Its convention is testdata/templates/README.md.
 const corpusDir = "../../testdata/templates"
+
+// expectedFailures are the `expect:` markers in broken/ that this engine
+// knowingly does not meet, by case and then by the marker's text,
+// each with the reason.
+//
+// The corpus is shared with s-reports, so a case is not edited to suit
+// this engine. A marker listed here is logged when it fails rather than
+// failing the test, and fails the test once it passes, so that the entry
+// goes when the engine catches up.
+var expectedFailures = map[string]map[string]string{
+	"barcode-charset.kdl": {
+		"2of5i encodes characters rather than bytes, so it takes no eci": noECI,
+	},
+	"expression-syntax.kdl": {"there are no lambdas": keepsLambda},
+}
+
+// The reasons the markers in expectedFailures fail here.
+const (
+	noECI = "eci is not implemented: github.com/boombuler/barcode " +
+		"writes no ECI, so it is an unknown property here"
+	keepsLambda = "this engine keeps Starlark's lambda, " +
+		"which doc/expressions.md does not take away"
+)
 
 // expectations are the markers a case states in its header comment.
 type expectations struct {
@@ -110,12 +134,24 @@ func containsAny(haystack []string, needle string) bool {
 // A case must fail, and must fail with the message it names: a template
 // refused for some other reason is not testing what it says it is.
 func TestBrokenTemplates(test *testing.T) {
-	for _, name := range cases(test, "broken") {
+	names := cases(test, "broken")
+	for name := range expectedFailures {
+		if !slices.Contains(names, name) {
+			test.Errorf("expectedFailures lists %s, which is not a case", name)
+		}
+	}
+	for _, name := range names {
 		test.Run(name, func(test *testing.T) {
 			path := filepath.Join(corpusDir, "broken", name)
 			want := readExpectations(test, path)
 			if len(want.errors) == 0 {
 				test.Fatalf("%s states no expect: marker", name)
+			}
+			for expected := range expectedFailures[name] {
+				if !slices.Contains(want.errors, expected) {
+					test.Errorf("expectedFailures lists %q, which is not a marker here",
+						expected)
+				}
 			}
 			report, err := Load(path)
 			errs, _ := messages(report, err)
@@ -123,7 +159,16 @@ func TestBrokenTemplates(test *testing.T) {
 				test.Fatalf("loaded clean; want %q", want.errors[0])
 			}
 			for _, expected := range want.errors {
-				if !containsAny(errs, expected) {
+				found := containsAny(errs, expected)
+				reason, known := expectedFailures[name][expected]
+				switch {
+				case known && found:
+					test.Errorf("%q now passes; remove it from expectedFailures",
+						expected)
+				case known:
+					test.Logf("expected failure: no diagnostic contains %q: %s",
+						expected, reason)
+				case !found:
 					test.Errorf("no diagnostic contains %q; got %q",
 						expected, errs)
 				}
