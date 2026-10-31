@@ -1,7 +1,8 @@
 # Changelog
 
-## [0.1.1] - 2026-10-18
+## [0.2.0] - 2026-10-26
 
+- Adopt documentation and validation templates from the Python project.
 - Update dependencies.
 
 ## [0.1.0] - 2026-09-05

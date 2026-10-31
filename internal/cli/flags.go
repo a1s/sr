@@ -166,3 +166,52 @@ func checkParams(command string, list *paramList, info sr.Info) error {
 	return usagef(command, "%s names no parameter; the template declares %s",
 		strings.Join(unknown, ", "), strings.Join(names, ", "))
 }
+
+// acceptList is the repeatable --accept flag: names to take in silence,
+// as a template's own `accept` node does.
+//
+// An --accept given twice is the one name, so unlike --param a repeat
+// is not a mistake: two places asking for the same name agree.
+type acceptList struct {
+	names []string
+}
+
+// String renders the flag's value for the flag package.
+func (list *acceptList) String() string {
+	if list == nil {
+		return ""
+	}
+	return strings.Join(list.names, ",")
+}
+
+// Set records one name. An empty one names nothing,
+// which is a mistake rather than a no-op.
+func (list *acceptList) Set(value string) error {
+	if value == "" {
+		return fmt.Errorf("--accept names a node or a property")
+	}
+	for _, name := range list.names {
+		if name == value {
+			return nil
+		}
+	}
+	list.names = append(list.names, value)
+	return nil
+}
+
+// acceptFlag registers --accept.
+func acceptFlag(set *flag.FlagSet, list *acceptList) {
+	set.Var(list, "accept", "accept a node or property name in silence")
+}
+
+// nameOptions turns the two name flags into load options.
+func nameOptions(strict bool, accept acceptList) []sr.LoadOption {
+	var out []sr.LoadOption
+	if strict {
+		out = append(out, sr.StrictNames())
+	}
+	if len(accept.names) > 0 {
+		out = append(out, sr.AcceptName(accept.names...))
+	}
+	return out
+}

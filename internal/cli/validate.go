@@ -14,6 +14,8 @@ func cmdValidate(env Env, args []string) error {
 		template    string
 		params      paramList
 		strictFonts bool
+		strictNames bool
+		accept      acceptList
 		quiet       bool
 		verbose     bool
 	)
@@ -21,6 +23,8 @@ func cmdValidate(env Env, args []string) error {
 	stringFlag(set, &template, "template", "t", "template file")
 	paramFlag(set, &params)
 	boolFlag(set, &strictFonts, "strict-fonts", "", "resolve only named font files")
+	boolFlag(set, &strictNames, "strict-names", "", "refuse any unknown node or property")
+	acceptFlag(set, &accept)
 	boolFlag(set, &quiet, "quiet", "q", "print nothing on success")
 	boolFlag(set, &verbose, "verbose", "v", "include host font diagnostics")
 
@@ -41,7 +45,7 @@ func cmdValidate(env Env, args []string) error {
 		return usagef("validate", "--template is required")
 	}
 
-	tpl, err := sr.LoadTemplate(template)
+	tpl, err := sr.LoadTemplate(template, nameOptions(strictNames, accept)...)
 	if err != nil {
 		return err
 	}
@@ -144,7 +148,9 @@ func writeCheck(
 		writeRows(out, items)
 	}
 	warnings := append([]string{}, loaded...)
-	warnings = append(warnings, fonts.Warnings...)
+	for _, warning := range fonts.Warnings {
+		warnings = append(warnings, warning.Message)
+	}
 	if len(warnings) > 0 {
 		out.line("warnings")
 		for _, warning := range warnings {

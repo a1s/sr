@@ -42,7 +42,7 @@ func (doc *Printout) WriteCBOR(writer io.Writer, dir string) error {
 		return err
 	}
 	out := bufio.NewWriter(writer)
-	enc := cbor.NewEncoder(out)
+	enc := cborMode.NewEncoder(out)
 	for _, obj := range objects {
 		if err := enc.Encode(obj); err != nil {
 			return err
@@ -95,7 +95,12 @@ func (doc *Printout) serializable(dir string) ([]any, error) {
 	header.SR = Version
 	header.Kind = "header"
 	header.Pages = len(doc.Pages)
-	header.Fonts = append([]FontEntry(nil), doc.Header.Fonts...)
+	// An empty table is written [] rather than null: the field is
+	// always present, and a reader that takes it as a list should
+	// not have to treat "no fonts used" as a different shape.
+	// A report whose only band is suppressed produces one.
+	header.Fonts = make([]FontEntry, 0, len(doc.Header.Fonts))
+	header.Fonts = append(header.Fonts, doc.Header.Fonts...)
 	for index := range header.Fonts {
 		if header.Fonts[index].absFile != "" {
 			header.Fonts[index].ResolvedFile = relativeTo(
@@ -103,7 +108,7 @@ func (doc *Printout) serializable(dir string) ([]any, error) {
 		}
 	}
 	if header.Data == nil {
-		header.Data = map[string]*Blob{}
+		header.Data = BlobTable{}
 	}
 
 	objects := []any{header}

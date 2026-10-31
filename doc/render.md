@@ -191,7 +191,11 @@ is one, names the source pixels that fill it. So there is no fitting to do.
 An image's bytes come from the header's [`data`](printout.md#data) table,
 or from the `file` the mark names, [resolved against the printout's own
 directory](printout.md#paths). Two marks reading one source share one
-embedded object.
+embedded object. How the bytes are embedded follows from what they are,
+read from their own signature as the engine [read them](template.md#image):
+the printout does not record the format. Bytes that are none of the three
+formats the engine reads, a PNG, a JPEG, or a GIF, cannot be read,
+whatever else they may be, and the render [fails](#errors) naming them.
 
 A baseline JPEG is embedded as it stands, keeping its own compression. Every
 other format is decoded and re-encoded as eight-bit samples -- grey where the
@@ -199,6 +203,20 @@ source is grey, RGB otherwise -- with a soft mask when any pixel is not opaque.
 Progressive and CMYK JPEGs take the decoding road too: the first is not
 universally supported by readers, and the second needs an inverted decode
 array that is easy to get wrong.
+
+An image that is decoded is drawn when its bytes give every pixel
+its header states. What follows the last pixel is not read, so a GIF
+whose image data run on past it, into codes that mean nothing, is drawn
+all the same. An image whose data end, or turn into codes that mean nothing,
+before its last pixel cannot be read, and the render [fails](#errors)
+naming it, rather than drawing a picture with part of it invented.
+Neither can a GIF whose first frame reaches past its logical screen,
+which the GIF specification forbids: the engine laid the image out
+at the size of the screen, and its pixels do not fit it.
+
+An image is read and decoded even where its mark draws nothing,
+in a box or a crop with no area, so one that cannot be read fails
+the render wherever it is. It is embedded only where a mark draws it.
 
 ## Barcodes
 
@@ -216,8 +234,9 @@ for no quiet zone -- the array opens with a **zero-length light run**.
   is set.
 - **2-D**: each row of `rows` alternates light and dark along the coding
   direction, starting with light, and each row is one module deep across it.
-  The quiet zone is part of the geometry: the outermost rows are wholly
-  light, and every other row opens and closes light.
+  Where the symbology has a quiet zone it is part of the geometry: the
+  outermost rows are wholly light, and every other row opens and closes
+  light. An Aztec symbol has none, and its rows open and close either way.
   With `vertical` set the symbol is turned a **quarter turn clockwise**:
   the coding direction runs down the page and the rows advance leftward
   from the box's right edge.
@@ -233,10 +252,14 @@ may ignore both and print the symbol in the only ink it has.
 ## Outline and links
 
 [`outline` marks](printout.md#outline) become the document outline.
-Their `level` builds the tree: an entry one deeper than its predecessor
-is its child. A level that jumps by more than one -- which the printout's
-own [invariants](printout.md#invariants) rule out -- is treated as one deeper
-rather than rejected.
+Their `level` builds the tree: an entry's parent is the nearest entry
+before it whose level is lower, which is how the engine
+[builds it](printout.md#outline) from the levels a template declares.
+So an entry one deeper than its predecessor is its child.
+A level that jumps by more than one -- which the printout's own
+[invariants](printout.md#invariants) rule out -- is one deeper
+rather than rejected, and the next entry at that level is its sibling:
+levels 1, 3, 3 give the first entry two children.
 
 Each entry's destination is `/XYZ` at the entry's own `x` and `y` on the page
 it appeared on, in that page's coordinates. An entry with children states how
@@ -249,29 +272,46 @@ An [`xref` mark](printout.md#xref) becomes a link annotation over its box,
 with no visible border. Its nested marks are drawn exactly as top-level marks
 are -- they carry page coordinates -- so the box is purely a hit region.
 `type="url"` becomes a URI action; `type="outline"` becomes a destination
-equal to the target entry's. A `caption` becomes the annotation's hover text.
+equal to the target entry's, which is the first entry in the document
+to carry the name where several do. A `caption` becomes the annotation's
+hover text.
 
 ## Fonts in the file
 
-Each font in the header becomes a **Type0 font with Identity-H encoding and
-a CIDFontType2 descendant**, carrying a subset of the face the printout names.
-The face is opened from its `resolvedFile`, or from the header `data` entry
-its `resolvedData` names, at the face index `resolvedIndex` states.
+Each face the header's [fonts](printout.md#fonts) name becomes a **Type0
+font with Identity-H encoding and a CIDFontType2 descendant**, carrying
+a subset of that face. The face is opened from an entry's `resolvedFile`,
+or from the header `data` entry its `resolvedData` names, at the face
+index `resolvedIndex` states, and at the first face when that is absent.
 
-A **code per character**, not per glyph. Code 0 is the face's empty glyph, and
-every character the document sets gets a code of its own, in code point order.
-Two characters that share a glyph -- a non-breaking space and a space, in most
-faces -- therefore get two codes, and a character the face
+**One font per face, not one per entry.** Entries that read the same bytes
+at the same face index share one font, whatever their names, sizes and
+flags, and whether they reached the face by `file`, by `data` or through
+the host. Nothing an entry adds to its face belongs in the font. The size
+is given where the text is shown, `underline` is a [rule](#underline)
+drawn under the line, and `bold` and `italic` describe the face rather
+than change it: the renderer draws the face it is given and synthesizes
+no weight or slant. So a face set at three sizes, or under two names,
+is embedded once.
+
+A **code per character**, not per glyph. Code 0 is the face's empty glyph,
+and every character the document sets in the face, under any entry that
+names it, gets a code of its own, in code point order. Two characters that
+share a glyph -- a non-breaking space and a space, in most faces --
+therefore get two codes, and a character the face
 [does not have](template.md#missing-glyphs) gets a code that draws the empty
 glyph. So the text reads back out of the file as exactly what the printout
 said, missing glyphs included, and stays searchable where a glyph is absent.
+What reads it back is the font's `ToUnicode` map, which takes each code
+to the one character it was given for.
 
-The widths the font dictionary states are the advances the engine measured,
-written to **three decimal places** of a thousandth of an em rather than
-rounded to whole thousandths. The file's numbers are then exact for the
-usual units per em, and the pen inside a shown string lands where the
-printout measured it to well under a thousandth of a point. Rounding
-to whole thousandths, which is what every writer surveyed in
+The widths the font dictionary states are the advances the engine measured.
+They are in thousandths of an em, so one dictionary serves every size the
+face is set at, and are written to **three decimal places** of a thousandth
+of an em rather than rounded to whole thousandths. The file's numbers are
+then exact for the usual units per em, and the pen inside a shown string
+lands where the printout measured it to well under a thousandth of a point.
+Rounding to whole thousandths, which is what every writer surveyed in
 [decisions.md](decisions.md#font-metrics-and-pdf) does, is what leaves
 a hundredth-of-a-point drift across a long line.
 
@@ -288,10 +328,12 @@ the baseline positive and the descent below it negative, whichever signs the
 face itself used: a face storing its descender as a magnitude is not rare,
 and copying that through would state a descent above the face's own baseline.
 
-The `BaseFont` name carries the six upper-case letters PDF requires in front of
-a subset, derived from the face and the glyphs it holds, so two subsets of one
-face differ and the same subset is stable across runs. The name after the tag
-is the face's own PostScript name.
+The `BaseFont` name carries the six upper-case letters PDF requires in front
+of a subset, derived from the face and the glyphs it holds. A document carries
+one subset of each face, but two documents usually carry different ones, and
+the tag keeps them apart where a tool combines the two files. The same subset
+is stable across runs. The name after the tag is the face's own PostScript
+name.
 
 ## Document metadata
 
@@ -332,6 +374,8 @@ a page with something missing from it:
 - A `text` mark naming a font the header does not carry.
 - A font file or image file that cannot be read, or a data entry
   the header does not hold. The diagnostic names the font or the file.
+- An image that is not a PNG, a JPEG, or a GIF, or that will not
+  [decode](#images). The diagnostic names the mark and its source.
 - A face with PostScript (CFF) outlines; see below.
 - An `xref type="outline"` whose target no outline entry claims -- a
   region that looks clickable and is not is worse than a stopped render.

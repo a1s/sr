@@ -8,8 +8,14 @@ page count.
 A Go library with a CLI over it. Template plus JSON in, PDF out,
 one static binary.
 
-> **Status:** everything in these documents is implemented and tested:
-> the engine, subreports, the PDF renderer and the command line.
+> **Status:** the engine, subreports, the PDF renderer and the command
+> line are implemented and tested. The documents have since been taken
+> further by a second implementation,
+> [s-reports](https://github.com/a1s/sr.py), which built against this one
+> as an oracle and wrote down the answers to questions they had left open.
+> Bringing this engine to the specification as it now stands is work in
+> progress, and the places where it does not yet agree are listed in that
+> project's divergence register.
 
 ## Documentation
 
@@ -17,11 +23,13 @@ one static binary.
 |---|---|
 | [doc/template.md](doc/template.md) | Template format: nodes, properties, geometry, ordering rules, font resolution |
 | [doc/expressions.md](doc/expressions.md) | Expression language, predefined names, formatting, variable semantics |
-| [doc/layout.md](doc/layout.md) | Layout and pagination |
+| [doc/layout.md](doc/layout.md) | Layout and pagination: rounding, line breaking, frames, splitting, deferred values |
 | [doc/printout.md](doc/printout.md) | The intermediate document a renderer consumes |
+| [doc/barcode.md](doc/barcode.md) | Barcode encoding: which symbol each type draws for a value |
 | [doc/render.md](doc/render.md) | PDF rendering: what a renderer decides, and what it must not |
 | [doc/cli.md](doc/cli.md) | The command line: subcommands, flags, streams, exit codes |
 | [doc/decisions.md](doc/decisions.md) | Why the design is what it is, and what it replaces |
+| [example/minimal/](example/minimal/) | The smallest complete report; its printout is the example in doc/printout.md |
 | [example/sakila/](example/sakila/) | Reference template and dataset |
 | [example/invoices/](example/invoices/) | Second example: both kinds of subreport, region grouping, the remaining variable modes |
 | [example/fonts/](example/fonts/) | Fonts committed so examples resolve identically everywhere |

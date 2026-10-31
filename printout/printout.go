@@ -21,19 +21,19 @@ type Printout struct {
 
 // Header is the printout's first line.
 type Header struct {
-	SR          int              `json:"sr"`
-	Kind        string           `json:"kind"`
-	Report      *ReportMeta      `json:"report,omitempty"`
-	Built       string           `json:"built"`
-	Engine      string           `json:"engine"`
-	StrictFonts bool             `json:"strictFonts"`
-	Pages       int              `json:"pages"`
-	GroupRuns   map[string]int   `json:"groupRuns,omitempty"`
-	GroupKeys   map[string]int   `json:"groupKeys,omitempty"`
-	Page        PageGeometry     `json:"page"`
-	Fonts       []FontEntry      `json:"fonts"`
-	Data        map[string]*Blob `json:"data"`
-	Warnings    []Warning        `json:"warnings,omitempty"`
+	SR          int          `json:"sr"`
+	Kind        string       `json:"kind"`
+	Report      *ReportMeta  `json:"report,omitempty"`
+	Built       string       `json:"built"`
+	Engine      string       `json:"engine"`
+	StrictFonts bool         `json:"strictFonts"`
+	Pages       int          `json:"pages"`
+	GroupRuns   CountTable   `json:"groupRuns,omitempty"`
+	GroupKeys   CountTable   `json:"groupKeys,omitempty"`
+	Page        PageGeometry `json:"page"`
+	Fonts       []FontEntry  `json:"fonts"`
+	Data        BlobTable    `json:"data"`
+	Warnings    []Warning    `json:"warnings,omitempty"`
 }
 
 // ReportMeta is what the template's report node carried.
@@ -104,10 +104,21 @@ type Blob struct {
 // Warning is a diagnostic about the document, recorded in the header
 // so an affected printout is identifiable from the artifact.
 type Warning struct {
-	// Kind is "overflow", "glyph", or "font".
-	Kind    string `json:"kind"`
-	Node    string `json:"node,omitempty"`
-	Record  int    `json:"record,omitempty"`
+	// Kind is "overflow", "glyph", "font", or "unknown".
+	Kind string `json:"kind"`
+	Node string `json:"node,omitempty"`
+	// Prop names the property the warning is about. A warning
+	// about a node carries none. See doc/printout.md#header-line.
+	Prop string `json:"prop,omitempty"`
+	// Record is the index of the record the warning was raised for,
+	// and is nil for one no record produced: a font that reached
+	// the substitute is found before any data is read, and a band
+	// built before the first record, a report title, is another.
+	//
+	// It is a pointer because record 0 is a record like any other,
+	// and a plain int with omitempty would drop the first record's
+	// warnings into the shape of a load diagnostic.
+	Record  *int   `json:"record,omitempty"`
 	Message string `json:"message"`
 }
 
@@ -116,6 +127,9 @@ const (
 	WarnOverflow = "overflow"
 	WarnGlyph    = "glyph"
 	WarnFont     = "font"
+	// WarnUnknown is a node or property the format does not define,
+	// accepted and ignored. See doc/template.md#unknown-names.
+	WarnUnknown = "unknown"
 )
 
 // Page is one page of marks.
@@ -349,11 +363,34 @@ func NewOutline() *Outline { return &Outline{Kind: "outline"} }
 func NewXref() *Xref { return &Xref{Kind: "xref"} }
 
 // AddWarning records a document warning in the header.
-func (doc *Printout) AddWarning(kind, node string, record int, message string) {
-	doc.Header.Warnings = append(doc.Header.Warnings, Warning{
-		Kind: kind, Node: node, Record: record, Message: message,
-	})
+//
+// Warnings stand in the order the build raised them, which is
+// the order they are added in. See doc/printout.md#header-line.
+func (doc *Printout) AddWarning(warning Warning) {
+	doc.Header.Warnings = append(doc.Header.Warnings, warning)
 }
+
+// AddLoadWarnings puts warnings that no record produced
+// at the head of the header's table.
+//
+// They were raised before any page was made: a template is read,
+// and the fonts it declares resolved, before the first band is measured.
+// Collecting them once the build is over is a convenience of the engine's
+// and must not move them past the warnings the pages raised.
+func (doc *Printout) AddLoadWarnings(warnings []Warning) {
+	if len(warnings) == 0 {
+		return
+	}
+	head := make([]Warning, 0, len(warnings)+len(doc.Header.Warnings))
+	head = append(head, warnings...)
+	doc.Header.Warnings = append(head, doc.Header.Warnings...)
+}
+
+// RecordIndex returns a record index as a warning carries it.
+//
+// Warning.Record is a pointer because record 0 is a record like any other,
+// and the format tells it apart from a warning no record produced.
+func RecordIndex(record int) *int { return &record }
 
 // HasWarning reports whether the header carries a warning of a kind.
 func (doc *Printout) HasWarning(kind string) bool {

@@ -1,6 +1,7 @@
 package barcodes
 
 import (
+	"github.com/a1s/sr/internal/geom"
 	"strconv"
 	"strings"
 	"testing"
@@ -162,13 +163,20 @@ func TestMeasure(test *testing.T) {
 	if err != nil {
 		test.Fatal(err)
 	}
+	// Every length is rounded to three decimals as it is computed, like
+	// any other coordinate: 33 modules of 0.72 pt is 23.759999999999998
+	// in binary64 and 23.76 in the printout.
 	metrics = Measure(twoD, module, false, 1000, 1000)
-	if metrics.Module != module || metrics.Length != float64(twoD.Modules)*module {
+	if metrics.Module != module ||
+		metrics.Length != geom.Round(float64(twoD.Modules)*module) {
 		test.Errorf("ungrown 2-D: %+v", metrics)
 	}
 	// grow recomputes the module for a 2-D type, keeping it square.
+	// The module is the longest whole number of thousandths that fits,
+	// so 64.8 pt over 33 modules is 1.963 and not 1.9636363636363636:
+	// a module rounded up draws a symbol larger than the box.
 	metrics = Measure(twoD, module, true, 64.8, 64.8)
-	if want := 64.8 / float64(twoD.Modules); metrics.Module != want {
+	if want := 1.963; metrics.Module != want {
 		test.Errorf("grown 2-D module = %v, want %v", metrics.Module, want)
 	}
 	if metrics.Length != metrics.Cross {

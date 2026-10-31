@@ -61,13 +61,6 @@ func (fr *frame) balanced() (host *frame, movable bool) {
 	return nil, movable
 }
 
-// recording reports whether a band placed here is one a balanced frame
-// may move afterwards, and so whether its marks have to be kept.
-func (fr *frame) recording() bool {
-	host, movable := fr.balanced()
-	return host != nil && movable
-}
-
 // block refuses to balance this frame's fragment.
 //
 // The fragment is started if it has not been already, because what blocks it

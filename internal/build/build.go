@@ -78,6 +78,16 @@ type shared struct {
 	glyphWarned map[string]bool
 	groupRuns   map[string]int
 	groupKeys   map[string]map[string]bool
+	// outlineXrefs is every xref of type "outline" the document built,
+	// in build order. Whether a target exists is only known when the
+	// document ends, since the entry may be on a later page.
+	outlineXrefs []xrefSite
+	// bands is every band committed to a page, for the margin check,
+	// which runs when the coordinates are final.
+	bands []bandSite
+	// overflowed is the bands already reported for fitting no frame,
+	// which are not reported a second time for leaving the page.
+	overflowed map[string]bool
 }
 
 // unit is one template's state, kept between the invocations of a subreport:
@@ -119,7 +129,6 @@ type engine struct {
 	frames *frameTree
 
 	records []*expr.Record
-	index   int
 
 	// args are the values a subreport's arg nodes supplied, evaluated in the
 	// host's context. They stand where the command line stands at the root.
@@ -172,6 +181,13 @@ func Build(report *tmpl.Report, rows []map[string]any, opts Options) (*printout.
 	}
 
 	eng.finish()
+	if err := eng.settleOutline(); err != nil {
+		return nil, err
+	}
+	if err := eng.checkMargins(); err != nil {
+		return nil, err
+	}
+	eng.pruneBlobs()
 	return eng.out, nil
 }
 
@@ -198,6 +214,7 @@ func newEngine(report *tmpl.Report, opts Options) *engine {
 		glyphWarned: map[string]bool{},
 		groupRuns:   map[string]int{},
 		groupKeys:   map[string]map[string]bool{},
+		overflowed:  map[string]bool{},
 	}
 	eng := &engine{
 		report:  report,
@@ -458,10 +475,11 @@ func (eng *engine) face(name string) (*fontres.Face, error) {
 	}
 	def, ok := eng.report.FontByName[name]
 	if !ok {
-		return nil, fmt.Errorf("no font named %q", name)
+		return nil, fmt.Errorf("no font named '%s'", name)
 	}
 	face, err := eng.resolver.Resolve(fontres.Request{
 		Name:      def.Name,
+		Node:      fontNodePath(def),
 		Typeface:  def.Typeface,
 		File:      def.File,
 		Data:      def.Data,
@@ -691,13 +709,37 @@ func (eng *engine) finish() {
 		}
 		eng.out.Header.GroupKeys = keys
 	}
+	// A load diagnostic and a font resolution were both raised before
+	// any page was made, so they stand at the head of the table however
+	// late they are gathered here. See doc/printout.md#header-line.
+	var head []printout.Warning
+
+	// A name the format does not define is a document warning:
+	// it was found while the template was read, before any data,
+	// so it carries no record. The other load diagnostics are
+	// about the template rather than the document, and stay
+	// out of the printout.
+	for _, diag := range eng.report.Warnings {
+		if diag.Unknown {
+			head = append(head, printout.Warning{
+				Kind:    printout.WarnUnknown,
+				Node:    diag.Path,
+				Prop:    diag.Prop,
+				Message: diag.Message,
+			})
+		}
+	}
 	// A typeface that reached the substitute is a document warning;
 	// a font file on the machine that this report did not use is not.
 	// Every template in the document resolves through a resolver of its own,
 	// so a subreport's substituted typeface is reported here too.
 	for _, resolver := range eng.doc.resolvers {
 		for _, warning := range resolver.Warnings {
-			eng.out.AddWarning(printout.WarnFont, "", 0, warning)
+			head = append(head, printout.Warning{
+				Kind:    printout.WarnFont,
+				Node:    warning.Node,
+				Message: warning.Message,
+			})
 		}
 		if eng.opts.Diagnostics != nil {
 			for _, diag := range resolver.Diagnostics {
@@ -705,14 +747,63 @@ func (eng *engine) finish() {
 			}
 		}
 	}
+	eng.out.AddLoadWarnings(head)
+}
+
+// noRecord is the record a diagnostic names
+// where no record produced what it is about.
+const noRecord = -1
+
+// recordIndex returns the record a diagnostic raised now names.
+//
+// ITEM_NUMBER is 1-based and is 0 until the first record is read,
+// which is where a report title and the first page header are built:
+// there the index a diagnostic wants is no index at all. Past the
+// last record it still names that record, which is the run a report
+// summary closes.  See doc/printout.md#header-line.
+func (eng *engine) recordIndex() int {
+	if eng.ctx.itemNumber == 0 {
+		return noRecord
+	}
+	return eng.ctx.itemNumber - 1
+}
+
+// warn records a document warning against a record,
+// or against none where record is noRecord.
+func (eng *engine) warn(kind, node string, record int, message string) {
+	warning := printout.Warning{Kind: kind, Node: node, Message: message}
+	if record != noRecord {
+		warning.Record = printout.RecordIndex(record)
+	}
+	eng.out.AddWarning(warning)
 }
 
 // overflow reports an oversized band, or records a warning
 // when the caller has asked for overflow to be tolerated.
 func (eng *engine) overflow(node, message string) error {
+	record := eng.recordIndex()
+	eng.doc.overflowed[overflowKey(node, record)] = true
+	return eng.overflowAt(node, record, message)
+}
+
+// overflowAt reports an oversized band or a band outside the printable area,
+// for a record that may not be the one being built: the margin check runs
+// when the document ends.
+func (eng *engine) overflowAt(node string, record int, message string) error {
 	if !eng.opts.AllowOverflow {
 		return fmt.Errorf("%s: %s", node, message)
 	}
-	eng.out.AddWarning(printout.WarnOverflow, node, eng.index, message)
+	eng.warn(printout.WarnOverflow, node, record, message)
 	return nil
+}
+
+// fontNodePath is the node path a font's warning names.
+//
+// A font resolved for a subreport belongs to that subreport's document,
+// and its node carries the path within it.
+func fontNodePath(def *tmpl.Font) string {
+	if def == nil || def.Node == nil {
+		return ""
+	}
+	return def.Node.Path()
 }

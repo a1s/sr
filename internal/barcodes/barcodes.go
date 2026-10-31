@@ -10,6 +10,7 @@ import (
 	"math"
 	"strings"
 
+	"github.com/a1s/sr/internal/geom"
 	"github.com/boombuler/barcode"
 	"github.com/boombuler/barcode/aztec"
 	"github.com/boombuler/barcode/code128"
@@ -314,21 +315,26 @@ func Measure(sym *Symbol, module float64, grow bool, boxLength, boxCross float64
 	metrics := Metrics{Module: module}
 	if sym.TwoD {
 		if grow {
-			fit := boxLength
-			if boxCross < fit {
-				fit = boxCross
+			// The module that fills the box's shorter side,
+			// and never smaller than the one declared. A box
+			// whose height is the symbol's own content height
+			// leaves nothing to expand into down the page, so a
+			// symbol given a width and no height keeps its module.
+			fitted := fill(boxLength, sym.Modules)
+			if across := fill(boxCross, sym.CrossModules); across < fitted {
+				fitted = across
 			}
-			if modules := float64(sym.Modules); modules > 0 && fit/modules > module {
-				metrics.Module = fit / modules
+			if fitted > metrics.Module {
+				metrics.Module = fitted
 			}
 		}
-		metrics.Length = float64(sym.Modules) * metrics.Module
-		metrics.Cross = float64(sym.CrossModules) * metrics.Module
+		metrics.Length = geom.Round(metrics.Module * float64(sym.Modules))
+		metrics.Cross = geom.Round(metrics.Module * float64(sym.CrossModules))
 		return metrics
 	}
 
-	metrics.Length = float64(sym.Modules) * metrics.Module
-	minHeight := metrics.Length * MinHeightRatio
+	metrics.Length = geom.Round(metrics.Module * float64(sym.Modules))
+	minHeight := geom.Round(metrics.Length * MinHeightRatio)
 	if minHeight < MinHeightPt {
 		minHeight = MinHeightPt
 	}
@@ -337,4 +343,21 @@ func Measure(sym *Symbol, module float64, grow bool, boxLength, boxCross float64
 		metrics.Cross = boxCross
 	}
 	return metrics
+}
+
+// fill is the longest whole number of thousandths of a point
+// that count modules fit into side.
+//
+// It is computed in whole numbers because a binary64 quotient rounded down
+// loses a thousandth that fits about one time in nine: 22.185 over 29 modules
+// is 0.765 exactly, and floor(22.185 / 29 * 1000) is 764. It is the one length
+// in the engine that is not rounded half away from zero, because a module
+// rounded up would draw a symbol larger than the box it was made to fill.
+// See doc/layout.md#a-barcode-in-its-box.
+func fill(side float64, count int) float64 {
+	if count <= 0 || side <= 0 {
+		return 0
+	}
+	thousandths := int64(math.Round(side * 1000))
+	return float64(thousandths/int64(count)) / 1000
 }

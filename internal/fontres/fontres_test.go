@@ -53,7 +53,7 @@ func TestDeclaredStyleAgainstTheFile(test *testing.T) {
 	if len(resolver.Warnings) != 1 {
 		test.Fatalf("want one warning, got %v", resolver.Warnings)
 	}
-	if !strings.Contains(resolver.Warnings[0], `"body"`) || !strings.Contains(resolver.Warnings[0], "bold") {
+	if !strings.Contains(resolver.Warnings[0].Message, `"body"`) || !strings.Contains(resolver.Warnings[0].Message, "bold") {
 		test.Errorf("warning = %q, want it to name the font and the style", resolver.Warnings[0])
 	}
 
@@ -320,7 +320,11 @@ func TestAliasIsConsultedAfterTheHost(test *testing.T) {
 	}
 	// A substitute is a guess, so the dependable signal is the field plus a
 	// warning naming the typeface.
-	joined := strings.Join(resolver.Warnings, "\n")
+	var lines []string
+	for _, warning := range resolver.Warnings {
+		lines = append(lines, warning.Message)
+	}
+	joined := strings.Join(lines, "\n")
 	if !strings.Contains(joined, "Helvetica") {
 		test.Errorf("want a warning naming the typeface, got %q", joined)
 	}
@@ -337,7 +341,7 @@ func TestMonospaceCheckCatchesAProportionalFace(test *testing.T) {
 	if len(resolver.Warnings) == 0 {
 		test.Error("Go Regular is proportional; the check must warn")
 	}
-	if !strings.Contains(resolver.Warnings[0], "not monospaced") {
+	if !strings.Contains(resolver.Warnings[0].Message, "not monospaced") {
 		test.Errorf("warning = %q", resolver.Warnings[0])
 	}
 }

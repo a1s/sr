@@ -17,7 +17,13 @@ import (
 // one call loads the whole tree, so a build never touches the filesystem
 // for a document it has not already validated.
 func Load(file string) (*Report, error) {
-	return loadFile(file, nil, map[string]*Report{})
+	return LoadWith(file, LoadOptions{})
+}
+
+// LoadWith reads and validates a template under
+// the load-time choices the command line offers.
+func LoadWith(file string, opts LoadOptions) (*Report, error) {
+	return loadFile(file, nil, map[string]*Report{}, opts)
 }
 
 // loadFile reads one template.
@@ -27,22 +33,29 @@ func Load(file string) (*Report, error) {
 // in this call, so a template two subreports both name is read once: without it
 // a diamond of includes is re-read once per path through it, and its warnings
 // would arrive once per path too.
-func loadFile(file string, stack []string, loaded map[string]*Report) (*Report, error) {
+func loadFile(
+	file string, stack []string, loaded map[string]*Report, opts LoadOptions,
+) (*Report, error) {
 	nodes, err := kdl.ParseFile(file)
 	if err != nil {
 		return nil, err
 	}
-	return build(file, nodes, stack, loaded)
+	return build(file, nodes, stack, loaded, opts)
 }
 
 // LoadString reads and validates a template from a string.
 // The name is used in diagnostics and as the base for relative paths.
 func LoadString(src, name string) (*Report, error) {
+	return LoadStringWith(src, name, LoadOptions{})
+}
+
+// LoadStringWith reads a template from memory under load options.
+func LoadStringWith(src, name string, opts LoadOptions) (*Report, error) {
 	nodes, err := kdl.ParseString(src, name)
 	if err != nil {
 		return nil, err
 	}
-	return build(name, nodes, nil, map[string]*Report{})
+	return build(name, nodes, nil, map[string]*Report{}, opts)
 }
 
 func build(
@@ -50,8 +63,9 @@ func build(
 	nodes []*kdl.Node,
 	stack []string,
 	loaded map[string]*Report,
+	opts LoadOptions,
 ) (*Report, error) {
-	psr := &parser{file: file, stack: stack, loaded: loaded}
+	psr := &parser{file: file, stack: stack, loaded: loaded, opts: opts}
 	if len(nodes) != 1 || nodes[0].Name != "report" {
 		psr.errf(nil, "", "a template's root node is a single `report`")
 		return nil, psr.diags
@@ -98,7 +112,7 @@ func (psr *parser) loadSubreport(sub *Subreport, baseDir, here string) {
 	path = cleanPath(path)
 	if path == here || contains(psr.stack, path) {
 		psr.errf(sub.Node, "template",
-			"%s includes itself, directly or through another subreport",
+			"%s reaches the template it came from, directly or through another subreport",
 			filepath.Base(path))
 		return
 	}
@@ -109,7 +123,7 @@ func (psr *parser) loadSubreport(sub *Subreport, baseDir, here string) {
 		return
 	}
 	child, err := loadFile(path,
-		append(append([]string{}, psr.stack...), here), psr.loaded)
+		append(append([]string{}, psr.stack...), here), psr.loaded, psr.opts)
 	if err != nil {
 		var diags DiagnosticList
 		if errors.As(err, &diags) {
@@ -143,6 +157,9 @@ func contains(list []string, want string) bool {
 }
 
 func (psr *parser) parseReport(node *kdl.Node) *Report {
+	// The accept list is read before anything else, so that a name
+	// registered at the foot of a template is accepted at its head.
+	psr.collectAccept(node)
 	psr.noArgs(node)
 	pr := psr.props(node)
 	report := &Report{
@@ -168,7 +185,7 @@ func (psr *parser) parseReport(node *kdl.Node) *Report {
 	}
 	pr.done()
 
-	psr.allowChildren(node, "parameter", "records", "variable", "font", "data", "layout")
+	psr.allowChildren(node, "accept", "parameter", "records", "variable", "font", "data", "layout")
 
 	for _, child := range node.ChildrenNamed("parameter") {
 		if param := psr.parseParameter(child); param != nil {
@@ -196,7 +213,7 @@ func (psr *parser) parseReport(node *kdl.Node) *Report {
 	lay := node.ChildrenNamed("layout")
 	switch len(lay) {
 	case 0:
-		psr.errf(node, "", "a report needs exactly one `layout`")
+		psr.errf(node, "", "a report has exactly one `layout`")
 	case 1:
 		report.Layout = psr.parseLayout(lay[0])
 	default:
@@ -225,11 +242,11 @@ func (psr *parser) parseParameter(node *kdl.Node) *Parameter {
 	pr.done()
 	psr.allowChildren(node)
 	if param.HasDefault && param.DefaultExpr != nil {
-		psr.errf(node, "default", "at most one of default and defaultexpr")
+		psr.errf(node, "default", "default and defaultexpr are alternatives")
 	}
 	if param.Format != "" && !param.Type.IsTemporal() {
 		psr.errf(node, "format",
-			"a parsing layout applies only to a date or datetime parameter, not %s",
+			"format reads a date, and this parameter is a %s",
 			param.Type)
 	}
 	return param
@@ -254,7 +271,7 @@ func (psr *parser) parseRecords(node *kdl.Node) *Records {
 		psr.allowChildren(child)
 		if member.Format != "" && !member.Type.IsTemporal() {
 			psr.errf(child, "format",
-				"a parsing layout applies only to a date or datetime member, not %s",
+				"format reads a date, and this member is a %s",
 				member.Type)
 		}
 		if _, dup := recs.ByName[name]; dup {
@@ -291,10 +308,12 @@ func (psr *parser) parseVariable(node *kdl.Node) *Variable {
 	pr.done()
 	psr.allowChildren(node)
 	if variable.Iter == ScopeGroup && variable.IterGrp == "" {
-		psr.errf(node, "itergrp", "iter=\"group\" needs the group's name")
+		psr.errf(node, "itergrp",
+			"iter=\"group\" names the group with an itergrp")
 	}
 	if variable.Reset == ScopeGroup && variable.ResetGrp == "" {
-		psr.errf(node, "resetgrp", "reset=\"group\" needs the group's name")
+		psr.errf(node, "resetgrp",
+			"reset=\"group\" names the group with a resetgrp")
 	}
 	return variable
 }
@@ -323,13 +342,13 @@ func (psr *parser) parseFont(node *kdl.Node) *Font {
 		}
 	}
 	if sources != 1 {
-		psr.errf(node, "", "exactly one of typeface, file or data is required")
+		psr.errf(node, "", "a font names exactly one of typeface, file or data")
 	}
 	// bold and italic select a face only when resolving by typeface. With file
 	// or data they select nothing, but they are not an error: they describe the
 	// face the template named, and travel to the printout's font entry.
 	if font.Size <= 0 {
-		psr.errf(node, "size", "must be positive")
+		psr.errf(node, "size", "a font size must be positive")
 	}
 	return font
 }
@@ -364,7 +383,7 @@ func (psr *parser) parseData(node *kdl.Node) *DataBlob {
 		psr.errf(node, "compress", "unknown compression %q; want zlib or gzip", blob.Compress)
 	}
 	if (blob.Expr != nil) == blob.HasBody {
-		psr.errf(node, "", "exactly one of expr and a content child is required")
+		psr.errf(node, "", "a data node holds exactly one of expr or a content child")
 	}
 	return blob
 }
@@ -397,7 +416,7 @@ func (psr *parser) parseLayout(node *kdl.Node) *Layout {
 	case width.Set && height.Set:
 		layout.Page = geom.PageSize{Width: width.Value, Height: height.Value}
 	default:
-		psr.errf(node, "pagesize", "either pagesize, or both width and height, is required")
+		psr.errf(node, "pagesize", "a layout needs a pagesize, or both a width and a height")
 	}
 	if layout.Landscape {
 		layout.Page.Width, layout.Page.Height = layout.Page.Height, layout.Page.Width
@@ -461,14 +480,16 @@ func (psr *parser) parseBody(node *kdl.Node, allowHeaderFooter bool) Body {
 		if allowHeaderFooter {
 			body.Header = psr.parseSection(header, BandHeader)
 		} else {
-			psr.errf(header, "", "a group has no page header; use its columns block, or title")
+			psr.errf(header, "",
+				"a group has no page header; use its columns block, or title")
 		}
 	}
 	if footer := psr.atMostOne(node, "footer"); footer != nil {
 		if allowHeaderFooter {
 			body.Footer = psr.parseSection(footer, BandFooter)
 		} else {
-			psr.errf(footer, "", "a group has no page footer; use its columns block, or summary")
+			psr.errf(footer, "",
+				"a group has no page footer; use its columns block, or summary")
 		}
 	}
 	if child := psr.atMostOne(node, "columns"); child != nil {
@@ -478,13 +499,13 @@ func (psr *parser) parseBody(node *kdl.Node, allowHeaderFooter bool) Body {
 	detail := psr.atMostOne(node, "detail")
 	switch {
 	case group != nil && detail != nil:
-		psr.errf(detail, "", "exactly one of group and detail at each level")
+		psr.errf(detail, "", "a group holds exactly one group or one detail")
 	case group != nil:
 		body.Group = psr.parseGroup(group)
 	case detail != nil:
 		body.Detail = psr.parseSection(detail, BandDetail)
 	default:
-		psr.errf(node, "", "exactly one of group and detail is required here")
+		psr.errf(node, "", "a layout holds exactly one group or one detail")
 	}
 	return body
 }
@@ -583,6 +604,8 @@ func (psr *parser) parseSection(node *kdl.Node, kind SectionKind) *Section {
 			section.Height = geom.Unset()
 		} else {
 			section.Height = pr.dimValue("height", value)
+			psr.refuseNegative(pr, section.Height, "height",
+				"height must not be negative; a negative bottom is what reaches past the container")
 		}
 	}
 	section.PrintWhen = pr.expression("printwhen")
@@ -697,10 +720,11 @@ func (psr *parser) parseSubreport(node *kdl.Node) *Subreport {
 		subreport.Args = append(subreport.Args, arg)
 	}
 	if (subreport.Template != "") == (subreport.Embedded != "") {
-		psr.errf(node, "", "exactly one of template and embedded is required")
+		psr.errf(node, "", "a subreport names exactly one of template or embedded")
 	}
 	if subreport.Inline && subreport.OwnPageNo {
-		psr.errf(node, "ownpageno", "inline shares the parent's pagination, so it cannot restart numbering")
+		psr.errf(node, "ownpageno",
+			"an inline subreport prints on the host's pages, so it cannot restart their numbering")
 	}
 	return subreport
 }
@@ -735,7 +759,7 @@ func (psr *parser) geometry(pr *props, widthIsExtent bool) (geom.Extent, geom.Ex
 	horiz.Near = pr.dim("left")
 	if alias := pr.dim("x"); alias.Set {
 		if horiz.Near.Set {
-			psr.errf(pr.node, "x", "x is an alias for left; give one of them")
+			psr.errf(pr.node, "x", "left and x are the same property; give one of them")
 		}
 		horiz.Near = alias
 	}
@@ -748,7 +772,7 @@ func (psr *parser) geometry(pr *props, widthIsExtent bool) (geom.Extent, geom.Ex
 	vert.Near = pr.dim("top")
 	if alias := pr.dim("y"); alias.Set {
 		if vert.Near.Set {
-			psr.errf(pr.node, "y", "y is an alias for top; give one of them")
+			psr.errf(pr.node, "y", "top and y are the same property; give one of them")
 		}
 		vert.Near = alias
 	}
@@ -757,12 +781,33 @@ func (psr *parser) geometry(pr *props, widthIsExtent bool) (geom.Extent, geom.Ex
 	vert.Max = pr.dim("maxheight")
 
 	if horiz.Count() > 2 {
-		psr.errf(pr.node, "width", "at most two of left, right and width; the third follows")
+		psr.errf(pr.node, "width",
+			"left, right and width are one too many; give two and the third follows")
 	}
 	if vert.Count() > 2 {
-		psr.errf(pr.node, "height", "at most two of top, bottom and height; the third follows")
+		psr.errf(pr.node, "height",
+			"top, bottom and height are one too many; give two and the third follows")
 	}
+
+	// A size is never negative: an extent below zero describes no box.
+	// What a negative size might have been meant to do, reach past the
+	// container, is what a negative offset is for, and that stays legal.
+	if widthIsExtent {
+		psr.refuseNegative(pr, horiz.Size, "width",
+			"width must not be negative; a negative right is what reaches past the container")
+	}
+	psr.refuseNegative(pr, vert.Size, "height",
+		"height must not be negative; a negative bottom is what reaches past the container")
+	psr.refuseNegative(pr, horiz.Max, "maxwidth", "maxwidth must not be negative")
+	psr.refuseNegative(pr, vert.Max, "maxheight", "maxheight must not be negative")
 	return horiz, vert
+}
+
+// refuseNegative reports a size given below zero.
+func (psr *parser) refuseNegative(pr *props, value geom.Opt, prop, message string) {
+	if value.Set && value.Value < 0 {
+		psr.errf(pr.node, prop, "%s", message)
+	}
 }
 
 func (psr *parser) common(pr *props, widthIsExtent bool) Common {
@@ -786,6 +831,7 @@ func (psr *parser) content(pr *props) Content {
 	content.EvalTime = pr.str("evaltime", "")
 	content.Format = pr.str("format", "%s")
 	if src, ok := pr.strOpt("expr"); ok {
+		content.HasExpr = true
 		content.Expr = psr.compile(pr.node, "expr", src, content.EvalTime != "")
 	}
 	if text, ok := pr.strOpt("text"); ok {
@@ -797,7 +843,7 @@ func (psr *parser) content(pr *props) Content {
 
 func (psr *parser) checkContent(node *kdl.Node, content *Content, needsPlaceholder bool) {
 	sources := 0
-	if content.Expr != nil {
+	if content.HasExpr {
 		sources++
 	}
 	if content.HasText {
@@ -808,22 +854,25 @@ func (psr *parser) checkContent(node *kdl.Node, content *Content, needsPlacehold
 	}
 	if !content.Deferred() {
 		if sources != 1 {
-			psr.errf(node, "", "exactly one of expr, text and data is required")
+			psr.errf(node, "",
+				"a %s without evaltime takes exactly one of expr, text or "+
+					"data; this one has %d", node.Name, sources)
 		}
 		return
 	}
-	if content.Expr == nil {
-		psr.errf(node, "evaltime", "a deferred element takes its content from expr, which is what gets deferred")
+	if !content.HasExpr {
+		psr.errf(node, "evaltime", "evaltime defers the expr, so there has to be one")
 	}
 	placeholders := sources
-	if content.Expr != nil {
+	if content.HasExpr {
 		placeholders--
 	}
 	if placeholders > 1 {
 		psr.errf(node, "", "at most one placeholder beside expr")
 	}
 	if needsPlaceholder && placeholders == 0 {
-		psr.errf(node, "text", "this element's size depends on its content, so a deferred value needs a placeholder to reserve space with")
+		psr.errf(node, "text",
+			"this element's size depends on its content, so a deferred one needs a text or data placeholder")
 	}
 }
 
@@ -907,13 +956,13 @@ func (psr *parser) parseImage(node *kdl.Node) *Image {
 		}
 	}
 	if sources != 1 {
-		psr.errf(node, "", "exactly one of file, data and a content child is required")
+		psr.errf(node, "", "an image takes exactly one of file, data or a content child")
 	}
 	if !image.Embed && image.File == "" {
 		// embed=#false writes a path into the printout instead of the bytes,
 		// and only `file` supplies one.
 		psr.errf(node, "embed",
-			"embed=#false records a reference to the image file, so it needs file=; data and a content child are always embedded")
+			"embed=#false writes a file reference, so it needs file=; data and a content child are always embedded")
 	}
 	switch image.Type {
 	case "", "png", "jpeg", "gif":
@@ -943,7 +992,7 @@ func (psr *parser) parseBarcode(node *kdl.Node) *Barcode {
 		psr.errf(node, "type", "unknown barcode type %q", barcode.Type)
 	}
 	if barcode.Module <= 0 {
-		psr.errf(node, "module", "must be positive")
+		psr.errf(node, "module", "a barcode module must be positive")
 	}
 	psr.checkBarcodeContrast(node, barcode)
 	// A barcode's box always grows along the coding direction, so a deferred

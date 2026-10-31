@@ -21,6 +21,9 @@ type Diagnostic struct {
 	Path    string
 	Prop    string
 	Message string
+	// Unknown marks a diagnostic about a name the format does not define,
+	// which reaches the printout header as a warning of kind "unknown".
+	Unknown bool
 }
 
 // Error renders the diagnostic.
@@ -66,9 +69,28 @@ type parser struct {
 	diags    DiagnosticList
 	warns    DiagnosticList
 	programs []programSite
+	// opts are the load-time choices the command line offers.
+	opts LoadOptions
+	// accepted is the names this document says are deliberate:
+	// its own `accept` nodes and the build's --accept.
+	accepted map[string]bool
 }
 
 func (psr *parser) errf(node *kdl.Node, prop, format string, args ...any) {
+	psr.diags = append(psr.diags, psr.diagnostic(node, prop, format, args...))
+}
+
+// warnf records a diagnostic that does not stop the template loading.
+func (psr *parser) warnf(node *kdl.Node, prop, format string, args ...any) {
+	psr.warns = append(psr.warns, psr.diagnostic(node, prop, format, args...))
+}
+
+// diagnostic builds one diagnostic at a node.
+func (psr *parser) diagnostic(
+	node *kdl.Node,
+	prop, format string,
+	args ...any,
+) Diagnostic {
 	diag := Diagnostic{
 		File:    psr.file,
 		Path:    "<document>",
@@ -78,7 +100,7 @@ func (psr *parser) errf(node *kdl.Node, prop, format string, args ...any) {
 	if node != nil {
 		diag.Line, diag.Path = node.Line, node.Path()
 	}
-	psr.diags = append(psr.diags, diag)
+	return diag
 }
 
 // props reads a node's properties, tracking which were consumed
@@ -100,10 +122,17 @@ func (pr *props) raw(key string) (kdl.Value, bool) {
 }
 
 // done reports every property the node carried that nothing read.
+//
+// A property this format does not define is accepted rather than refused;
+// what is reported depends on the name. See unknown.go.
 func (pr *props) done() {
+	legal := make([]string, 0, len(pr.used))
+	for key := range pr.used {
+		legal = append(legal, key)
+	}
 	for _, key := range pr.node.PropNames() {
 		if !pr.used[key] {
-			pr.psr.errf(pr.node, key, "unknown property")
+			pr.psr.unknownProp(pr.node, key, legal)
 		}
 	}
 }
@@ -281,6 +310,10 @@ func (psr *parser) noArgs(node *kdl.Node) {
 }
 
 // allowChildren reports any child whose name is not in the allowed set.
+//
+// A node this format does not define is accepted rather than refused,
+// and is then not read: its properties and its children are part
+// of the thing the format does not define. See unknown.go.
 func (psr *parser) allowChildren(node *kdl.Node, allowed ...string) {
 	set := map[string]bool{}
 	for _, name := range allowed {
@@ -288,8 +321,7 @@ func (psr *parser) allowChildren(node *kdl.Node, allowed ...string) {
 	}
 	for _, child := range node.Children {
 		if !set[child.Name] {
-			psr.errf(child, "", "unexpected node here; %s accepts: %s",
-				node.Name, strings.Join(allowed, " "))
+			psr.unknownNode(child, allowed)
 		}
 	}
 }

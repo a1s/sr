@@ -529,7 +529,12 @@ type Element interface {
 
 // Content is where a field's or barcode's text comes from.
 type Content struct {
-	Expr     *expr.Program
+	Expr *expr.Program
+	// HasExpr reports that an expr property was written, whether
+	// or not it compiled. An expression that did not compile
+	// has been reported already, and counting it as absent
+	// would report it a second time as a missing content source.
+	HasExpr  bool
 	Text     string
 	HasText  bool
 	Data     string
@@ -537,8 +542,8 @@ type Content struct {
 	Format   string
 }
 
-// Deferred reports whether the element's expression is evaluated at the end
-// of a scope rather than where the element sits.
+// Deferred reports whether the element's expression is evaluated
+// at the end of a scope rather than where the element sits.
 func (content *Content) Deferred() bool { return content.EvalTime != "" }
 
 // HasPlaceholder reports whether a deferred element carries

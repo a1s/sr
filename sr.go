@@ -42,19 +42,51 @@ type Template struct {
 // required properties, name collisions, geometry over-specification,
 // content sources, and expression syntax are all load-time diagnostics
 // rather than surprises mid-report.
-func LoadTemplate(path string) (*Template, error) {
-	report, err := tmpl.Load(path)
+func LoadTemplate(path string, options ...LoadOption) (*Template, error) {
+	report, err := tmpl.LoadWith(path, loadOptions(options))
 	if err != nil {
 		return nil, err
 	}
 	return &Template{report: report}, nil
 }
 
+// LoadOption configures a load.
+//
+// The two choices a load offers are about names the format does
+// not define, which is the one thing a template can carry that an
+// engine has to decide what to do with rather than simply read.
+type LoadOption func(*tmpl.LoadOptions)
+
+// StrictNames makes every unknown node or property an error.
+//
+// An `x-` name and one the template or AcceptName registers stay silent:
+// each is already a statement that the name is deliberate, which is the
+// only question strictness asks.
+func StrictNames() LoadOption {
+	return func(opts *tmpl.LoadOptions) { opts.StrictNames = true }
+}
+
+// AcceptName takes the named node or property in silence, in every
+// template of the build, as a template's own `accept` node does.
+func AcceptName(names ...string) LoadOption {
+	return func(opts *tmpl.LoadOptions) {
+		opts.Accept = append(opts.Accept, names...)
+	}
+}
+
+func loadOptions(options []LoadOption) tmpl.LoadOptions {
+	var opts tmpl.LoadOptions
+	for _, option := range options {
+		option(&opts)
+	}
+	return opts
+}
+
 // ParseTemplate reads a template from memory.
 //
 // name is used in diagnostics and as the base for relative paths.
-func ParseTemplate(name, source string) (*Template, error) {
-	report, err := tmpl.LoadString(source, name)
+func ParseTemplate(name, source string, options ...LoadOption) (*Template, error) {
+	report, err := tmpl.LoadStringWith(source, name, loadOptions(options))
 	if err != nil {
 		return nil, err
 	}
