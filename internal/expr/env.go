@@ -2,6 +2,7 @@ package expr
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	gotime "time"
@@ -163,6 +164,11 @@ func builtinQuantize(
 	dec, ok := value.(Decimal)
 	if !ok {
 		return nil, fmt.Errorf("quantize(): want a decimal, got %s", value.Type())
+	}
+	// Quantize takes an int32, and converting a larger count would wrap
+	// it to a different one.
+	if places < math.MinInt32 || places > math.MaxInt32 {
+		return nil, fmt.Errorf("quantize(): %d places is out of range", places)
 	}
 	return dec.Quantize(int32(places)), nil
 }

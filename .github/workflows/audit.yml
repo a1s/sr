@@ -1,0 +1,98 @@
+name: Audit
+
+# Known vulnerabilities, in the Go modules and in the actions.
+#
+# Kept apart from test.yml, which is the bar a pull request
+# and a tag are held to.  The advisories change from day to day,
+# so their answer for one commit does too, and a tag must not fail
+# on an advisory published after its pull request was merged.
+# The release does not call this file.
+#
+# Pull requests and pushes to main get a run, as they do in test.yml.
+# The weekly one reports an advisory published against a main that
+# has not moved.  GitHub sends the failures of a scheduled run to
+# whoever last edited the schedule.  The keepalive job stops GitHub
+# turning the schedule off while main is quiet, which is when it matters most.
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  schedule:
+    # Mondays, off the hour, when scheduled runs bunch up.
+    - cron: '23 5 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# The same rule as test.yml: a new push makes a pull request's run stale.
+concurrency:
+  group: audit-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # govulncheck checks the code against the Go vulnerability database,
+  # once per platform the release ships a binary for.
+  # The standard library is checked too, at the version setup-go installs
+  # from go.mod, which is the version the release builds with.
+  modules:
+    name: Go modules
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # No cache: setup-go keys it on go.sum alone, so this job would
+      # share one with test.yml, and what runs here is not pinned.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      # Not pinned: its answer moves with the database,
+      # whichever version asks.  The job holds no token and
+      # saves no cache, so what it runs reaches no other run.
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+      - run: make audit-packages
+
+  # zizmor's online audits, which ask GitHub about the actions
+  # the workflows pin.  The token reaches this step alone.
+  actions:
+    name: Actions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # From the requirements file test.yml installs from,
+      # so both read the workflows alike.
+      - name: Install zizmor
+        run: |
+          python3 -m venv "$RUNNER_TEMP/zizmor"
+          "$RUNNER_TEMP/zizmor/bin/pip" install --require-hashes \
+            --only-binary :all: -r .github/zizmor/requirements.txt
+      - name: Audit the actions
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: make audit-actions ZIZMOR="$RUNNER_TEMP/zizmor/bin/zizmor"
+
+  # In a public repository, GitHub turns a schedule off after 60 days
+  # with no activity, and a scheduled run is not activity.  Enabling the
+  # workflow again each week keeps it on.  GitHub does not document that
+  # this resets the count; the tools that keep schedules alive rely on it.
+  # Should it stop working, the Actions tab shows Audit as disabled.
+  keepalive:
+    name: Keep the schedule on
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    # The job checks nothing out and runs nothing but the one call.
+    permissions:
+      actions: write # to enable this workflow
+    steps:
+      - name: Enable this workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh api --method PUT
+          "repos/$GITHUB_REPOSITORY/actions/workflows/audit.yml/enable"

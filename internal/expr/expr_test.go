@@ -347,6 +347,16 @@ func TestFormatArgumentCountMustMatch(test *testing.T) {
 	}
 }
 
+func TestFormatRejectsAPrecisionPastInt32(test *testing.T) {
+	dec, _ := ParseDecimal("1.5")
+	// Narrowed to an int32, the first would be %.2f and the second %.-1f.
+	for _, spec := range []string{"%.4294967298f", "%.10000000000000000000f"} {
+		if got, err := Format(spec, []starlark.Value{dec}); err == nil {
+			test.Errorf("Format(%q) = %q, want an error", spec, got)
+		}
+	}
+}
+
 func TestFormatArgsSpreadsATuple(test *testing.T) {
 	tup := starlark.Tuple{starlark.String("a"), starlark.MakeInt(1)}
 	if got := FormatArgs(tup); len(got) != 2 {
