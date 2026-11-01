@@ -7,14 +7,19 @@ name: Test
 # Pushes to main are covered too: a PR is tested against its own merge
 # commit, which is not what ends up on the branch after other PRs land.
 #
-# What sets the bar is pinned: the actions to commits, and
-# golangci-lint and zizmor to versions.  A tag is then held
-# to the bar its pull request met.  Dependabot moves the actions;
-# the linters move in a pull request of their own.
+# What sets the bar is pinned: the actions to commits, golangci-lint
+# to a version Go's checksum database vouches for, and zizmor to the
+# hashes of its files.  A tag is then held to the bar its pull request met.
+# Dependabot moves the actions and zizmor; golangci-lint moves in a pull
+# request of its own.
 #
 # A check that looks up advisories stays out of this file: it would raise
 # the bar every time one is published, whatever the pull request met.
 # audit.yml runs those, and the release does not wait for it.
+#
+# A tag's run restores no Go cache.  Go reuses a compiled package or a
+# test result it finds there, and other runs write the cache, so the
+# checks a release waits for would be partly theirs.
 on:
   pull_request:
   push:
@@ -46,7 +51,7 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-          cache: true
+          cache: ${{ !startsWith(github.ref, 'refs/tags/') }}
       - name: Check gofmt
         run: |
           set -euo pipefail
@@ -76,7 +81,7 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-          cache: true
+          cache: ${{ !startsWith(github.ref, 'refs/tags/') }}
       # Called directly rather than through `make vet` and `make test`:
       # the makefile wants a POSIX shell, which the Windows runner does
       # not give it by default.  The targets run the same two commands.
@@ -85,7 +90,8 @@ jobs:
 
   # golangci-lint carries gosec, which reads the code for calls that are
   # risky on untrusted input, and zizmor reads the workflows.  Both are in
-  # `make lint`, so a run here and a run at a desk check the same things.
+  # `make lint`, which reads each platform's files whichever one it runs
+  # on, so a run here and a run at a desk check the same things.
   lint:
     name: Lint
     runs-on: ubuntu-latest
@@ -96,7 +102,7 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-          cache: true
+          cache: ${{ !startsWith(github.ref, 'refs/tags/') }}
       # The test matrix runs each platform's code, but vet only inspects
       # the files its own GOOS selects, so point it at each one in turn.
       - run: GOOS=linux go vet ./...
@@ -106,6 +112,11 @@ jobs:
       # into a release that cannot be cut.
       - name: Install golangci-lint
         run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.11.3
+      # By the hashes in its requirements file, which audit.yml reads too,
+      # into an environment of its own rather than onto PATH.
       - name: Install zizmor
-        run: pipx install zizmor==1.31.1
-      - run: make lint
+        run: |
+          python3 -m venv "$RUNNER_TEMP/zizmor"
+          "$RUNNER_TEMP/zizmor/bin/pip" install --require-hashes \
+            --only-binary :all: -r .github/zizmor/requirements.txt
+      - run: make lint ZIZMOR="$RUNNER_TEMP/zizmor/bin/zizmor"

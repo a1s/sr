@@ -1,6 +1,11 @@
-# The workflows pin every action to a commit, so that a moved tag cannot
-# change what runs with the release's write permission.  This keeps
-# those pins current, one pull request a week, each one run by the tests.
+# The workflows pin what they run: every action to a commit, so that a
+# moved tag cannot change what runs with the release's write permission,
+# and zizmor to the hashes of its files.  This keeps those pins current,
+# one pull request a week for each, each one run by the tests.
+#
+# A release is proposed a week after it is published, not the day of.
+# A compromised one is usually found and pulled within days,
+# and this keeps it out of the pins until then.
 version: 2
 updates:
   - package-ecosystem: github-actions
@@ -11,8 +16,11 @@ updates:
       actions:
         patterns:
           - '*'
-    # A release is proposed a week after it is published, not the day of.
-    # A compromised one is usually found and pulled within days,
-    # and this keeps it out of the pins until then.
+    cooldown:
+      default-days: 7
+  - package-ecosystem: pip
+    directory: /.github/zizmor
+    schedule:
+      interval: weekly
     cooldown:
       default-days: 7

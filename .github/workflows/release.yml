@@ -5,9 +5,10 @@ name: Release
 # The pattern below is the glob GitHub understands; the verify job re-checks
 # the tag as a real regexp and refuses anything the glob lets through.
 #
-# setup-go runs without its cache throughout.  Go reuses a compiled package
+# setup-go runs without its cache throughout, here and in the checks
+# called from test.yml.  Go reuses a compiled package or a test result
 # it finds in the build cache, and that cache is written by other runs,
-# so whatever one of them left there would ship in the binaries.
+# so whatever one of them left there would be tested and shipped.
 on:
   push:
     tags:
@@ -37,11 +38,6 @@ jobs:
           # The branch check needs the branch, not just the tagged commit.
           fetch-depth: 0
           persist-credentials: false
-
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-          cache: false
 
       - name: Check the tag against the branch and the changelog
         id: check
@@ -121,6 +117,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       # The binaries are one release: if any platform fails, none ship.
+      # The makefile's PLATFORMS lists the same ones, for the checks.
       fail-fast: true
       matrix:
         include:
@@ -171,12 +168,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-
-      # `make checksums` reaches the makefile's `go env` probe.
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-          cache: false
 
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:

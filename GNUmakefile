@@ -16,10 +16,15 @@ ifneq ($(wildcard env.mk),)
 	include env.mk
 endif
 
-# Target platform. Defaults to the host, so a plain `make build` behaves as
-# before; release builds set GOOS/GOARCH to cross-compile.
+# Target platform. Defaults to the host, so a plain `make build`
+# behaves as before; release builds set GOOS/GOARCH to cross-compile.
+# Only the targets that name a file after the platform
+# ask Go for it, so the others run on a machine without Go.
+# Go reads an empty GOOS or GOARCH as unset.
+ifneq ($(filter all build dist dist-binary,$(or $(MAKECMDGOALS),all)),)
 GOOS   := $(or $(GOOS),$(shell $(GO) env GOOS))
 GOARCH := $(or $(GOARCH),$(shell $(GO) env GOARCH))
+endif
 export GOOS GOARCH
 
 # Windows needs the extension to run the file at all.
@@ -57,8 +62,8 @@ LDFLAGS := -w -s -extldflags='-static' \
   -X '$(REPO)/meta.Version=$(VERSION)$(DEV_VERSION)' \
   -X '$(REPO)/meta.Date=$(DATE)'
 
-.PHONY: all build build-dir install test vet fmt lint clean \
-        audit audit-packages audit-actions \
+.PHONY: all build build-dir install test vet fmt clean \
+        lint lint-code lint-actions audit audit-packages audit-actions \
         version dist dist-dir dist-source dist-binary checksums
 
 all: build
@@ -88,16 +93,40 @@ fmt:
 	$(GO) fmt $(PACKAGE)
 
 # Found on PATH, like golangci-lint.
+# .github/zizmor/requirements.txt holds the version CI installs.
 ZIZMOR      ?= zizmor
 GOVULNCHECK ?= govulncheck
 
+# Each platform the release ships a binary for, as GOOS/GOARCH.
+# The build matrix in release.yml lists the same ones.
+PLATFORMS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 \
+             windows/amd64 windows/arm64
+
+# Their operating systems.  Font enumeration compiles a file of its own
+# on each, and no file in the tree is chosen by architecture.
+PLATFORM_OSES := $(sort $(foreach platform,$(PLATFORMS),\
+                   $(firstword $(subst /, ,$(platform)))))
+
+# The Go code and the workflows, each half reporting even when the other
+# fails.  `pkg` narrows the Go half to one package, and the workflows are
+# not one, so zizmor runs only when it is unset.  Without zizmor installed,
+# `make lint-code` runs the Go half alone.
+lint:
+	@$(MAKE) --no-print-directory -k lint-code $(if $(pkg),,lint-actions)
+
 # golangci-lint reads .golangci.yml, which adds gosec to its standard set.
+# It reads only the files its GOOS selects, so each one gets a run.
+lint-code:
+	@status=0; for os in $(PLATFORM_OSES); do \
+	    echo "golangci-lint: GOOS=$$os"; \
+	    GOOS=$$os golangci-lint run $(PACKAGE) || status=1; \
+	done; exit $$status
+
 # zizmor reads the workflows and the Dependabot config.
 # Offline, because its online audits ask GitHub about advisories and commits,
 # and their answers change while the commit under test does not.
 # `make audit-actions` runs them.
-lint:
-	golangci-lint run $(PACKAGE)
+lint-actions:
 	$(ZIZMOR) --offline .
 
 clean:
@@ -110,18 +139,21 @@ clean:
 # the advisories change from day to day,
 # so their answer for one commit does too.
 # audit.yml runs them apart from the checks a release waits for.
-audit: audit-packages audit-actions
+# Each half reports even when the other fails, and
+# `pkg` leaves out the actions, as it does for `lint`.
+audit:
+	@$(MAKE) --no-print-directory -k audit-packages $(if $(pkg),,audit-actions)
 
-# govulncheck reports a vulnerability only where the code can reach it,
-# and font enumeration compiles a file of its own on each platform,
+# govulncheck reports a vulnerability only where the code can reach it.
+# Font enumeration compiles a file of its own on each operating system,
+# and the standard library has code of its own for each architecture,
 # so every platform the release ships a binary for gets a run.
 # Each one reports, rather than the first failure hiding the rest.
-AUDIT_PLATFORMS ?= linux darwin windows
-
 audit-packages:
-	@status=0; for os in $(AUDIT_PLATFORMS); do \
-	    echo "govulncheck: GOOS=$$os"; \
-	    GOOS=$$os $(GOVULNCHECK) $(PACKAGE) || status=1; \
+	@status=0; for platform in $(PLATFORMS); do \
+	    echo "govulncheck: $$platform"; \
+	    GOOS=$${platform%/*} GOARCH=$${platform#*/} \
+	        $(GOVULNCHECK) $(PACKAGE) || status=1; \
 	done; exit $$status
 
 # The actions the workflows pin, through the zizmor audits `lint` leaves out:

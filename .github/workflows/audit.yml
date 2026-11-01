@@ -10,8 +10,9 @@ name: Audit
 #
 # Pull requests and pushes to main get a run, as they do in test.yml.
 # The weekly one reports an advisory published against a main that
-# has not moved.  GitHub sends the failures of a scheduled run
-# to whoever last edited the schedule.
+# has not moved.  GitHub sends the failures of a scheduled run to
+# whoever last edited the schedule.  The keepalive job stops GitHub
+# turning the schedule off while main is quiet, which is when it matters most.
 on:
   pull_request:
   push:
@@ -42,12 +43,15 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # No cache: setup-go keys it on go.sum alone, so this job would
+      # share one with test.yml, and what runs here is not pinned.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-          cache: true
+          cache: false
       # Not pinned: its answer moves with the database,
-      # whichever version asks.  The step holds no token to take.
+      # whichever version asks.  The job holds no token and
+      # saves no cache, so what it runs reaches no other run.
       - name: Install govulncheck
         run: go install golang.org/x/vuln/cmd/govulncheck@latest
       - run: make audit-packages
@@ -61,15 +65,34 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # The makefile's `go env` probe runs on every make.
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-          cache: false
-      # The version test.yml pins, so both read the workflows alike.
+      # From the requirements file test.yml installs from,
+      # so both read the workflows alike.
       - name: Install zizmor
-        run: pipx install zizmor==1.31.1
+        run: |
+          python3 -m venv "$RUNNER_TEMP/zizmor"
+          "$RUNNER_TEMP/zizmor/bin/pip" install --require-hashes \
+            --only-binary :all: -r .github/zizmor/requirements.txt
       - name: Audit the actions
         env:
           GH_TOKEN: ${{ github.token }}
-        run: make audit-actions
+        run: make audit-actions ZIZMOR="$RUNNER_TEMP/zizmor/bin/zizmor"
+
+  # In a public repository, GitHub turns a schedule off after 60 days
+  # with no activity, and a scheduled run is not activity.  Enabling the
+  # workflow again each week keeps it on.  GitHub does not document that
+  # this resets the count; the tools that keep schedules alive rely on it.
+  # Should it stop working, the Actions tab shows Audit as disabled.
+  keepalive:
+    name: Keep the schedule on
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    # The job checks nothing out and runs nothing but the one call.
+    permissions:
+      actions: write # to enable this workflow
+    steps:
+      - name: Enable this workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh api --method PUT
+          "repos/$GITHUB_REPOSITORY/actions/workflows/audit.yml/enable"
