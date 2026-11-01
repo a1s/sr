@@ -137,8 +137,12 @@ func formatExactDecimal(dec Decimal, flags, width, prec string, hasPrec bool) st
 	if hasPrec {
 		places, _ = strconv.Atoi(prec)
 	}
-	rounded := dec.Val.Round(int32(places))
-	body := rounded.StringFixed(int32(places))
+	// A precision past what int32 holds wraps here instead of failing,
+	// and one just short of it asks StringFixed for a string that long.
+	// The Python engine has no limit either, so adding one is a change
+	// to both engines.
+	rounded := dec.Val.Round(int32(places))    // nolint:gosec // see above
+	body := rounded.StringFixed(int32(places)) // nolint:gosec // see above
 	negative := strings.HasPrefix(body, "-")
 	if negative {
 		body = body[1:]

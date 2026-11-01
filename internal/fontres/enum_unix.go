@@ -56,6 +56,7 @@ func platformFontFiles() []string { return nil }
 // the match would resolve every typeface there and record a found face for
 // what is really a fallback.
 func genericFamilyFiles(generic string) []string {
+	// nolint:gosec // the argv is ours, no shell
 	out, err := exec.Command("fc-match", "--format", "%{file}", generic).Output()
 	if err != nil {
 		return nil

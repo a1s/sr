@@ -1,0 +1,75 @@
+name: Audit
+
+# Known vulnerabilities, in the Go modules and in the actions.
+#
+# Kept apart from test.yml, which is the bar a pull request
+# and a tag are held to.  The advisories change from day to day,
+# so their answer for one commit does too, and a tag must not fail
+# on an advisory published after its pull request was merged.
+# The release does not call this file.
+#
+# Pull requests and pushes to main get a run, as they do in test.yml.
+# The weekly one reports an advisory published against a main that
+# has not moved.  GitHub sends the failures of a scheduled run
+# to whoever last edited the schedule.
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  schedule:
+    # Mondays, off the hour, when scheduled runs bunch up.
+    - cron: '23 5 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# The same rule as test.yml: a new push makes a pull request's run stale.
+concurrency:
+  group: audit-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # govulncheck checks the code against the Go vulnerability database,
+  # once per platform the release ships a binary for.
+  # The standard library is checked too, at the version setup-go installs
+  # from go.mod, which is the version the release builds with.
+  modules:
+    name: Go modules
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      # Not pinned: its answer moves with the database,
+      # whichever version asks.  The step holds no token to take.
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+      - run: make audit-packages
+
+  # zizmor's online audits, which ask GitHub about the actions
+  # the workflows pin.  The token reaches this step alone.
+  actions:
+    name: Actions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The makefile's `go env` probe runs on every make.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      # The version test.yml pins, so both read the workflows alike.
+      - name: Install zizmor
+        run: pipx install zizmor==1.31.1
+      - name: Audit the actions
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: make audit-actions

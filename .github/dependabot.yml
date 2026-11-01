@@ -1,0 +1,18 @@
+# The workflows pin every action to a commit, so that a moved tag cannot
+# change what runs with the release's write permission.  This keeps
+# those pins current, one pull request a week, each one run by the tests.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns:
+          - '*'
+    # A release is proposed a week after it is published, not the day of.
+    # A compromised one is usually found and pulled within days,
+    # and this keeps it out of the pins until then.
+    cooldown:
+      default-days: 7

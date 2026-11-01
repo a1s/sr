@@ -58,6 +58,7 @@ LDFLAGS := -w -s -extldflags='-static' \
   -X '$(REPO)/meta.Date=$(DATE)'
 
 .PHONY: all build build-dir install test vet fmt lint clean \
+        audit audit-packages audit-actions \
         version dist dist-dir dist-source dist-binary checksums
 
 all: build
@@ -86,11 +87,53 @@ vet:
 fmt:
 	$(GO) fmt $(PACKAGE)
 
+# Found on PATH, like golangci-lint.
+ZIZMOR      ?= zizmor
+GOVULNCHECK ?= govulncheck
+
+# golangci-lint reads .golangci.yml, which adds gosec to its standard set.
+# zizmor reads the workflows and the Dependabot config.
+# Offline, because its online audits ask GitHub about advisories and commits,
+# and their answers change while the commit under test does not.
+# `make audit-actions` runs them.
 lint:
 	golangci-lint run $(PACKAGE)
+	$(ZIZMOR) --offline .
 
 clean:
 	rm -rf $(BUILD_DIR) $(DIST_DIR)
+
+# -------- known vulnerabilities --------
+
+# Known vulnerabilities, in the modules and in the actions.
+# Not part of `lint`, and not run by test.yml:
+# the advisories change from day to day,
+# so their answer for one commit does too.
+# audit.yml runs them apart from the checks a release waits for.
+audit: audit-packages audit-actions
+
+# govulncheck reports a vulnerability only where the code can reach it,
+# and font enumeration compiles a file of its own on each platform,
+# so every platform the release ships a binary for gets a run.
+# Each one reports, rather than the first failure hiding the rest.
+AUDIT_PLATFORMS ?= linux darwin windows
+
+audit-packages:
+	@status=0; for os in $(AUDIT_PLATFORMS); do \
+	    echo "govulncheck: GOOS=$$os"; \
+	    GOOS=$$os $(GOVULNCHECK) $(PACKAGE) || status=1; \
+	done; exit $$status
+
+# The actions the workflows pin, through the zizmor audits `lint` leaves out:
+# a pin to a commit that is not in the action's own repository,
+# a version with an advisory, and a ref that is both a branch and a tag.
+# They ask GitHub, which wants a token in GH_TOKEN,
+# and without one zizmor quietly runs offline and passes,
+# so the token is checked first.
+audit-actions:
+	@test -n "$$GH_TOKEN$$GITHUB_TOKEN$$ZIZMOR_GITHUB_TOKEN" \
+	    || { echo "audit-actions: set GH_TOKEN to a GitHub token" >&2; exit 1; }
+	$(ZIZMOR) --cache-dir $(BUILD_DIR)/zizmor .
 
 # -------- release packaging --------
 

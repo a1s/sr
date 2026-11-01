@@ -6,6 +6,15 @@ name: Test
 #
 # Pushes to main are covered too: a PR is tested against its own merge
 # commit, which is not what ends up on the branch after other PRs land.
+#
+# What sets the bar is pinned: the actions to commits, and
+# golangci-lint and zizmor to versions.  A tag is then held
+# to the bar its pull request met.  Dependabot moves the actions;
+# the linters move in a pull request of their own.
+#
+# A check that looks up advisories stays out of this file: it would raise
+# the bar every time one is published, whatever the pull request met.
+# audit.yml runs those, and the release does not wait for it.
 on:
   pull_request:
   push:
@@ -31,8 +40,10 @@ jobs:
     name: Format
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache: true
@@ -59,8 +70,10 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache: true
@@ -70,12 +83,17 @@ jobs:
       - run: go vet ./...
       - run: go test ./...
 
+  # golangci-lint carries gosec, which reads the code for calls that are
+  # risky on untrusted input, and zizmor reads the workflows.  Both are in
+  # `make lint`, so a run here and a run at a desk check the same things.
   lint:
     name: Lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache: true
@@ -88,5 +106,6 @@ jobs:
       # into a release that cannot be cut.
       - name: Install golangci-lint
         run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.11.3
+      - name: Install zizmor
+        run: pipx install zizmor==1.31.1
       - run: make lint
-

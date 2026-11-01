@@ -4,6 +4,10 @@ name: Release
 #
 # The pattern below is the glob GitHub understands; the verify job re-checks
 # the tag as a real regexp and refuses anything the glob lets through.
+#
+# setup-go runs without its cache throughout.  Go reuses a compiled package
+# it finds in the build cache, and that cache is written by other runs,
+# so whatever one of them left there would ship in the binaries.
 on:
   push:
     tags:
@@ -28,15 +32,16 @@ jobs:
       version: ${{ steps.check.outputs.version }}
       date: ${{ steps.check.outputs.date }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # The branch check needs the branch, not just the tagged commit.
           fetch-depth: 0
+          persist-credentials: false
 
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-          cache: true
+          cache: false
 
       - name: Check the tag against the branch and the changelog
         id: check
@@ -70,12 +75,14 @@ jobs:
           echo "date=$date" >> "$GITHUB_OUTPUT"
 
       - name: Extract the release notes
+        env:
+          VERSION: ${{ steps.check.outputs.version }}
         run: |
-          bash .github/scripts/changelog-section.sh '${{ steps.check.outputs.version }}' \
+          bash .github/scripts/changelog-section.sh "$VERSION" \
             > release-notes.md
           cat release-notes.md
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-notes
           path: release-notes.md
@@ -83,22 +90,26 @@ jobs:
 
   # The same vet, test, lint and format checks a pull request gets,
   # run here from their own file rather than copied into this one.
+  # `$/` is GitHub's name for this repository at the commit being run,
+  # which, unlike `./`, counts as pinned under a policy that requires it.
   checks:
     name: Checks
     needs: verify
-    uses: ./.github/workflows/test.yml
+    uses: $/.github/workflows/test.yml
 
   source:
     name: Source archive
     needs: [verify, checks]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Build the source archive
         env:
           VERSION: ${{ needs.verify.outputs.version }}
         run: make dist-source
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dist-source
           path: dist/*
@@ -126,11 +137,13 @@ jobs:
           - goos: windows
             goarch: arm64
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-          cache: true
+          cache: false
       - name: Build the binary archive
         env:
           GOOS: ${{ matrix.goos }}
@@ -142,7 +155,7 @@ jobs:
           VERSION: ${{ needs.verify.outputs.version }}
           DATE: ${{ needs.verify.outputs.date }}
         run: make dist-binary
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dist-${{ matrix.goos }}-${{ matrix.goarch }}
           path: dist/*
@@ -155,15 +168,17 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # `make checksums` reaches the makefile's `go env` probe.
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-          cache: true
+          cache: false
 
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           path: staging
 
