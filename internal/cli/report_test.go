@@ -346,6 +346,38 @@ func TestInspectChecksInvariants(test *testing.T) {
 	}
 }
 
+// An image's line is its box, its source, and its crop, and names no format.
+//
+// A printout from before the format was dropped still has a `type` on its
+// image marks. The dump does not show it, since the mark no longer has one.
+func TestInspectImageLine(test *testing.T) {
+	dir := test.TempDir()
+	path := filepath.Join(dir, "image.srp.jsonl")
+	body := strings.Join([]string{
+		`{"sr":1,"kind":"header","built":"2026-08-04T09:12:44Z","engine":"sr test",` +
+			`"strictFonts":true,"pages":1,` +
+			`"page":{"width":200,"height":200,"leftMargin":20,"rightMargin":20,` +
+			`"topMargin":20,"bottomMargin":20},"fonts":[],` +
+			`"data":{"swatch":{"encoding":"base64","content":"AA=="}}}`,
+		`{"kind":"page","number":1,"marks":[` +
+			`{"kind":"image","box":{"x":20,"y":20,"width":8,"height":8},` +
+			`"type":"png","data":"swatch",` +
+			`"crop":{"x":4,"y":2,"width":8,"height":8}}]}`,
+		"",
+	}, "\n")
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		test.Fatal(err)
+	}
+	got := run(test, "", "inspect", path)
+	if got.code != ExitOK {
+		test.Fatalf("exit = %d, stderr %q", got.code, got.err)
+	}
+	want := "image  box 20,20 8x8  data swatch  crop 4,2 8x8"
+	if line := lineOf(got.out, "image"); line != want {
+		test.Errorf("image line = %q, want %q", line, want)
+	}
+}
+
 // parsePages is small enough to check directly, over the cases
 // the command-line tests cannot reach through a fixture.
 func TestParsePages(test *testing.T) {

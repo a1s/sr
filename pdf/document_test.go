@@ -44,12 +44,10 @@ func TestImagePlacement(test *testing.T) {
 	doc.Header.Data["logo"] = pngBlob(test, 20, 10, color.NRGBA{200, 100, 50, 255})
 
 	whole := printout.NewImage()
-	whole.Type = "png"
 	whole.Data = "logo"
 	whole.Box = printout.Box{Left: 10, Top: 10, Width: 40, Height: 20}
 
 	cropped := printout.NewImage()
-	cropped.Type = "png"
 	cropped.Data = "logo"
 	cropped.Box = printout.Box{Left: 100, Top: 10, Width: 8, Height: 6}
 	cropped.Crop = &printout.Box{Left: 4, Top: 2, Width: 8, Height: 6}
@@ -97,7 +95,6 @@ func TestImageTransparency(test *testing.T) {
 	doc := document()
 	doc.Header.Data["clear"] = pngBlob(test, 4, 4, color.NRGBA{255, 0, 0, 128})
 	mark := printout.NewImage()
-	mark.Type = "png"
 	mark.Data = "clear"
 	mark.Box = printout.Box{Left: 10, Top: 10, Width: 8, Height: 8}
 	doc.Pages[0].Marks = []printout.Mark{mark}
@@ -128,7 +125,6 @@ func TestImageFromFile(test *testing.T) {
 	}
 
 	mark := printout.NewImage()
-	mark.Type = "png"
 	mark.SetFile(path)
 	mark.Box = printout.Box{Left: 10, Top: 10, Width: 12, Height: 12}
 
@@ -390,7 +386,6 @@ func TestReproducible(test *testing.T) {
 	)
 	doc.Header.Data["logo"] = pngBlob(test, 8, 4, color.NRGBA{10, 20, 30, 255})
 	mark := printout.NewImage()
-	mark.Type = "png"
 	mark.Data = "logo"
 	mark.Box = printout.Box{Left: 10, Top: 40, Width: 16, Height: 8}
 	doc.Pages[0].Marks = append(doc.Pages[0].Marks, mark)

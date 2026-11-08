@@ -264,10 +264,12 @@ func (rect *Rectangle) MarkKind() string { return "rectangle" }
 
 // Image is a bitmap. Box is the final drawn rectangle and Crop names
 // the source pixels that fill it, so a renderer needs no notion of fitting.
+//
+// The mark names no format: a renderer reads it from the image's own bytes.
+// See doc/printout.md#image.
 type Image struct {
 	Kind string `json:"kind"`
 	Box  Box    `json:"box"`
-	Type string `json:"type"`
 	Data string `json:"data,omitempty"`
 	// File appears only for embed=#false.
 	// The template named it, so it is written relative to the printout.

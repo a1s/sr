@@ -596,7 +596,6 @@ type Image struct {
 	Data         string
 	Content      string
 	HasContent   bool
-	Type         string
 	Scale        ScaleMode
 	Proportional bool
 	Embed        bool

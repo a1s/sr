@@ -7,6 +7,8 @@ import (
 	_ "image/gif"
 	_ "image/jpeg"
 	_ "image/png"
+	"io"
+	"os"
 
 	"github.com/a1s/sr/internal/barcodes"
 	"github.com/a1s/sr/internal/expr"
@@ -179,8 +181,8 @@ func (eng *engine) emitRectangle(rect *tmpl.Rectangle, slot *elementSlot, measur
 }
 
 type decodedImage struct {
+	// data is nil for a referenced image, which is read only to its header.
 	data          []byte
-	format        string
 	width, height float64
 	file          string
 }
@@ -191,7 +193,6 @@ func (eng *engine) emitImage(im *tmpl.Image, slot *elementSlot, measured *measur
 		return err
 	}
 	mark := printout.NewImage()
-	mark.Type = img.format
 
 	boxX, boxY := slot.left, slot.top
 	boxW, boxH := slot.width, slot.height
@@ -441,17 +442,27 @@ func (eng *engine) barcode(
 	return sym, barcodes.Measure(sym, barcode.Module, barcode.Grow, boxLength, boxCross), nil
 }
 
-// image decodes an image element's bytes and reads its natural size.
+// image reads an image element's natural size, and the bytes it embeds.
+//
+// A referenced image, embed=#false, is read only as far as the header
+// that states its size. Its bytes stay in its file and never reach
+// the printout, so a large one costs the build no more than a small one.
+// See doc/template.md#image.
 func (eng *engine) image(im *tmpl.Image) (*decodedImage, error) {
 	// Keyed by the resolved path, not the written one: two templates in one
 	// document have base directories of their own, and one relative path
-	// can name two different files.
+	// can name two different files. A referenced image is keyed apart,
+	// since it is read without the bytes an embedded one needs.
 	key := eng.resolvePath(im.File) + "\x00" + im.Data + "\x00" + im.Content
+	if !im.Embed {
+		key += "\x00referenced"
+	}
 	if cached, ok := eng.images[key]; ok {
 		return cached, nil
 	}
 	var raw []byte
 	var file string
+	var source io.Reader
 	switch {
 	case im.Data != "":
 		blob, err := eng.blobBytes(im.Data)
@@ -465,6 +476,14 @@ func (eng *engine) image(im *tmpl.Image) (*decodedImage, error) {
 			return nil, fmt.Errorf("%s: %w", im.Node.Path(), err)
 		}
 		raw = blob
+	case !im.Embed:
+		file = eng.resolvePath(im.File)
+		handle, err := os.Open(file)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", im.Node.Path(), err)
+		}
+		defer handle.Close() // nolint:errcheck
+		source = handle
 	default:
 		path := eng.resolvePath(im.File)
 		blob, err := readFile(path)
@@ -473,16 +492,16 @@ func (eng *engine) image(im *tmpl.Image) (*decodedImage, error) {
 		}
 		raw, file = blob, path
 	}
+	if source == nil {
+		source = bytes.NewReader(raw)
+	}
 
-	cfg, format, err := image.DecodeConfig(bytes.NewReader(raw))
+	cfg, _, err := image.DecodeConfig(source)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", im.Node.Path(), err)
 	}
-	if im.Type != "" {
-		format = im.Type
-	}
 	out := &decodedImage{
-		data: raw, format: format, file: file,
+		data: raw, file: file,
 		width: float64(cfg.Width), height: float64(cfg.Height),
 	}
 	eng.images[key] = out
