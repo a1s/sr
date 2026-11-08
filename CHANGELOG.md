@@ -3,18 +3,7 @@
 ## [0.2.0] - 2026-11-08
 
 - Adopt documentation and validation templates from the Python project.
-- A 2-D barcode takes `charset`, `utf-8` or `iso-8859-1`.
-  `eci` is not supported yet.
-- A Data Matrix value whose first byte is 0xE8 is refused,
-  since the encoder would write it as FNC1.
-- Loading refuses content that is not base64, a font whose `data`
-  names no data node, and a `default` that does not read as its type.
-- An expression's compile error gives its position as a character
-  offset, and names an f-string or two literals in a row.
-- A `lambda` takes plain parameters and their defaults. `*args`,
-  `**kwargs`, a bare `*`, and a parameter named `__debug__` are refused.
-- A lambda parameter or a comprehension variable may be called `FINAL`
-  or `print`, and is then a local name.
+- Align the output with the Python implementation where possible.
 - Update dependencies.
 
 ## [0.1.0] - 2026-09-05
