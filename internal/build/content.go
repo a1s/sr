@@ -180,7 +180,6 @@ func (eng *engine) emitRectangle(rect *tmpl.Rectangle, slot *elementSlot, measur
 
 type decodedImage struct {
 	data          []byte
-	format        string
 	width, height float64
 	file          string
 }
@@ -191,7 +190,6 @@ func (eng *engine) emitImage(im *tmpl.Image, slot *elementSlot, measured *measur
 		return err
 	}
 	mark := printout.NewImage()
-	mark.Type = img.format
 
 	boxX, boxY := slot.left, slot.top
 	boxW, boxH := slot.width, slot.height
@@ -474,15 +472,12 @@ func (eng *engine) image(im *tmpl.Image) (*decodedImage, error) {
 		raw, file = blob, path
 	}
 
-	cfg, format, err := image.DecodeConfig(bytes.NewReader(raw))
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(raw))
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", im.Node.Path(), err)
 	}
-	if im.Type != "" {
-		format = im.Type
-	}
 	out := &decodedImage{
-		data: raw, format: format, file: file,
+		data: raw, file: file,
 		width: float64(cfg.Width), height: float64(cfg.Height),
 	}
 	eng.images[key] = out

@@ -955,7 +955,6 @@ func (psr *parser) parseImage(node *kdl.Node) *Image {
 	image.Common = psr.common(pr, true)
 	image.File = pr.str("file", "")
 	image.Data = pr.str("data", "")
-	image.Type = pr.str("type", "")
 	image.Scale = enumProp(pr, "scale", scaleNames, ScaleCut)
 	image.Proportional = pr.boolean("proportional", true)
 	image.Embed = pr.boolean("embed", true)
@@ -987,11 +986,6 @@ func (psr *parser) parseImage(node *kdl.Node) *Image {
 		// and only `file` supplies one.
 		psr.errf(node, "embed",
 			"embed=#false writes a file reference, so it needs file=; data and a content child are always embedded")
-	}
-	switch image.Type {
-	case "", "png", "jpeg", "gif":
-	default:
-		psr.errf(node, "type", "unknown image type %q; want png, jpeg or gif", image.Type)
 	}
 	return image
 }

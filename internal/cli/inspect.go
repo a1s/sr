@@ -307,7 +307,7 @@ func (dmp *dumper) mark(mark printout.Mark, indent string) {
 		}
 		dmp.line(indent, "%s", strings.Join(parts, "  "))
 	case *printout.Image:
-		parts := []string{"image", "box " + describeBox(typed.Box), typed.Type}
+		parts := []string{"image", "box " + describeBox(typed.Box)}
 		if typed.Data != "" {
 			parts = append(parts, "data "+typed.Data)
 		}

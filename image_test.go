@@ -1,10 +1,123 @@
 package sr
 
 import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/a1s/sr/printout"
 )
+
+// swatchTemplate draws one embedded 16-by-16 PNG.
+// The verb takes any extra properties the image node is to carry.
+const swatchTemplate = `report name="t" {
+  font "body" file="Go-Regular.ttf" size=9
+  data "swatch" encoding="base64" {
+    content """
+      iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAI0lEQVR42mNgiGSAo89v
+      n8MRTvFBqIEoRUjig1HDaDwMCg0ArOyQEA2r1rMAAAAASUVORK5CYII=
+      """
+  }
+  layout width=200 height=200 leftmargin=5 rightmargin=5 topmargin=5 bottommargin=5 {
+    style font="body" color="black"
+    detail height=40 {
+      image data="swatch" scale="fill" left=0 width=20 height=20 %s
+    }
+  }
+}`
+
+// writeNDJSON is a printout as its NDJSON spelling, header line first.
+func writeNDJSON(test *testing.T, doc *Printout, dir string) string {
+	test.Helper()
+	var out bytes.Buffer
+	if err := doc.WriteNDJSON(&out, dir); err != nil {
+		test.Fatal(err)
+	}
+	return out.String()
+}
+
+// An image mark names no format.
+//
+// doc/printout.md#image: a renderer reads the format from the image's
+// own bytes, so a format on the mark adds nothing a renderer uses,
+// and two engines could only disagree about it.
+func TestAnImageMarkNamesNoFormat(test *testing.T) {
+	out := buildString(test, fmt.Sprintf(swatchTemplate, ""), rowsOf(1))
+	text := writeNDJSON(test, out, test.TempDir())
+	lines := strings.Split(strings.TrimRight(text, "\n"), "\n")
+	images := 0
+	for _, line := range lines[1:] {
+		var page struct {
+			Marks []map[string]any `json:"marks"`
+		}
+		if err := json.Unmarshal([]byte(line), &page); err != nil {
+			test.Fatal(err)
+		}
+		for _, mark := range page.Marks {
+			if mark["kind"] != "image" {
+				continue
+			}
+			images++
+			if format, ok := mark["type"]; ok {
+				test.Errorf("image mark carries type %v: %s", format, line)
+			}
+		}
+	}
+	if images != 1 {
+		test.Fatalf("image marks = %d, want 1", images)
+	}
+}
+
+// A `type` on a template's image node is a name the format does not define.
+//
+// It only ever chose the format the image mark named, and the mark names
+// none, so it is accepted with a warning like any other unknown property,
+// whatever value it carries. See doc/template.md#unknown-names.
+func TestAnImageTypeIsAnUnknownProperty(test *testing.T) {
+	for _, value := range []string{"png", "bmp"} {
+		test.Run(value, func(test *testing.T) {
+			src := fmt.Sprintf(swatchTemplate, `type="`+value+`"`)
+			out := buildString(test, src, rowsOf(1))
+			for _, warning := range out.Header.Warnings {
+				if warning.Kind == printout.WarnUnknown && warning.Prop == "type" {
+					return
+				}
+			}
+			test.Errorf("want an unknown-property warning for type, got %+v",
+				out.Header.Warnings)
+		})
+	}
+}
+
+// A printout that still carries a `type` on its image marks reads and renders.
+//
+// Engines before the field was dropped wrote one on every image mark,
+// right after the mark's box. A reader takes the fields it knows,
+// so an archived printout reads, validates, and renders as before.
+func TestAnImageMarkWithATypeStillReads(test *testing.T) {
+	out := buildString(test, fmt.Sprintf(swatchTemplate, ""), rowsOf(1))
+	dir := test.TempDir()
+	text := writeNDJSON(test, out, dir)
+	afterBox := regexp.MustCompile(`("kind":"image","box":\{[^{}]*\})`)
+	old := afterBox.ReplaceAllString(text, `$1,"type":"png"`)
+	if old == text {
+		test.Fatal("no image mark to give a type to")
+	}
+	back, err := printout.ReadNDJSON(strings.NewReader(old), dir)
+	if err != nil {
+		test.Fatal(err)
+	}
+	if err := back.Validate(); err != nil {
+		test.Fatal(err)
+	}
+	if mark := imageMark(test, back); mark.Data == "" {
+		test.Errorf("image mark lost its data: %+v", mark)
+	}
+	renderScan(test, back)
+}
 
 // imageMark is the first image mark of a printout.
 func imageMark(test *testing.T, doc *Printout) *printout.Image {

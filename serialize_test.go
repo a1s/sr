@@ -241,9 +241,6 @@ func TestEmbeddedImageSharesOneDataEntry(test *testing.T) {
 			if im.Data != "swatch" || im.File != "" {
 				test.Errorf("image mark = %+v", im)
 			}
-			if im.Type != "png" {
-				test.Errorf("type = %q, want png sniffed from the content", im.Type)
-			}
 		}
 	}
 	if count != 2 {
