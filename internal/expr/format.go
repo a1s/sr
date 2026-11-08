@@ -103,10 +103,11 @@ func convert(verb rune, flags, width, prec string, hasPrec bool, arg starlark.Va
 		if err != nil {
 			return "", err
 		}
-		if !num.IsInt64() || num.Int64() < 0 || num.Int64() > 0x10FFFF {
+		code := num.Int64()
+		if !num.IsInt64() || code < 0 || code > 0x10FFFF {
 			return "", fmt.Errorf("%%c: %s is not a code point", num)
 		}
-		return fmt.Sprintf("%"+flags+width+"c", rune(num.Int64())), nil
+		return fmt.Sprintf("%"+flags+width+"c", rune(code)), nil
 	case 'd', 'i', 'o', 'x', 'X', 'b':
 		num, err := asBigInt(arg)
 		if err != nil {
@@ -119,7 +120,7 @@ func convert(verb rune, flags, width, prec string, hasPrec bool, arg starlark.Va
 		return fmt.Sprintf(goSpec(char), num), nil
 	case 'f', 'F', 'e', 'E', 'g', 'G':
 		if dec, ok := arg.(Decimal); ok && (verb == 'f' || verb == 'F') {
-			return formatExactDecimal(dec, flags, width, prec, hasPrec), nil
+			return formatExactDecimal(dec, flags, width, prec, hasPrec)
 		}
 		num, err := asFloat(arg)
 		if err != nil {
@@ -132,13 +133,25 @@ func convert(verb rune, flags, width, prec string, hasPrec bool, arg starlark.Va
 
 // formatExactDecimal renders a decimal under %f without going through a float,
 // rounding half away from zero at the requested precision.
-func formatExactDecimal(dec Decimal, flags, width, prec string, hasPrec bool) string {
-	places := 6
+func formatExactDecimal(
+	dec Decimal,
+	flags, width, prec string,
+	hasPrec bool,
+) (string, error) {
+	places := int32(6)
 	if hasPrec {
-		places, _ = strconv.Atoi(prec)
+		// Round and StringFixed take an int32, so a larger precision is
+		// refused rather than wrapped to a different one.  A precision
+		// up to that limit is honored however long the string; bounding it
+		// is a change to both engines.
+		parsed, err := strconv.ParseInt(prec, 10, 32)
+		if err != nil {
+			return "", fmt.Errorf("precision %s is out of range", prec)
+		}
+		places = int32(parsed)
 	}
-	rounded := dec.Val.Round(int32(places))
-	body := rounded.StringFixed(int32(places))
+	rounded := dec.Val.Round(places)
+	body := rounded.StringFixed(places)
 	negative := strings.HasPrefix(body, "-")
 	if negative {
 		body = body[1:]
@@ -158,15 +171,15 @@ func formatExactDecimal(dec Decimal, flags, width, prec string, hasPrec bool) st
 	}
 	pad := total - len(sign) - len(body)
 	if pad <= 0 {
-		return sign + body
+		return sign + body, nil
 	}
 	switch {
 	case strings.Contains(flags, "-"):
-		return sign + body + strings.Repeat(" ", pad)
+		return sign + body + strings.Repeat(" ", pad), nil
 	case strings.Contains(flags, "0"):
-		return sign + strings.Repeat("0", pad) + body
+		return sign + strings.Repeat("0", pad) + body, nil
 	default:
-		return strings.Repeat(" ", pad) + sign + body
+		return strings.Repeat(" ", pad) + sign + body, nil
 	}
 }
 

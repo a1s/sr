@@ -80,6 +80,7 @@ func WriteFile(doc *printout.Printout, path string, options ...Option) error {
 	if err := Write(doc, &raw, options...); err != nil {
 		return err
 	}
+	// nolint:gosec // a report is a document to share, not a secret
 	return os.WriteFile(path, raw.Bytes(), 0o644)
 }
 

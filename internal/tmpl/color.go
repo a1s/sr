@@ -60,7 +60,7 @@ func ParseColor(spec string) (Color, error) {
 		if err != nil {
 			return Color{}, fmt.Errorf("bad colour %q", spec)
 		}
-		return Color{uint8(bits >> 16), uint8(bits >> 8), uint8(bits)}, nil
+		return unpack(bits), nil
 	}
 	if color, ok := namedColors[strings.ToLower(text)]; ok {
 		return color, nil
@@ -104,5 +104,14 @@ func ParseColor(spec string) (Color, error) {
 	if err != nil {
 		return Color{}, fmt.Errorf("bad colour %q", spec)
 	}
-	return Color{uint8(packed >> 16), uint8(packed >> 8), uint8(packed)}, nil
+	return unpack(packed), nil
+}
+
+// unpack takes the low three bytes of a packed colour, red highest.
+func unpack(packed uint64) Color {
+	return Color{
+		uint8(packed >> 16 & 0xFF),
+		uint8(packed >> 8 & 0xFF),
+		uint8(packed & 0xFF),
+	}
 }

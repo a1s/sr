@@ -1,0 +1,36 @@
+version: "2"
+
+linters:
+  # The standard set, which is what ran before this file existed,
+  # and gosec for calls that are risky on untrusted input.
+  enable:
+    - gosec
+  settings:
+    gosec:
+      excludes:
+        # Unhandled errors, which errcheck reports already.
+        - G104
+        # A file read from a path held in a variable.  The engine reads
+        # what its caller names (the command line, the template, and the
+        # printout the template produced) and the fonts the platform
+        # lists.  Which files a caller may name is the caller's policy.
+        - G304
+  exclusions:
+    rules:
+      # Integer conversions that may overflow, in the font, PDF, and CBOR
+      # code.  It converts between widths on nearly every line that reads
+      # or writes a field, and those conversions are the encoding itself:
+      # a signed field read from unsigned bytes, a length split into bytes.
+      # Everywhere else, and in the template language above all, where
+      # the integers come from the template, G115 still reports.
+      - path: (^|/)(internal/(fontres|pdfscan|pdfw|sfnt)|printout)/
+        linters:
+          - gosec
+        text: G115
+      # Tests write their fixtures into t.TempDir and build the binary
+      # ones by hand: nothing there is anyone's secret, and no path or
+      # integer there comes from outside the test.
+      - path: _test\.go
+        linters:
+          - gosec
+        text: G115|G30[16]|G703

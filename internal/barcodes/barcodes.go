@@ -247,6 +247,7 @@ func payload(kind, value, charset string) (string, error) {
 			if char > 0xFF {
 				return "", fmt.Errorf("%q is not in ISO 8859-1", char)
 			}
+			// nolint:gosec // at most 0xFF, as checked above
 			encoded = append(encoded, byte(char))
 		}
 		data = string(encoded)

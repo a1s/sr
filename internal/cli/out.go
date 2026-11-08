@@ -12,6 +12,7 @@ func deliver(env Env, out string, body []byte) error {
 		document.write(body)
 		return document.err
 	}
+	// nolint:gosec // a report is a document to share, not a secret
 	return os.WriteFile(out, body, 0o644)
 }
 
