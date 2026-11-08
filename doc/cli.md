@@ -516,7 +516,7 @@ written as a box is, in pixels: `crop 7,3.5 10x5`.
 ## `sr version`
 
 ```
-sr 0.1.0
+sr 0.2.0
 ```
 
 `sr --version` prints the same. `sr -version` is a usage error,
