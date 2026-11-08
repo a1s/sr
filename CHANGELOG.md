@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.2.0] - 2026-10-26
+## [0.2.0] - 2026-11-08
 
 - Adopt documentation and validation templates from the Python project.
 - A 2-D barcode takes `charset`, `utf-8` or `iso-8859-1`.
